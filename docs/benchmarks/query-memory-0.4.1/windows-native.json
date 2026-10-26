@@ -1,0 +1,1 @@
+{"Success":true,"drive":"H","Stages":[{"Stage":"create_and_hardlink","Count":5,"HardLinks":2},{"Stage":"rename_move_unlink","Count":4},{"Stage":"checkpoint_and_offline_replay","Count":4},{"Stage":"delete_tree","Count":0}],"FullVolumeRescans":0}

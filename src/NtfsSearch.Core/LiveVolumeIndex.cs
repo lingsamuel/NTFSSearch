@@ -7,6 +7,7 @@ public sealed class LiveVolumeIndex
 {
     internal sealed record DirectoryNode(ulong Parent, string Name, string? RootPath = null, bool Deleted = false);
     internal ImmutableDictionary<ulong, DirectoryNode> DirectoryGraph { get; private set; }
+    private DirectoryAncestryFilter? ancestryFilter;
     private SearchIndex[] layers;
     public IReadOnlyList<SearchIndex> Layers => Array.AsReadOnly(Volatile.Read(ref layers));
     public JournalPosition? Position { get; private set; }
@@ -67,7 +68,7 @@ public sealed class LiveVolumeIndex
         var changedFiles = files.Where(f => !MatchesCurrent(f)).ToArray();
         if (changedFiles.Length == 0) { Position = transaction.To; return false; }
         var graph = DirectoryGraph;
-        bool directoryChanged = false;
+        var changedDirectories = new HashSet<ulong>();
         var replaced = new HashSet<ulong>();
         foreach (var file in changedFiles)
             if (file.Links.Count > 0)
@@ -79,7 +80,7 @@ public sealed class LiveVolumeIndex
         foreach (ulong reference in replaced)
             if (graph.ContainsKey(reference))
             {
-                graph = graph.SetItem(reference, new(0, "", Deleted: true)); directoryChanged = true;
+                graph = graph.SetItem(reference, new(0, "", Deleted: true)); changedDirectories.Add(reference);
             }
         foreach (var file in changedFiles)
         {
@@ -93,35 +94,21 @@ public sealed class LiveVolumeIndex
                 : new DirectoryNode(file.Links[0].ParentReference, file.Links[0].Name);
             if (!graph.TryGetValue(file.FileReference, out var previous) || previous != node)
             {
-                graph = graph.SetItem(file.FileReference, node); directoryChanged = true;
+                graph = graph.SetItem(file.FileReference, node); changedDirectories.Add(file.FileReference);
             }
         }
         foreach (var file in changedFiles)
             foreach (var link in file.Links)
                 if (!graph.ContainsKey(link.ParentReference))
                     graph = graph.SetItem(link.ParentReference, new(0, "", Normalize(link.ParentPath)));
-        var resolved = new Dictionary<ulong, string?>();
-        string? Resolve(ulong reference)
+        changedDirectories.RemoveWhere(reference => !DirectoryGraph.ContainsKey(reference));
+        if (changedDirectories.Count > 0)
         {
-            if (resolved.TryGetValue(reference, out var cached)) return cached;
-            var chain = new List<ulong>(); var visiting = new HashSet<ulong>();
-            ulong cursor = reference; string? path;
-            while (true)
-            {
-                token.ThrowIfCancellationRequested();
-                if (resolved.TryGetValue(cursor, out path)) break;
-                if (!graph.TryGetValue(cursor, out var node) || node.Deleted) { path = null; break; }
-                if (node.RootPath is not null) { path = node.RootPath; break; }
-                if (!visiting.Add(cursor)) throw new InvalidDataException("目录身份图包含循环。");
-                chain.Add(cursor); cursor = node.Parent;
-            }
-            for (int i = chain.Count - 1; i >= 0; i--)
-            {
-                path = path is null ? null : path + graph[chain[i]].Name + "\\";
-                resolved[chain[i]] = path;
-            }
-            resolved[reference] = path; return path;
+            ancestryFilter ??= new DirectoryAncestryFilter();
+            ancestryFilter.Reset();
         }
+        var resolved = new Dictionary<ulong, string?>();
+        string? Resolve(ulong reference) => ResolveDirectory(reference, graph, resolved, token);
         var next = new List<SearchIndex>();
         foreach (var layer in layers)
         {
@@ -138,11 +125,14 @@ public sealed class LiveVolumeIndex
             foreach (ulong reference in replaced)
                 foreach (int id in layer.FindFileRows(reference)) Hide(id);
             string[] directories = layer.Directories;
-            if (directoryChanged)
+            if (changedDirectories.Count > 0)
             {
                 bool[]? deleted = null;
                 for (int d = 0; d < directories.Length; d++)
                 {
+                    if ((d & 65535) == 0) token.ThrowIfCancellationRequested();
+                    // 两遍扫描和硬链接补采可能保存混合历史路径，必须按旧图中的祖先身份判断，不能靠路径前缀。
+                    if (!ancestryFilter!.Contains(layer.DirectoryReferences![d], DirectoryGraph, changedDirectories, token)) continue;
                     string? path = Resolve(layer.DirectoryReferences![d]);
                     if (path is null) { deleted ??= new bool[directories.Length]; deleted[d] = true; }
                     else if (path != directories[d])
@@ -208,6 +198,29 @@ public sealed class LiveVolumeIndex
             remaining.RemoveAt(found);
         }
         return true;
+    }
+
+    private static string? ResolveDirectory(ulong reference, ImmutableDictionary<ulong, DirectoryNode> graph,
+        Dictionary<ulong, string?> resolved, CancellationToken token)
+    {
+        if (resolved.TryGetValue(reference, out var cached)) return cached;
+        var chain = new List<ulong>(); var visiting = new HashSet<ulong>();
+        ulong cursor = reference; string? path;
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            if (resolved.TryGetValue(cursor, out path)) break;
+            if (!graph.TryGetValue(cursor, out var node) || node.Deleted) { path = null; break; }
+            if (node.RootPath is not null) { path = node.RootPath; break; }
+            if (!visiting.Add(cursor)) throw new InvalidDataException("目录身份图包含循环。");
+            chain.Add(cursor); cursor = node.Parent;
+        }
+        for (int i = chain.Count - 1; i >= 0; i--)
+        {
+            path = path is null ? null : path + graph[chain[i]].Name + "\\";
+            resolved[chain[i]] = path;
+        }
+        resolved[reference] = path; return path;
     }
 
     private static SearchIndex Merge(SearchIndex left, SearchIndex right, CancellationToken token)

@@ -1,0 +1,9 @@
+{"label":"old040","count":100000,"samples":30,"medianMs":32.7251,"minMs":14.1143,"maxMs":53.1356,"medianAllocation":49474424}
+{"label":"old040","count":100000,"samples":30,"medianMs":33.008,"minMs":14.1319,"maxMs":53.0129,"medianAllocation":49474424}
+{"label":"old040","count":100000,"samples":30,"medianMs":33.6961,"minMs":13.5395,"maxMs":56.5715,"medianAllocation":49474424}
+{"label":"prefix","count":100000,"samples":30,"medianMs":1.7975,"minMs":1.1191,"maxMs":3.1888,"medianAllocation":909912}
+{"label":"prefix","count":100000,"samples":30,"medianMs":1.6748,"minMs":1.2979,"maxMs":3.1626,"medianAllocation":909912}
+{"label":"prefix","count":100000,"samples":30,"medianMs":1.3117,"minMs":0.9951,"maxMs":3.2927,"medianAllocation":909912}
+{"label":"identity","count":100000,"samples":30,"medianMs":7.1834,"minMs":6.274,"maxMs":30.9526,"medianAllocation":909352}
+{"label":"identity","count":100000,"samples":30,"medianMs":7.0097,"minMs":5.8276,"maxMs":29.2946,"medianAllocation":909352}
+{"label":"identity","count":100000,"samples":30,"medianMs":6.6906,"minMs":6.2174,"maxMs":28.7114,"medianAllocation":909352}

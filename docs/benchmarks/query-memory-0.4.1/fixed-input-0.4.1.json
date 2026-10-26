@@ -1,0 +1,46 @@
+{
+  "CoreVersion": "0.4.1.0",
+  "Source": "H:\\Temp\\ntfs-live-full-4jrn80xg\\Data",
+  "Rows": 34409871,
+  "Reports": [
+    {
+      "Phase": "loaded_without_forced_gc",
+      "ElapsedSeconds": 39.0842239,
+      "AllocatedBytes": 6325799944,
+      "ManagedBytes": 5320800224,
+      "WorkingSet": 5533601792,
+      "Private": 5552656384,
+      "GCHeap": 5404667296,
+      "GCCommitted": 5470674944,
+      "Fragmented": 109653336
+    },
+    {
+      "Phase": "live_after_diagnostic_gc",
+      "ElapsedSeconds": 40.0600653,
+      "AllocatedBytes": 6325805256,
+      "ManagedBytes": 5312872400,
+      "WorkingSet": 5524529152,
+      "Private": 5543510016,
+      "GCHeap": 5428803120,
+      "GCCommitted": 5461536768,
+      "Fragmented": 115947168
+    },
+    {
+      "Phase": "three_unrelated_directory_creates_in_memory",
+      "AllocatedBytes": 26256,
+      "Seconds": 0.0013748
+    },
+    {
+      "Phase": "after_three_changes_without_forced_gc",
+      "ElapsedSeconds": 40.0785672,
+      "AllocatedBytes": 6325836344,
+      "ManagedBytes": 5312897048,
+      "WorkingSet": 5524611072,
+      "Private": 5543510016,
+      "GCHeap": 5428803120,
+      "GCCommitted": 5461536768,
+      "Fragmented": 115947168
+    }
+  ],
+  "CoreSHA256": "9767f7cdb04949d7d4ae34d8b0a0810021b7c322d51b2fac93335d15c392d38b"
+}

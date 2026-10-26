@@ -69,10 +69,11 @@ internal static class LiveViewStore
         int count = Count(reader, payload - stream.Position, 1);
         if (count == 0) throw new InvalidDataException("检查点缺少基线。");
         var layers = new SearchIndex[count];
+        var textBuffer = new char[32768];
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested();
-            string id = ReadText(reader, stream, payload);
+            string id = ReadText(reader, stream, payload, textBuffer);
             if (!Guid.TryParseExact(id, "N", out _)) throw new InvalidDataException("增量段名称无效。");
             int rows = Count(reader, int.MaxValue, 1);
             string segmentRoot = path.EndsWith(".bak", StringComparison.Ordinal) ? path[..^4] : path;
@@ -86,7 +87,7 @@ internal static class LiveViewStore
             var paths = new string[directories]; bool changed = false;
             for (int d = 0; d < directories; d++)
             {
-                token.ThrowIfCancellationRequested(); paths[d] = ReadText(reader, stream, payload);
+                token.ThrowIfCancellationRequested(); paths[d] = ReadText(reader, stream, payload, textBuffer, layer.Directories[d]);
                 if (paths[d].Length == 0 || paths[d][^1] != '\\') throw new InvalidDataException("检查点目录路径无效。");
                 changed |= paths[d] != layer.Directories[d];
             }
@@ -98,8 +99,8 @@ internal static class LiveViewStore
         {
             token.ThrowIfCancellationRequested();
             ulong reference = reader.ReadUInt64(), parent = reader.ReadUInt64(); bool deleted = reader.ReadBoolean();
-            string name = ReadText(reader, stream, payload);
-            string? root = reader.ReadBoolean() ? ReadText(reader, stream, payload) : null;
+            string name = ReadText(reader, stream, payload, textBuffer);
+            string? root = reader.ReadBoolean() ? ReadText(reader, stream, payload, textBuffer) : null;
             if (!graph.TryAdd(reference, new(parent, name, root, deleted))) throw new InvalidDataException("检查点包含重复目录身份。");
         }
         if (stream.Position != payload) throw new InvalidDataException("检查点长度不符。");
@@ -114,14 +115,20 @@ internal static class LiveViewStore
         using var reader = new BinaryReader(stream);
         if (reader.ReadBoolean()) stream.Position += 16;
         int count = Count(reader, payload - stream.Position, 1);
+        var textBuffer = new char[32768];
         for (int i = 0; i < count; i++)
         {
-            string id = ReadText(reader, stream, payload);
+            string id = ReadText(reader, stream, payload, textBuffer);
             if (i > 0) yield return id;
             int rows = Count(reader, int.MaxValue, 1);
             if (reader.ReadBoolean()) stream.Position += ((long)rows + 63) / 64 * 8;
             int directories = Count(reader, payload - stream.Position, 4);
-            for (int d = 0; d < directories; d++) _ = ReadText(reader, stream, payload);
+            for (int d = 0; d < directories; d++)
+            {
+                token.ThrowIfCancellationRequested();
+                int chars = TextLength(reader, stream, payload);
+                stream.Position += (long)chars * sizeof(char);
+            }
         }
     }
 
@@ -149,11 +156,18 @@ internal static class LiveViewStore
     {
         writer.Write(text.Length); stream.Write(MemoryMarshal.AsBytes(text.AsSpan()));
     }
-    private static string ReadText(BinaryReader reader, Stream stream, long payload)
+    private static int TextLength(BinaryReader reader, Stream stream, long payload)
     {
         int count = Count(reader, payload - stream.Position - 4, 2);
         if (count > 32768) throw new InvalidDataException("检查点字符串过长。");
-        char[] text = new char[count]; stream.ReadExactly(MemoryMarshal.AsBytes(text.AsSpan())); return new(text);
+        return count;
+    }
+    private static string ReadText(BinaryReader reader, Stream stream, long payload, char[] buffer, string? existing = null)
+    {
+        int count = TextLength(reader, stream, payload);
+        var text = buffer.AsSpan(0, count);
+        stream.ReadExactly(MemoryMarshal.AsBytes(text));
+        return existing is not null && text.SequenceEqual(existing.AsSpan()) ? existing : new(text);
     }
     private static int Count(BinaryReader reader, long available, int unit)
     {

@@ -2,7 +2,7 @@ namespace NtfsSearch.Core;
 
 public sealed class IndexBuilder
 {
-    private readonly NameArena names = new();
+    private readonly NameArena names;
     private IndexRecord[] records;
     private int count;
     private ulong[]? fileReferences;
@@ -15,6 +15,7 @@ public sealed class IndexBuilder
     public IndexBuilder(int capacity = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
+        names = new((int)Math.Clamp((long)capacity * 32, 256, NameArena.ChunkChars));
         records = new IndexRecord[capacity];
     }
 

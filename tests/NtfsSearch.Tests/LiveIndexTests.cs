@@ -244,6 +244,96 @@ public class LiveIndexTests
         Assert.Equal(new[] { @"C:\z.txt" }, Catalog(live).Search("").Rows.Select(r => r.FullPath));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ParentMoveOrDeletionAndChildMoveOutUseFinalGraph(bool deleteParent)
+    {
+        var live = new LiveVolumeIndex(Baseline(), new(1, 0));
+        live.Apply(Tx(0,
+            new IndexedFileState(10, true, deleteParent ? [] : [new(5, @"C:\", "moved")]),
+            new IndexedFileState(11, true, [new(5, @"C:\", "escaped")])));
+        Assert.Single(Catalog(live).Search(@"escaped\报告").Rows);
+        Assert.Empty(Catalog(live).Search(@"old\").Rows);
+        Assert.Empty(Catalog(live).Search(@"moved\nested\").Rows);
+        foreach (SortField field in Enum.GetValues<SortField>())
+            foreach (bool descending in new[] { false, true })
+            {
+                var rows = Catalog(live).Search("", field, descending).Rows;
+                var builder = new IndexBuilder();
+                foreach (var row in rows) builder.Add(row.FullPath[..^row.Name.Length], row.Name, row.Size, row.ModifiedUtcTicks, row.IsDirectory);
+                Assert.Equal(builder.Build().Search("", field, descending).Rows.Select(r => r.FullPath), rows.Select(r => r.FullPath));
+            }
+    }
+
+    [Fact]
+    public void DirectoryChangeMatchesExistingPathsWithDifferentCasingAndGenerationReuse()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", "old", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(@"C:\OLD\", "child", fileReference: 11, parentReference: 10);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        live.Apply(Tx(0, new IndexedFileState(10, true, [new(5, @"C:\", "renamed")])));
+        Assert.Single(Catalog(live).Search(@"renamed\child").Rows);
+        live.Apply(Tx(1, new IndexedFileState((1UL << 48) | 10, true, [new(5, @"C:\", "newgeneration")])));
+        Assert.Empty(Catalog(live).Search("child").Rows);
+        Assert.Single(Catalog(live).Search("newgeneration").Rows);
+    }
+
+    [Fact]
+    public void MultipleChangedSubtreesRespectPathComponentBoundaries()
+    {
+        var builder = new IndexBuilder();
+        ulong reference = 10;
+        foreach (string name in new[] { "a", "aa", "z", "zz" })
+        {
+            builder.Add(@"C:\", name, isDirectory: true, fileReference: reference, parentReference: 5);
+            builder.Add(@"C:\" + name + @"\", "child", fileReference: reference + 100, parentReference: reference);
+            reference++;
+        }
+        var baseline = builder.Build();
+        var live = new LiveVolumeIndex(baseline, new(1, 0));
+        live.Apply(Tx(0, new IndexedFileState(10, true, [new(5, @"C:\", "moved-a")]),
+            new IndexedFileState(12, true, [new(5, @"C:\", "moved-z")])));
+        Assert.Equal(new[] { @"C:\aa\child", @"C:\moved-a\child", @"C:\moved-z\child", @"C:\zz\child" },
+            Catalog(live).Search("child", SortField.Path).Rows.Select(row => row.FullPath));
+        for (int d = 0; d < baseline.Directories.Length; d++)
+            if (baseline.Directories[d] is @"C:\aa\" or @"C:\zz\")
+                Assert.Same(baseline.Directories[d], live.Layers[0].Directories[d]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DirectoryChangesHandleBaselinePathsThatDisagreeWithDirectoryRows(bool delete)
+    {
+        // 两遍MFT采集之间目录改名时，目录行和子文件父路径可以来自不同时间点。
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", "current", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(@"C:\old\", "file", fileReference: 11, parentReference: 10);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        live.Apply(Tx(0, new IndexedFileState(10, true, delete ? [] : [new(5, @"C:\", "renamed")])));
+        Assert.Empty(Catalog(live).Search(@"old\").Rows);
+        if (delete) Assert.Empty(Catalog(live).Search("").Rows);
+        else Assert.Single(Catalog(live).Search(@"renamed\file").Rows);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DirectoryChangesHandleDescendantsWithIndependentHistoricalPathAliases(bool delete)
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", "current", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(@"C:\old\", "child", isDirectory: true, fileReference: 11, parentReference: 10);
+        builder.Add(@"C:\between\child\", "file", fileReference: 12, parentReference: 11);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        live.Apply(Tx(0, new IndexedFileState(10, true, delete ? [] : [new(5, @"C:\", "renamed")])));
+        Assert.Empty(Catalog(live).Search(@"between\").Rows);
+        if (delete) Assert.Empty(Catalog(live).Search("").Rows);
+        else Assert.Single(Catalog(live).Search(@"renamed\child\file").Rows);
+    }
+
     [Fact]
     public void CommittedMultipartAppliesZeroSpanPartsExactlyOnceBeforeFinalAdvance()
     {

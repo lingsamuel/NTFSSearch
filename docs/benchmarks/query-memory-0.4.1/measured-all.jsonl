@@ -1,0 +1,27 @@
+{"phase": "snapshot", "seconds": 10.381069, "liveBytes": 609768032, "allocatedBytes": 724526520, "Statistics": {"Entries": 4712552, "Directories": 475773, "NameBytes": 227136042, "RecordBytes": 150801664, "SortBytes": 75400832, "EstimatedDirectoryBytes": 114430436, "EstimatedPayloadBytes": 567768974}, "rows": 4712552, "root": "H:\\"}
+{"phase": "graph", "seconds": 0.7389781, "graphNodes": 511544, "liveDelta": 84961040, "allocatedBytes": 85495544, "heap": 709149408, "fragmented": 14372960, "root": "H:\\"}
+{"phase": "graphDetails", "nodeNames": 27624424, "nodeRoots": 80, "roots": 2, "root": "H:\\"}
+{"phase": "snapshot", "seconds": 3.1246363, "liveBytes": 211090208, "allocatedBytes": 239428240, "Statistics": {"Entries": 1796896, "Directories": 116851, "NameBytes": 82808464, "RecordBytes": 57500672, "SortBytes": 28750336, "EstimatedDirectoryBytes": 26592080, "EstimatedPayloadBytes": 195651552}, "rows": 1796896, "root": "J:\\"}
+{"phase": "graph", "seconds": 0.1095425, "graphNodes": 118208, "liveDelta": 18826176, "allocatedBytes": 18852432, "heap": 232908680, "fragmented": 2944920, "root": "J:\\"}
+{"phase": "graphDetails", "nodeNames": 5483704, "nodeRoots": 80, "roots": 2, "root": "J:\\"}
+{"phase": "snapshot", "seconds": 2.0376237, "liveBytes": 133372504, "allocatedBytes": 161239272, "Statistics": {"Entries": 1036457, "Directories": 104892, "NameBytes": 48219340, "RecordBytes": 33166624, "SortBytes": 16583312, "EstimatedDirectoryBytes": 26161416, "EstimatedPayloadBytes": 124130692}, "rows": 1036457, "root": "K:\\"}
+{"phase": "graph", "seconds": 0.1180979, "graphNodes": 106172, "liveDelta": 17104680, "allocatedBytes": 17018168, "heap": 152947416, "fragmented": 2422856, "root": "K:\\"}
+{"phase": "graphDetails", "nodeNames": 5090752, "nodeRoots": 80, "roots": 2, "root": "K:\\"}
+{"phase": "snapshot", "seconds": 14.9998414, "liveBytes": 852120032, "allocatedBytes": 1114925408, "Statistics": {"Entries": 6107436, "Directories": 1774533, "NameBytes": 234764134, "RecordBytes": 195437952, "SortBytes": 97718976, "EstimatedDirectoryBytes": 264105588, "EstimatedPayloadBytes": 792026650}, "rows": 6107436, "root": "D:\\"}
+{"phase": "graph", "seconds": 2.4099851, "graphNodes": 1917040, "liveDelta": 277036336, "allocatedBytes": 286313272, "heap": 1145829240, "fragmented": 16625184, "root": "D:\\"}
+{"phase": "graphDetails", "nodeNames": 63448104, "nodeRoots": 80, "roots": 2, "root": "D:\\"}
+{"phase": "snapshot", "seconds": 3.1629145, "liveBytes": 204169608, "allocatedBytes": 252809216, "Statistics": {"Entries": 1497454, "Directories": 194685, "NameBytes": 71202068, "RecordBytes": 47918528, "SortBytes": 23959264, "EstimatedDirectoryBytes": 47348672, "EstimatedPayloadBytes": 190428532}, "rows": 1497454, "root": "I:\\"}
+{"phase": "graph", "seconds": 0.1829455, "graphNodes": 197712, "liveDelta": 33250120, "allocatedBytes": 33200024, "heap": 240271048, "fragmented": 2803944, "root": "I:\\"}
+{"phase": "graphDetails", "nodeNames": 10988264, "nodeRoots": 80, "roots": 2, "root": "I:\\"}
+{"phase": "snapshot", "seconds": 6.3732069, "liveBytes": 391426096, "allocatedBytes": 430632984, "Statistics": {"Entries": 3426560, "Directories": 174904, "NameBytes": 160423666, "RecordBytes": 109649920, "SortBytes": 54824960, "EstimatedDirectoryBytes": 37524744, "EstimatedPayloadBytes": 362423290}, "rows": 3426560, "root": "F:\\"}
+{"phase": "graph", "seconds": 0.1930717, "graphNodes": 178343, "liveDelta": 27331216, "allocatedBytes": 27366032, "heap": 432268584, "fragmented": 13463896, "root": "F:\\"}
+{"phase": "graphDetails", "nodeNames": 7247824, "nodeRoots": 80, "roots": 2, "root": "F:\\"}
+{"phase": "snapshot", "seconds": 12.0276339, "liveBytes": 802508152, "allocatedBytes": 938509352, "Statistics": {"Entries": 6528066, "Directories": 872566, "NameBytes": 290429388, "RecordBytes": 208898112, "SortBytes": 104449056, "EstimatedDirectoryBytes": 139242690, "EstimatedPayloadBytes": 743019246}, "rows": 6528066, "root": "G:\\"}
+{"phase": "graph", "seconds": 0.8390957, "graphNodes": 1014230, "liveDelta": 149759120, "allocatedBytes": 150025400, "heap": 988219264, "fragmented": 35904616, "root": "G:\\"}
+{"phase": "graphDetails", "nodeNames": 36092072, "nodeRoots": 80, "roots": 2, "root": "G:\\"}
+{"phase": "snapshot", "seconds": 17.7749738, "liveBytes": 1103651200, "allocatedBytes": 1284369320, "Statistics": {"Entries": 7691752, "Directories": 766483, "NameBytes": 484731240, "RecordBytes": 246136064, "SortBytes": 123068032, "EstimatedDirectoryBytes": 181363810, "EstimatedPayloadBytes": 1035299146}, "rows": 7691752, "root": "C:\\"}
+{"phase": "graph", "seconds": 1.1208706, "graphNodes": 810345, "liveDelta": 138348952, "allocatedBytes": 139906144, "heap": 1274116352, "fragmented": 32068824, "root": "C:\\"}
+{"phase": "graphDetails", "nodeNames": 47683456, "nodeRoots": 144, "roots": 3, "root": "C:\\"}
+{"phase": "snapshot", "seconds": 3.2644316, "liveBytes": 220837984, "allocatedBytes": 277153608, "Statistics": {"Entries": 1614526, "Directories": 205675, "NameBytes": 73524102, "RecordBytes": 51664832, "SortBytes": 25832416, "EstimatedDirectoryBytes": 55043274, "EstimatedPayloadBytes": 206064624}, "rows": 1614526, "root": "E:\\"}
+{"phase": "graph", "seconds": 0.1882146, "graphNodes": 206346, "liveDelta": 34281552, "allocatedBytes": 34905280, "heap": 258150688, "fragmented": 2983776, "root": "E:\\"}
+{"phase": "graphDetails", "nodeNames": 11139368, "nodeRoots": 80, "roots": 2, "root": "E:\\"}

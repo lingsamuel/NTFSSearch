@@ -1,0 +1,10 @@
+{"phase":"tiny","directories":10,"kind":"file","allocatedBytes":4056,"seconds":0.0070868}
+{"phase":"tiny","directories":1000,"kind":"file","allocatedBytes":4464,"seconds":0.0004709}
+{"phase":"tiny","directories":1000,"kind":"newdir","allocatedBytes":5368,"seconds":0.0025061}
+{"phase":"tiny","directories":1000,"kind":"rename","allocatedBytes":153216,"seconds":0.0051605}
+{"phase":"tiny","directories":10000,"kind":"file","allocatedBytes":4424,"seconds":0.0001024}
+{"phase":"tiny","directories":10000,"kind":"newdir","allocatedBytes":5584,"seconds":0.000138}
+{"phase":"tiny","directories":10000,"kind":"rename","allocatedBytes":248888,"seconds":0.0159902}
+{"phase":"tiny","directories":100000,"kind":"file","allocatedBytes":4424,"seconds":0.0001895}
+{"phase":"tiny","directories":100000,"kind":"newdir","allocatedBytes":5776,"seconds":0.0001637}
+{"phase":"tiny","directories":100000,"kind":"rename","allocatedBytes":1069304,"seconds":0.0146643}

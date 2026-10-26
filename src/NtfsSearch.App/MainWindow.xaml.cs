@@ -12,7 +12,6 @@ public partial class MainWindow : Window
     private readonly AutomaticVolumeLoader loader;
     private readonly WindowsVolumeBackend? windowsBackend;
     private readonly CancellationTokenSource lifetime = new();
-    private readonly SemaphoreSlim queryGate = new(1);
     private CancellationTokenSource? queryCancellation;
     private readonly bool smokeTest;
     private int offset;
@@ -23,6 +22,7 @@ public partial class MainWindow : Window
     public MainWindow(bool smokeTest = false, string? cacheDirectory = null)
     {
         InitializeComponent();
+        InitializeSearch();
         this.smokeTest = smokeTest;
         IAutomaticVolumeBackend backend;
         if (smokeTest) backend = new SmokeBackend();
@@ -35,7 +35,7 @@ public partial class MainWindow : Window
         }
         var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
         loader = new(backend, catalog, policy.CacheLoadLimit);
-        catalog.Changed += () => OnUi(() => { if (!closing) { offset = 0; _ = SearchAsync(); } });
+        catalog.Changed += () => OnUi(RequestCatalogRefresh);
         loader.StatusChanged += () => OnUi(() =>
         {
             if (closing) return;
@@ -66,39 +66,6 @@ public partial class MainWindow : Window
     private Task RunAutomaticAsync(CancellationToken token) => Task.WhenAll(
         Task.Run(() => loader.RunAsync(token), token), windowsBackend is null ? Task.CompletedTask : Task.Run(() => windowsBackend.RunLiveAsync(token), token));
 
-    private async Task SearchAsync()
-    {
-        if (!ready || closing) return;
-        queryCancellation?.Cancel();
-        var source = new CancellationTokenSource(); queryCancellation = source;
-        long version = catalog.Version;
-        string query = QueryBox.Text;
-        var sort = (SortField)SortBox.SelectedIndex;
-        bool descending = DescendingBox.IsChecked == true, matchPath = MatchPathBox.IsChecked == true;
-        int pageOffset = offset;
-        bool entered = false;
-        try
-        {
-            await queryGate.WaitAsync(source.Token); entered = true;
-            ResultStatus.Text = "搜索中…";
-            var result = await Task.Run(() => catalog.Search(query, sort, descending, matchPath,
-                pageOffset, PageSize, source.Token), source.Token);
-            if (closing || source.IsCancellationRequested || version != catalog.Version) return;
-            total = result.TotalCount;
-            ResultsGrid.ItemsSource = result.Rows.Select(r => new ResultView(r)).ToArray();
-            ResultStatus.Text = catalog.Count == 0 ? "暂无已完成的磁盘，读取完成后会自动显示结果。"
-                : $"精确匹配 {total:N0} 个 · 第 {pageOffset / PageSize + 1:N0} 页 · 查询 {result.Elapsed.TotalMilliseconds:F2} ms · 已索引 {catalog.Count:N0} 个";
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception error) { if (!closing && !source.IsCancellationRequested) ResultStatus.Text = error.Message; }
-        finally
-        {
-            if (entered) queryGate.Release();
-            if (ReferenceEquals(queryCancellation, source)) queryCancellation = null;
-            source.Dispose();
-        }
-    }
-
     private async void RefreshDisks(object sender, RoutedEventArgs e)
     {
         try
@@ -114,7 +81,7 @@ public partial class MainWindow : Window
     private void SortChanged(object sender, SelectionChangedEventArgs e) => QueryChanged(sender, e);
     private void CancelTasks(object sender, RoutedEventArgs e)
     {
-        queryCancellation?.Cancel();
+        CancelSearch();
         TryAction(() => windowsBackend?.CancelCollection());
     }
     private void PreviousPage(object sender, RoutedEventArgs e) { offset = Math.Max(0, offset - PageSize); _ = SearchAsync(); }
@@ -136,20 +103,7 @@ public partial class MainWindow : Window
     { if (ResultsGrid.SelectedItem is ResultView row) TryAction(() => Clipboard.SetText(row.FullPath)); }
     private void TryAction(Action action) { try { action(); } catch (Exception error) { TaskStatus.Text = error.Message; } }
     private void OnClosing(object? sender, CancelEventArgs e)
-    { closing = true; lifetime.Cancel(); queryCancellation?.Cancel(); }
-
-    internal async Task SmokeTestAsync()
-    {
-        await loader.RefreshAsync(lifetime.Token);
-        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-        if (catalog.Count != 1000) throw new InvalidOperationException("自动发现和加载没有发布磁盘。");
-        QueryBox.Text = "\"hello world\""; SortBox.SelectedIndex = 2; DescendingBox.IsChecked = true;
-        await SearchAsync();
-        var rows = ResultsGrid.ItemsSource.Cast<ResultView>().ToArray();
-        if (total != 59 || rows.Length != 59 || rows[0].Size < rows[^1].Size)
-            throw new InvalidOperationException("自动采集后的搜索与排序自检失败。");
-        Measure(new Size(1120, 760)); Arrange(new Rect(0, 0, 1120, 760));
-    }
+    { closing = true; queryState.Close(); refreshTimer.Stop(); lifetime.Cancel(); queryCancellation?.Cancel(); }
 
     internal async Task<object> AutomaticReadTestAsync(bool requireParallel = false)
     {
@@ -203,6 +157,14 @@ public partial class MainWindow : Window
                 var result = await Task.Run(() => catalog.Search(status.Root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
                 rows.Add(new { status.Root, Count = result.TotalCount });
             }
+            using var process = Process.GetCurrentProcess();
+            var memory = new
+            {
+                WorkingSetBytes = process.WorkingSet64,
+                PrivateBytes = process.PrivateMemorySize64,
+                ManagedBytes = GC.GetTotalMemory(false),
+                AllocatedBytes = GC.GetTotalAllocatedBytes(false)
+            };
             return new
             {
                 Success = true,
@@ -210,7 +172,8 @@ public partial class MainWindow : Window
                 LiveVolumes = windowsBackend.LiveVolumeCount,
                 Volumes = rows,
                 ScansStarted = windowsBackend.Metrics?.ScansStarted,
-                LiveVerification = liveVerification
+                LiveVerification = liveVerification,
+                Memory = memory
             };
         }
         finally
@@ -227,15 +190,5 @@ public partial class MainWindow : Window
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.FromResult<CachedVolume?>(new(DemoData.Create(), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;
         public string ReadStatus(NtfsVolume volume) => "测试磁盘已发现";
-    }
-
-    private sealed class ResultView(SearchRow row)
-    {
-        public string Name => row.Name;
-        public string FullPath => row.FullPath;
-        public long? Size => row.Size;
-        public string SizeText => row.Size is long size ? $"{size:N0}" : "—";
-        public string ModifiedText => row.ModifiedUtcTicks is long ticks && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks
-            ? new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "—";
     }
 }
