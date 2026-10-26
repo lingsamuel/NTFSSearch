@@ -4,8 +4,8 @@ using System.Text.Json;
 
 namespace NtfsSearch.Core;
 
-public sealed record VolumeManifest(string VolumeId, string Root, string SnapshotFile, DateTime IndexedUtc);
-public sealed record CachedVolume(SearchIndex Index, bool UsedBackup);
+public sealed record VolumeManifest(string VolumeId, string Root, string SnapshotFile, DateTime IndexedUtc, JournalPosition? Journal = null);
+public sealed record CachedVolume(SearchIndex Index, bool UsedBackup, VolumeManifest? Manifest = null, IReadOnlyList<SearchIndex>? Layers = null);
 
 public sealed class VolumeCache
 {
@@ -37,16 +37,34 @@ public sealed class VolumeCache
 
     public VolumeManifest Publish(NtfsVolume volume, SearchIndex index, CancellationToken token = default)
     {
-        using var lease = AcquireLease(volume, exclusive: true, token);
-        foreach (string pattern in new[] { Key(volume) + ".*.ntidx.*.tmp", Key(volume) + ".ready.json.*.tmp" })
-            foreach (string temporary in Directory.EnumerateFiles(DirectoryPath, pattern))
-                try { File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        using var publication = BeginPublication(volume, index, null, token);
+        publication.Commit(token); return publication.Manifest;
+    }
+
+    public PreparedVolumePublication BeginPublication(NtfsVolume volume, SearchIndex index,
+        JournalPosition? journal, CancellationToken token = default)
+    {
+        var lease = AcquireLease(volume, exclusive: true, token);
         string snapshot = Key(volume) + "." + Guid.NewGuid().ToString("N") + ".ntidx";
-        SnapshotStore.Save(index, Path.Combine(DirectoryPath, snapshot), token);
-        var manifest = new VolumeManifest(volume.Id, volume.Root, snapshot, DateTime.UtcNow);
-        AtomicJson.Write(ManifestPath(volume), manifest, keepBackup: true);
-        // 发布成功后仅回收本卷旧代，保留主清单和备份清单引用的快照。
-        var keep = new HashSet<string>(StringComparer.Ordinal) { snapshot };
+        try
+        {
+            foreach (string pattern in new[] { Key(volume) + ".*.ntidx.*.tmp", Key(volume) + ".ready.json.*.tmp" })
+                foreach (string temporary in Directory.EnumerateFiles(DirectoryPath, pattern))
+                    try { File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            SnapshotStore.Save(index, Path.Combine(DirectoryPath, snapshot), token);
+            return new(this, volume, new(volume.Id, volume.Root, snapshot, DateTime.UtcNow, journal), lease);
+        }
+        catch { lease.Dispose(); throw; }
+    }
+
+    private void Commit(NtfsVolume volume, VolumeManifest manifest, CancellationToken token)
+    {
+        AtomicJson.Write(ManifestPath(volume), manifest, keepBackup: true, token);
+    }
+
+    private void Cleanup(NtfsVolume volume, VolumeManifest manifest)
+    {
+        var keep = new HashSet<string>(StringComparer.Ordinal) { manifest.SnapshotFile };
         try { if (ReadManifest(volume, ManifestPath(volume) + ".bak") is { } old) keep.Add(old.SnapshotFile); }
         catch (Exception e) when (e is InvalidDataException or IOException or JsonException) { }
         foreach (string file in Directory.EnumerateFiles(DirectoryPath, Key(volume) + ".*.ntidx"))
@@ -54,7 +72,52 @@ public sealed class VolumeCache
             if (keep.Contains(Path.GetFileName(file))) continue;
             try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
-        return manifest;
+        GenerationGarbageCollector.Clean(DirectoryPath, volume, keep);
+    }
+
+    public void CleanupRetired(NtfsVolume volume, CancellationToken token = default)
+    {
+        using var lease = AcquireLease(volume, exclusive: true, token);
+        if (CurrentManifest(volume) is { } current) Cleanup(volume, current);
+    }
+
+    public VolumeManifest? CurrentManifest(NtfsVolume volume)
+    {
+        foreach (string suffix in new[] { "", ".bak" })
+        {
+            try { if (ReadManifest(volume, ManifestPath(volume) + suffix) is { } manifest) return manifest; }
+            catch (Exception error) when (error is IOException or InvalidDataException or JsonException or UnauthorizedAccessException) { }
+        }
+        return null;
+    }
+
+    public sealed class PreparedVolumePublication : IDisposable
+    {
+        private readonly VolumeCache cache;
+        private readonly NtfsVolume volume;
+        private readonly FileStream lease;
+        private bool committed, disposed;
+        public VolumeManifest Manifest { get; private set; }
+        internal PreparedVolumePublication(VolumeCache cache, NtfsVolume volume, VolumeManifest manifest, FileStream lease)
+        { this.cache = cache; this.volume = volume; Manifest = manifest; this.lease = lease; }
+        public void Commit(CancellationToken token = default)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this); token.ThrowIfCancellationRequested();
+            if (committed) return;
+            Manifest = Manifest with { IndexedUtc = DateTime.UtcNow };
+            cache.Commit(volume, Manifest, token); committed = true;
+            try { cache.Cleanup(volume, Manifest); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        public void Dispose()
+        {
+            if (disposed) return; disposed = true;
+            try
+            {
+                if (!committed)
+                    try { File.Delete(Path.Combine(cache.DirectoryPath, Manifest.SnapshotFile)); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            finally { lease.Dispose(); }
+        }
     }
 
     public CachedVolume? Load(NtfsVolume volume, CancellationToken token = default, IProgress<string>? progress = null)
@@ -64,25 +127,23 @@ public sealed class VolumeCache
         foreach (bool backup in new[] { false, true })
         {
             string path = ManifestPath(volume) + (backup ? ".bak" : "");
-            if (!File.Exists(path)) continue;
-            found = true;
             try
             {
                 var manifest = ReadManifest(volume, path);
                 if (manifest is null) continue;
-                return new(SnapshotStore.Load(Path.Combine(DirectoryPath, manifest.SnapshotFile), token, progress), backup);
+                found = true;
+                return new(SnapshotStore.Load(Path.Combine(DirectoryPath, manifest.SnapshotFile), token, progress), backup, manifest);
             }
-            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException) { }
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException) { found = true; }
         }
         if (found) throw new InvalidDataException("磁盘缓存损坏，后台将自动重建；其他磁盘仍可查询。");
         return null;
     }
 
-    private static VolumeManifest? ReadManifest(NtfsVolume volume, string path)
+    internal static VolumeManifest? ReadManifest(NtfsVolume volume, string path)
     {
-        if (!File.Exists(path)) return null;
-        if (new FileInfo(path).Length > 65536) throw new InvalidDataException("索引清单过大。");
-        var manifest = JsonSerializer.Deserialize<VolumeManifest>(AtomicJson.ReadText(path)) ?? throw new InvalidDataException("索引清单为空。");
+        if (!AtomicFile.ExistsWithReplaceGrace(path)) return null;
+        var manifest = JsonSerializer.Deserialize<VolumeManifest>(AtomicJson.ReadText(path, 65536)) ?? throw new InvalidDataException("索引清单为空。");
         if (manifest.VolumeId != volume.Id || manifest.Root != volume.Root) throw new InvalidDataException("卷身份与缓存不符。");
         if (string.IsNullOrEmpty(manifest.SnapshotFile) || manifest.SnapshotFile != Path.GetFileName(manifest.SnapshotFile)
             || !manifest.SnapshotFile.StartsWith(Key(volume) + ".", StringComparison.Ordinal)
@@ -90,7 +151,7 @@ public sealed class VolumeCache
         return manifest;
     }
 
-    private FileStream AcquireLease(NtfsVolume volume, bool exclusive, CancellationToken token)
+    internal FileStream AcquireLease(NtfsVolume volume, bool exclusive, CancellationToken token)
     {
         string path = Path.Combine(DirectoryPath, Key(volume) + ".publish.lock");
         var started = System.Diagnostics.Stopwatch.StartNew();
@@ -109,23 +170,30 @@ public sealed class VolumeCache
 
 public static class AtomicJson
 {
-    public static string ReadText(string path)
+    public static string ReadText(string path, CancellationToken token = default) => ReadText(path, int.MaxValue, token);
+
+    internal static string ReadText(string path, int maximumBytes, CancellationToken token = default)
     {
         // Windows 原子替换要求读者允许删除共享；句柄仍会读到其打开的完整旧版本。
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        string? text = null;
+        AtomicFile.Retry(() =>
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > maximumBytes) throw new InvalidDataException("索引清单过大。");
+            using var reader = new StreamReader(stream);
+            text = reader.ReadToEnd();
+        }, OperatingSystem.IsWindows(), token, allowMissing: true);
+        return text!;
     }
 
-    public static void Write<T>(string path, T value, bool keepBackup = false)
+    public static void Write<T>(string path, T value, bool keepBackup = false, CancellationToken token = default)
     {
         string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             { JsonSerializer.Serialize(stream, value); stream.Flush(true); }
-            if (keepBackup && File.Exists(path)) File.Replace(temporary, path, path + ".bak");
-            else File.Move(temporary, path, overwrite: true);
+            AtomicFile.Publish(temporary, path, keepBackup ? path + ".bak" : null, token);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }

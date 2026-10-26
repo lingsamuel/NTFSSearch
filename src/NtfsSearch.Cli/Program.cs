@@ -23,7 +23,7 @@ try
         case "scan" when args.Length == 3 && args[1].Length is >= 1 and <= 3:
             var scanned = NtfsEnumerator.Scan(args[1][0], cancellation.Token, new Progress<string>(Console.Error.WriteLine));
             SnapshotStore.Save(scanned, args[2], cancellation.Token);
-            Console.WriteLine($"已保存 {scanned.Count:N0} 条基础名称记录；大小/修改时间/硬链接尚未补全，无实时监控。");
+            Console.WriteLine($"已保存 {scanned.Count:N0} 条目录项，含硬链接与可用大小/修改时间；静态诊断命令不启动实时监控。");
             break;
         case "search" when args.Length >= 3:
             var loaded = SnapshotStore.Load(args[1], cancellation.Token);
@@ -36,7 +36,7 @@ try
         case "bench":
             Benchmark.Run(args.Skip(1).ToArray(), cancellation.Token); break;
         default:
-            Console.WriteLine("NtfsSearch 0.3.0\n\n桌面程序自动发现并读取 NTFS 磁盘，无需输入索引。\n高级命令：\n  drives\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]");
+            Console.WriteLine("NtfsSearch 0.4.0\n\n桌面程序自动发现并读取 NTFS 磁盘，无需输入索引。\n高级命令：\n  drives\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]");
             break;
     }
 }

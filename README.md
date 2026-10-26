@@ -1,6 +1,6 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.3.0。
+Windows NTFS 文件搜索工具，版本 0.4.0。
 
 ## 使用
 
@@ -8,7 +8,7 @@ Windows NTFS 文件搜索工具，版本 0.3.0。
 
 首次本次采集需要 Windows UAC 授权。普通权限搜索窗口会自动启动独立管理员采集进程，一次授权处理所有卷；不用选择索引文件、输入盘符或打开管理员终端。采集进程跟随搜索窗口退出，不安装系统服务或修改 Everything。
 
-缓存由程序自动维护，后续启动自动恢复已有结果，再在后台并行刷新各卷。插入与移除 NTFS 磁盘会自动发现，完成一个卷就可以查询该卷。单卷失败会显示原因，其余卷继续处理。可用“重新扫描磁盘”重试，或“取消任务”停止本次采集。
+数据库、增量日志和检查点统一保存在 **`NtfsSearch.App.exe` 同目录的 `Data` 文件夹**。后续启动加载已有索引，并从持久化 USN 位置续读停机期间的变化，正常启动不再全盘重扫。插入与移除 NTFS 磁盘会自动发现，完成一个卷就可以查询该卷。单卷失败会显示原因，其余卷继续处理。可用“重新扫描磁盘”重试，或“取消任务”停止本次采集。
 
 发布包需要 .NET 10 Desktop Runtime x64；当前开发主机已验证具备运行环境。
 
@@ -21,7 +21,7 @@ Windows NTFS 文件搜索工具，版本 0.3.0。
 - 多卷结果按同一排序规则归并，显示精确总数；每页仅构造200条结果。
 - 打开文件与所在目录、复制路径均使用当前桌面用户权限。
 
-名称与路径排序用于自动扫描结果。核心也支持大小与修改时间排序，但基础 MFT 枚举目前尚未补全这些元数据；未知值显示“—”，不将 USN 时间冒充文件修改时间。
+支持名称、路径、文件大小和修改时间排序；大小和时间从真实 NTFS 元数据读取，增量更新也保持相同语义。USN 事件时间不会冒充文件修改时间。
 
 ## 多盘并行
 
@@ -41,14 +41,18 @@ Windows NTFS 文件搜索工具，版本 0.3.0。
 - 快照 SHA-256 校验后加载；排序排列一并持久化，启动时验证并恢复，避免重新排序整个卷。
 - 快照完成后才原子发布清单，保留上一代。损坏时自动回退并请求后台重建，同一损坏版本不会每两秒反复加载。
 - 同卷发布使用跨进程互斥；读取允许原子替换，避免 Windows 文件共享冲突。卷进度和已完成记录数直接显示在窗口中。
-- 全部本地缓存位于 `%LOCALAPPDATA%\NtfsSearch\Volumes`，由程序管理。
+- 默认数据目录为程序旁的 `Data`，前台与管理员采集进程使用同一绝对路径。移动软件时一并移动 `Data` 即可；需要可写的程序目录，不会静默退回全局目录。
+- 首次升级自动复制旧版 `%LOCALAPPDATA%\NtfsSearch\Volumes` 的静态缓存并校验，已有有效目标优先，旧副本保留以便恢复。旧格式缺少文件身份和 USN 水位，因此升级时各卷只重建一次；之后正常启动只接续增量。
+- 硬链接按每个文件名及父目录记录；完整文件引用包含代际，避免记录槽复用误认旧文件。扫描期间持续捕获 USN，发布前回放变化。
+- 文件新增、删除、改名、目录移动和硬链接增删通过 USN 更新，界面对象数与搜索结果随提交变化；监控不占用初次扫描的并发名额。
+- 增量事务先可靠提交再推进游标。查询使用只读基线、隐藏位图和增量段，周期保存检查点并回收已消费日志；普通变化不复制或重新排序整卷。
+- 仅日志换代、截断、损坏或显式重新扫描时重建受影响卷；其他卷继续提供结果。`Data` 内部文件不纳入索引，避免自身日志触发无限反馈。
 
 ## 当前边界
 
-这是持续开发中的实现，尚未完成文件级实时 USN 回放、硬链接补全和原生大小/日期采集。当前每次启动后台刷新各卷，运行期间自动发现卷的插拔；不会以持续全盘重扫冒充文件级实时更新。
+这是持续开发中的实现。硬链接补全后，与当前Everything库的剩余数量差仍在逐文件核对，不能以总数接近宣布完全一致。初次完整索引、缓存加载、目录树移动和大规模变化的耗时仍需持续实测；亿级即时搜索与排序没有完成同机验收，不能用功能测试或早期合成数据宣布达标。
 
-已有快照可在后台刷新期间继续查询，直到新一代完整提交。扫描期间目录变动仍需后续 USN 回放保证完整一致性；不可达记录会显示统计。亿级即时体验仍需优化和真实数据对标，不能用0.1.0合成测试宣布达标。
-
+持久化采用 V3 快照、带提交边界与校验和的增量日志、查询视图检查点。异常退出后从最后完整事务恢复；卷上的 USN 已被系统回收且本地捕获也无法补齐时，只重建该卷。
 ## 开发与验证
 
 ```sh
@@ -59,8 +63,8 @@ dotnet run --project src/NtfsSearch.Cli -c Release -- bench 1000000 report.json 
 
 PowerShell 执行 `scripts/build-windows.ps1` 构建发布目录。WPF 只能在 Windows 运行，核心测试也可在 Linux 运行。
 
-诊断入口：`app/NtfsSearch.App.exe --smoke-test report.txt` 执行不显示窗口的自动流程自检；`--probe-volumes report.json` 每卷只读取一个真实 MFT 批次；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止。
+诊断入口：`app/NtfsSearch.App.exe --smoke-test report.txt` 执行不显示窗口的自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离 `Data` 等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
 
 命令行保留 EFU 导入、快照查询和显式扫描作为开发诊断能力，不属于桌面正常使用步骤。0.1.0容量数据和当前验证记录见 `docs/benchmarks`。
 
-参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。
+参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。NTFS 数据流读取复用 DiscUtils，依赖与许可见 `docs/native-dependencies.md`。

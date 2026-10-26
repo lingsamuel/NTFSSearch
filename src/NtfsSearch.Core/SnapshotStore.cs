@@ -5,9 +5,58 @@ namespace NtfsSearch.Core;
 
 public static class SnapshotStore
 {
-    private static readonly byte[] Magic = "NTSIDX02"u8.ToArray();
+    private static readonly byte[] Magic = "NTSIDX03"u8.ToArray();
 
     public static void Save(SearchIndex index, string path, CancellationToken cancellationToken = default)
+    {
+        SaveChecked(path, (writer, crypto) =>
+        {
+            writer.Write(Magic);
+            writer.Write(index.Count); writer.Write(index.Directories.Length);
+            writer.Write(index.Names.Chunks.Count); writer.Write(index.Names.LastUsed);
+            foreach (string directory in index.Directories)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                writer.Write(directory.Length);
+                crypto.Write(MemoryMarshal.AsBytes(directory.AsSpan()));
+            }
+            foreach (char[] chunk in index.Names.Chunks)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                writer.Write(chunk.Length);
+                crypto.Write(MemoryMarshal.AsBytes(chunk.AsSpan()));
+            }
+            for (int start = 0; start < index.Count; start += 16_384)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                crypto.Write(MemoryMarshal.AsBytes(index.Records.AsSpan(start, Math.Min(16_384, index.Count - start))));
+            }
+            var savedOrders = new int[4][];
+            for (int field = 0; field < 4; field++)
+            {
+                int[] order = index.MaterializeSortOrder((SortField)field, cancellationToken);
+                savedOrders[field] = order;
+                int alias = -1;
+                for (int previous = 0; previous < field; previous++)
+                    if (ReferenceEquals(order, savedOrders[previous])) { alias = previous; break; }
+                writer.Write(alias); writer.Write(index.KnownCount((SortField)field));
+                if (alias >= 0) continue;
+                for (int start = 0; start < order.Length; start += 65536)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    crypto.Write(MemoryMarshal.AsBytes(order.AsSpan(start, Math.Min(65536, order.Length - start))));
+                }
+            }
+            writer.Write(index.HasIdentity);
+            if (index.HasIdentity)
+            {
+                WriteReferences(crypto, index.FileReferences!, cancellationToken);
+                WriteReferences(crypto, index.DirectoryReferences!, cancellationToken);
+            }
+        }, cancellationToken);
+    }
+
+    internal static void SaveChecked(string path, Action<BinaryWriter, Stream> write, CancellationToken cancellationToken)
     {
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("快照要求小端平台。");
         path = Path.GetFullPath(path);
@@ -21,48 +70,14 @@ public static class SnapshotStore
                 using (var crypto = new CryptoStream(stream, hash, CryptoStreamMode.Write, leaveOpen: true))
                 using (var writer = new BinaryWriter(crypto, System.Text.Encoding.UTF8, leaveOpen: true))
                 {
-                    writer.Write(Magic);
-                    writer.Write(index.Count); writer.Write(index.Directories.Length);
-                    writer.Write(index.Names.Chunks.Count); writer.Write(index.Names.LastUsed);
-                    foreach (string directory in index.Directories)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        writer.Write(directory.Length);
-                        crypto.Write(MemoryMarshal.AsBytes(directory.AsSpan()));
-                    }
-                    foreach (char[] chunk in index.Names.Chunks)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        writer.Write(chunk.Length);
-                        crypto.Write(MemoryMarshal.AsBytes(chunk.AsSpan()));
-                    }
-                    for (int start = 0; start < index.Count; start += 16_384)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        crypto.Write(MemoryMarshal.AsBytes(index.Records.AsSpan(start, Math.Min(16_384, index.Count - start))));
-                    }
-                    for (int field = 0; field < 4; field++)
-                    {
-                        int[] order = index.SortOrder((SortField)field);
-                        int alias = -1;
-                        for (int previous = 0; previous < field; previous++)
-                            if (ReferenceEquals(order, index.SortOrder((SortField)previous))) { alias = previous; break; }
-                        writer.Write(alias); writer.Write(index.KnownCount((SortField)field));
-                        if (alias >= 0) continue;
-                        for (int start = 0; start < order.Length; start += 65536)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            crypto.Write(MemoryMarshal.AsBytes(order.AsSpan(start, Math.Min(65536, order.Length - start))));
-                        }
-                    }
+                    write(writer, crypto);
                     writer.Flush(); crypto.FlushFinalBlock();
                 }
                 stream.Write(hash.Hash!);
                 stream.Flush(flushToDisk: true);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            if (File.Exists(path)) File.Replace(temporary, path, path + ".bak");
-            else File.Move(temporary, path);
+            AtomicFile.Publish(temporary, path, path + ".bak", cancellationToken);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
@@ -71,26 +86,12 @@ public static class SnapshotStore
     {
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("快照要求小端平台。");
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
-        long payload = stream.Length - 32;
-        if (payload < 24) throw new InvalidDataException("快照不完整。");
-        using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
-        {
-            var buffer = new byte[1 << 20];
-            while (stream.Position < payload)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, payload - stream.Position));
-                if (read == 0) throw new InvalidDataException("快照提前结束。");
-                hash.AppendData(buffer, 0, read);
-            }
-            Span<byte> expected = stackalloc byte[32]; stream.ReadExactly(expected);
-            if (!CryptographicOperations.FixedTimeEquals(expected, hash.GetHashAndReset()))
-                throw new InvalidDataException("快照校验失败。可尝试加载上一代 .bak；原文件未修改。");
-        }
+        long payload = ValidatePayload(stream, cancellationToken);
         stream.Position = 0;
         using var reader = new BinaryReader(stream);
         var magic = reader.ReadBytes(8);
-        bool hasOrders = magic.AsSpan().SequenceEqual(Magic);
+        bool v3 = magic.AsSpan().SequenceEqual(Magic);
+        bool hasOrders = v3 || magic.AsSpan().SequenceEqual("NTSIDX02"u8);
         if (!hasOrders && !magic.AsSpan().SequenceEqual("NTSIDX01"u8)) throw new InvalidDataException("未知快照格式。");
         int count = ReadCount(reader, payload, 32), directoryCount = ReadCount(reader, payload, 4);
         int chunks = ReadCount(reader, payload, 4), lastUsed = ReadCount(reader, NameArena.ChunkChars, 1);
@@ -170,8 +171,17 @@ public static class SnapshotStore
                 }
             }
         }
+        ulong[]? references = null, parents = null;
+        if (v3 && reader.ReadBoolean())
+        {
+            references = ReadReferences(stream, count, payload, cancellationToken);
+            parents = ReadReferences(stream, directoryCount, payload, cancellationToken);
+            for (int i = 1; i < count; i++)
+                if (SearchIndex.CompareReference(references[i - 1], references[i]) > 0)
+                    throw new InvalidDataException("文件身份分组顺序无效。");
+        }
         if (stream.Position != payload) throw new InvalidDataException("快照包含多余数据。");
-        var index = new SearchIndex(arena, records, directories, cancellationToken, progress, orders, known);
+        var index = new SearchIndex(arena, records, directories, cancellationToken, progress, orders, known, references, parents);
         if (hasOrders)
         {
             for (int field = 0; field < 4; field++)
@@ -188,6 +198,59 @@ public static class SnapshotStore
         }
         if (hasOrders) progress?.Report("缓存排序校验完成。");
         return index;
+    }
+
+    // 迁移验证复用流式校验，不加载记录或排序数组。
+    public static void ValidateChecksum(string path, CancellationToken cancellationToken = default)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
+        ValidatePayload(stream, cancellationToken);
+        stream.Position = 0;
+        Span<byte> magic = stackalloc byte[8]; stream.ReadExactly(magic);
+        if (!magic.SequenceEqual(Magic) && !magic.SequenceEqual("NTSIDX02"u8) && !magic.SequenceEqual("NTSIDX01"u8))
+            throw new InvalidDataException("未知快照格式。");
+    }
+
+    internal static long ValidatePayload(FileStream stream, CancellationToken cancellationToken)
+    {
+        long payload = stream.Length - 32;
+        if (payload < 24) throw new InvalidDataException("快照不完整。");
+        using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        {
+            var buffer = new byte[1 << 20];
+            while (stream.Position < payload)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, payload - stream.Position));
+                if (read == 0) throw new InvalidDataException("快照提前结束。");
+                hash.AppendData(buffer, 0, read);
+            }
+            Span<byte> expected = stackalloc byte[32]; stream.ReadExactly(expected);
+            if (!CryptographicOperations.FixedTimeEquals(expected, hash.GetHashAndReset()))
+                throw new InvalidDataException("快照校验失败。可尝试加载上一代 .bak；原文件未修改。");
+        }
+        return payload;
+    }
+
+    private static void WriteReferences(Stream stream, ulong[] values, CancellationToken token)
+    {
+        for (int start = 0; start < values.Length; start += 65536)
+        {
+            token.ThrowIfCancellationRequested();
+            stream.Write(MemoryMarshal.AsBytes(values.AsSpan(start, Math.Min(65536, values.Length - start))));
+        }
+    }
+
+    private static ulong[] ReadReferences(Stream stream, int count, long payload, CancellationToken token)
+    {
+        if (count > (payload - stream.Position) / sizeof(ulong)) throw new InvalidDataException("身份数组越界。");
+        var result = new ulong[count];
+        for (int start = 0; start < count; start += 65536)
+        {
+            token.ThrowIfCancellationRequested();
+            stream.ReadExactly(MemoryMarshal.AsBytes(result.AsSpan(start, Math.Min(65536, count - start))));
+        }
+        return result;
     }
 
     private static int ReadCount(BinaryReader reader, long available, int unit)

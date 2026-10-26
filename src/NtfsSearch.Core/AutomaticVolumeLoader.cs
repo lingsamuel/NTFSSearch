@@ -4,6 +4,7 @@ public interface IAutomaticVolumeBackend
 {
     bool CollectorNeedsRestart => false;
     void RequestRebuild(NtfsVolume volume) { }
+    void OnPublished(NtfsVolume volume, string? generation) { }
     IReadOnlyList<NtfsVolume> Discover();
     string CacheRevision(NtfsVolume volume);
     Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token);
@@ -92,9 +93,11 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
                     try
                     {
                         if (await backend.LoadAsync(work.Volume, cancellation) is not { } loaded) return;
-                        catalog.Publish(VolumeCache.Key(work.Volume), loaded.Index);
+                        catalog.PublishLayers(VolumeCache.Key(work.Volume), loaded.Layers ?? [loaded.Index], loaded.Manifest?.SnapshotFile);
+                        backend.OnPublished(work.Volume, loaded.Manifest?.SnapshotFile);
                         string repairError = loaded.UsedBackup ? RequestRebuild(work.Volume) : "";
-                        UpdateStatus(work.Position, loaded.UsedBackup ? "缓存损坏，已自动回退上一代，等待重建" + repairError : $"已加载 {loaded.Index.Count:N0} 个对象", loaded: true);
+                        UpdateStatus(work.Position, loaded.UsedBackup ? "缓存损坏，已自动回退上一代，等待重建" + repairError
+                            : $"已加载 {(loaded.Layers ?? [loaded.Index]).Sum(i => (long)i.VisibleCount):N0} 个对象", loaded: true);
                     }
                     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
                     {

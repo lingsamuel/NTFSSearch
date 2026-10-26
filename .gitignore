@@ -5,3 +5,4 @@ artifacts/
 *.ntidx.bak
 *.tmp
 TestResults/
+**/Data/

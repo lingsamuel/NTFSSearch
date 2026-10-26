@@ -9,12 +9,108 @@ public sealed partial class SearchIndex
     internal readonly string[] Directories;
     private readonly int[][] orders = new int[4][];
     private readonly int[] knownCounts = new int[4];
+    private int[][]? corrections;
+    private int[]? correctionKnown;
+    private bool[]? correctionDirectories;
+    internal bool HasOrderCorrections => corrections is not null;
     public int Count => Records.Length;
+    public int VisibleCount { get; private set; }
+    public bool HasIdentity => FileReferences is not null && DirectoryReferences is not null;
+    internal readonly ulong[]? FileReferences;
+    internal readonly ulong[]? DirectoryReferences;
+    internal readonly ulong[]? HiddenRows;
+    internal readonly string StorageId;
+    private SearchIndex? identitySource;
+    internal SearchIndex IdentitySource => identitySource ?? this;
+    internal byte[]? CheckpointFingerprint;
+    internal bool IsVisible(int id) => HiddenRows is null || (HiddenRows[id / 64] & (1UL << (id % 64))) == 0;
+    internal static int CompareReference(ulong a, ulong b)
+    {
+        int c = (a & 0x0000FFFFFFFFFFFFUL).CompareTo(b & 0x0000FFFFFFFFFFFFUL);
+        return c != 0 ? c : a.CompareTo(b);
+    }
+    public IReadOnlyList<int> FindFileRows(ulong reference)
+    {
+        if (FileReferences is null) return Array.Empty<int>();
+        int lo = 0, hi = Count;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if (CompareReference(FileReferences[mid], reference) < 0) lo = mid + 1; else hi = mid;
+        }
+        int end = lo;
+        while (end < Count && FileReferences[end] == reference) end++;
+        return new RowRange(lo, end - lo);
+    }
+    internal IReadOnlyList<int> FindRecordRows(ulong reference)
+    {
+        if (FileReferences is null) return Array.Empty<int>();
+        ulong record = reference & 0x0000FFFFFFFFFFFFUL;
+        int lo = 0, hi = Count;
+        while (lo < hi)
+        {
+            int mid = lo + (hi - lo) / 2;
+            if ((FileReferences[mid] & 0x0000FFFFFFFFFFFFUL) < record) lo = mid + 1; else hi = mid;
+        }
+        int end = lo;
+        while (end < Count && (FileReferences[end] & 0x0000FFFFFFFFFFFFUL) == record) end++;
+        return new RowRange(lo, end - lo);
+    }
+    private sealed class RowRange(int start, int count) : IReadOnlyList<int>
+    {
+        public int Count => count;
+        public int this[int index] => index >= 0 && index < count ? start + index : throw new ArgumentOutOfRangeException(nameof(index));
+        public IEnumerator<int> GetEnumerator() { for (int i = 0; i < count; i++) yield return start + i; }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+    internal SearchIndex WithView(ulong[]? hidden, string[] directories, CancellationToken token, string? storageId = null)
+    {
+        var view = new SearchIndex(Names, Records, directories, token, storedOrders: orders, storedKnown: knownCounts,
+            fileReferences: FileReferences, directoryReferences: DirectoryReferences, hiddenRows: hidden, storageId: storageId ?? StorageId);
+        view.identitySource = IdentitySource;
+        if (!ReferenceEquals(directories, Directories))
+        {
+            // 以最初快照排序为参照累计修正，只保留受影响ID，查询时归并两个有序流。
+            // 小目录改名不需要复制四份全卷排序数组。
+            var source = IdentitySource;
+            var changed = new bool[directories.Length];
+            for (int d = 0; d < changed.Length; d++) changed[d] = directories[d] != source.Directories[d];
+            var affected = new List<int>();
+            for (int id = 0; id < Count; id++)
+            {
+                if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
+                if (changed[Records[id].Directory]) affected.Add(id);
+            }
+            if (affected.Count > 0)
+            {
+                view.corrections = new int[4][]; view.correctionKnown = new int[4]; view.correctionDirectories = changed;
+                for (int field = 0; field < 4; field++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    var sorted = affected.ToArray();
+                    SortIndex.Sort(sorted, (a, b) => view.Compare(a, b, (SortField)field), token);
+                    view.corrections[field] = sorted;
+                    int known = sorted.Length;
+                    while (known > 0 && !IsKnown(Records[sorted[known - 1]], (SortField)field)) known--;
+                    view.correctionKnown[field] = known;
+                }
+            }
+        }
+        else
+        {
+            view.corrections = corrections; view.correctionKnown = correctionKnown; view.correctionDirectories = correctionDirectories;
+        }
+        return view;
+    }
 
     internal SearchIndex(NameArena names, IndexRecord[] records, string[] directories,
-        CancellationToken cancellationToken, IProgress<string>? progress = null, int[][]? storedOrders = null, int[]? storedKnown = null)
+        CancellationToken cancellationToken, IProgress<string>? progress = null, int[][]? storedOrders = null, int[]? storedKnown = null,
+        ulong[]? fileReferences = null, ulong[]? directoryReferences = null, ulong[]? hiddenRows = null, string? storageId = null)
     {
         Names = names; Records = records; Directories = directories;
+        FileReferences = fileReferences; DirectoryReferences = directoryReferences; HiddenRows = hiddenRows;
+        StorageId = storageId ?? Guid.NewGuid().ToString("N");
+        VisibleCount = Count - (hiddenRows?.Sum(w => System.Numerics.BitOperations.PopCount(w)) ?? 0);
         if (storedOrders is not null && storedKnown is not null)
         {
             Array.Copy(storedOrders, orders, 4); Array.Copy(storedKnown, knownCounts, 4);
@@ -70,6 +166,36 @@ public sealed partial class SearchIndex
         Directories.Sum(p => (long)p.Length * sizeof(char) + 32));
 
     internal int[] SortOrder(SortField field) => orders[(int)field];
+    internal int[] MaterializeSortOrder(SortField field, CancellationToken token)
+        => corrections is null ? orders[(int)field] : EnumerateOrdered(field, false, token).ToArray();
+
+    private IEnumerable<int> EnumerateOrdered(SortField field, bool descending, CancellationToken token)
+    {
+        int f = (int)field;
+        if (corrections is null)
+        {
+            for (int position = 0; position < Count; position++)
+            {
+                if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
+                yield return OrderedId(field, descending, position);
+            }
+            yield break;
+        }
+        int old = 0, next = 0, length = corrections[f].Length;
+        for (int position = 0; position < Count; position++)
+        {
+            if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
+            while (old < Count && correctionDirectories![Records[OrderedId(field, descending, old)].Directory])
+            {
+                if ((old & 4095) == 0) token.ThrowIfCancellationRequested();
+                old++;
+            }
+            int corrected = next < length ? corrections[f][descending && next < correctionKnown![f] ? correctionKnown[f] - 1 - next : next] : -1;
+            if (next < length && (old == Count || CompareAcross(this, corrected, this, OrderedId(field, descending, old), field, descending) <= 0))
+            { next++; yield return corrected; }
+            else { yield return OrderedId(field, descending, old); old++; }
+        }
+    }
     internal int KnownCount(SortField field) => knownCounts[(int)field];
 
     internal static bool IsKnown(in IndexRecord r, SortField field) => field switch

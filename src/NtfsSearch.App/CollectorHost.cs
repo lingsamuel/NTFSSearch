@@ -8,9 +8,6 @@ using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-internal sealed record CollectorProgress(string Message, DateTime UpdatedUtc)
-{ public int ProcessorCount { get; init; } = Environment.ProcessorCount; }
-
 internal static class CollectorHost
 {
     public static bool IsRunning(string root)
@@ -51,6 +48,7 @@ internal static class CollectorHost
             var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
             var metrics = new CollectorMetricsWriter(root, session, policy); metrics.Initialize();
             var cache = new VolumeCache(root);
+            await using var watches = new VolumeWatchCoordinator(root, token);
             var estimates = new Dictionary<string, long>(StringComparer.Ordinal);
             var announced = new Dictionary<string, string>(StringComparer.Ordinal);
             await using var scheduler = new VolumeWorkScheduler(policy.ScanLimit, policy.MemoryBudget, async (work, cancellation) =>
@@ -72,6 +70,7 @@ internal static class CollectorHost
                     string request = Path.Combine(root, "refresh.request.json");
                     string refresh = File.Exists(request) ? AtomicJson.ReadText(request) : "initial";
                     var volumes = VolumeDiscovery.Discover();
+                    await watches.RemoveExceptAsync(volumes);
                     var work = new List<VolumeWork>();
                     foreach (var volume in volumes)
                     {
@@ -80,6 +79,21 @@ internal static class CollectorHost
                         {
                             string key = VolumeCache.Key(volume);
                             string repairPath = Path.Combine(root, key + ".rebuild.json");
+                            var manifest = cache.CurrentManifest(volume);
+                            bool refreshNeeded = manifest is null
+                                || File.Exists(request) && File.GetLastWriteTimeUtc(request) > manifest.IndexedUtc
+                                || File.Exists(repairPath) && File.GetLastWriteTimeUtc(repairPath) > manifest.IndexedUtc;
+                            if (manifest?.Journal is not null && !refreshNeeded)
+                            {
+                                await watches.EnsureAsync(volume, manifest);
+                                // 清单先于子进程退出提交。保留已发布任务直到正常收尾，
+                                // 避免调度器把成功发布误判为移除并取消进程。
+                                if (scheduler.ActiveRoots.Contains(volume.Root)
+                                    && announced.TryGetValue(key, out string? finishing)
+                                    && estimates.TryGetValue(key, out long reserved))
+                                    work.Add(new(volume, finishing, reserved));
+                                continue;
+                            }
                             string revision = refresh + "|" + (File.Exists(repairPath) ? AtomicJson.ReadText(repairPath) : "");
                             bool changed = !announced.TryGetValue(key, out string? previous) || previous != revision;
                             if (!estimates.TryGetValue(key, out long estimate) || changed)
@@ -119,7 +133,8 @@ internal static class CollectorHost
     {
         token.ThrowIfCancellationRequested();
         string state = Path.Combine(root, VolumeCache.Key(volume) + ".progress.json");
-        void Report(string message) => AtomicJson.Write(state, new CollectorProgress(message, DateTime.UtcNow));
+        void Report(string message, string? details = null) => AtomicJson.Write(state,
+            new CollectorProgress(message, DateTime.UtcNow) { Details = details });
         Report("准备读取 NTFS…");
         using var parent = Process.GetCurrentProcess();
         using var child = AppProcess.Start(["--scan-volume", root,
@@ -139,8 +154,8 @@ internal static class CollectorHost
             }
             if (child.ExitCode != 0 && child.ExitCode != 130)
             {
-                string detail = File.Exists(state) ? JsonSerializer.Deserialize<CollectorProgress>(AtomicJson.ReadText(state))?.Message ?? "" : "";
-                Report($"本卷采集失败：{detail}（退出码 {child.ExitCode}）；其他磁盘继续处理。");
+                var failure = File.Exists(state) ? JsonSerializer.Deserialize<CollectorProgress>(AtomicJson.ReadText(state)) : null;
+                Report($"本卷采集失败：{failure?.Message}（退出码 {child.ExitCode}）；其他磁盘继续处理。", failure?.Details);
             }
         }
         catch (OperationCanceledException)
@@ -177,16 +192,35 @@ internal static class CollectorHost
         try
         {
             long skipped = 0;
-            var index = await Task.Run(() => NtfsEnumerator.Scan(volume.Root[0], lifetime.Token, new InlineProgress(Report), count => skipped = count), lifetime.Token);
+            var scan = await Task.Run(() => NtfsEnumerator.ScanWithJournal(volume.Root[0], Path.Combine(root, "Capture"), lifetime.Token,
+                new InlineProgress(Report), count => skipped = count, excludeDirectory: root), lifetime.Token);
+            using var capture = scan.Capture;
+            var index = scan.Index;
             AtomicJson.Write(state, new CollectorProgress("保存本卷索引…", DateTime.UtcNow));
-            new VolumeCache(root).Publish(volume, index, lifetime.Token);
+            using var publication = new VolumeCache(root).BeginPublication(volume, index, scan.Position, lifetime.Token);
+            using var log = new ChangeLogStore(root, publication.Manifest.SnapshotFile, scan.Position, writable: true);
+            var resolver = VolumeJournalService.CreateResolver(root, volume.Root[0]);
+            JournalPosition safe = scan.Position;
+            void ApplyCaptured(JournalBatch batch)
+            {
+                var transaction = resolver.Resolve(batch, log.Checkpoint.Position, lifetime.Token);
+                safe = batch.To;
+                if (transaction.Files.Count > 0) VolumeJournalService.PersistResolved(log, transaction, resolver, volume.Root[0], lifetime.Token);
+            }
+            AtomicJson.Write(state, new CollectorProgress("回放扫描期间的变化…", DateTime.UtcNow));
+            while (capture.ReadCaptured() is { } batch) ApplyCaptured(batch);
+            capture.Stop();
+            while (capture.ReadCaptured() is { } batch) ApplyCaptured(batch);
+            if (safe != log.Checkpoint.Position) log.Append(new(log.Checkpoint.Position, safe, []), lifetime.Token);
+            NativeJournal.Query(volume.Root[0]).Validate(log.Checkpoint.Position);
+            publication.Commit(lifetime.Token);
             AtomicJson.Write(state, new CollectorProgress($"已读取 {index.Count:N0} 个对象" + (skipped > 0 ? $"；{skipped:N0} 条记录路径不可达，未纳入搜索" : ""), DateTime.UtcNow));
             return 0;
         }
         catch (OperationCanceledException) { return 130; }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            AtomicJson.Write(state, new CollectorProgress(error.Message, DateTime.UtcNow)); return 1;
+            AtomicJson.Write(state, new CollectorProgress(error.Message, DateTime.UtcNow) { Details = error.ToString() }); return 1;
         }
         finally { await lifetime.CancelAsync(); await monitor; }
     }

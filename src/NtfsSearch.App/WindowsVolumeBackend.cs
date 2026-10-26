@@ -9,9 +9,14 @@ namespace NtfsSearch.App;
 
 internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheDirectory = null) : IAutomaticVolumeBackend
 {
-    private readonly VolumeCache cache = new(cacheDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NtfsSearch", "Volumes"));
+    private readonly VolumeCache cache = new(cacheDirectory ?? PortableDataDirectory.Resolve());
+    private readonly LiveIndexFeed liveFeed = new(cacheDirectory ?? PortableDataDirectory.Resolve());
+    private readonly object migrationGate = new();
+    private Task<CacheMigrationResult>? migration;
+    public event Action<LiveIndexUpdate>? LiveUpdated;
     private CollectorMetrics? metrics;
     public CollectorMetrics? Metrics => Volatile.Read(ref metrics);
+    public int LiveVolumeCount => liveFeed.ActiveVolumeCount;
     private readonly string session = Guid.NewGuid().ToString("N");
     private Process? launchedCollector;
     private bool expectingCollector, suspended, permissionRefused;
@@ -21,8 +26,9 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheD
         && launchAttempts < 3 && DateTime.UtcNow >= nextLaunchUtc
         && (launchedCollector is null || launchedCollector.HasExited) && !CollectorHost.IsRunning(cache.DirectoryPath);
     public event Action<string>? Progress;
-    public void RequestRebuild(NtfsVolume volume) => AtomicJson.Write(Path.Combine(cache.DirectoryPath,
-        VolumeCache.Key(volume) + ".rebuild.json"), new { Id = Guid.NewGuid().ToString("N") });
+    public void RequestRebuild(NtfsVolume volume) => RequestRebuild(volume, "缓存缺失、校验失败或旧格式需要升级。");
+    private void RequestRebuild(NtfsVolume volume, string reason) => AtomicJson.Write(Path.Combine(cache.DirectoryPath,
+        VolumeCache.Key(volume) + ".rebuild.json"), new { Id = Guid.NewGuid().ToString("N"), Reason = reason, RequestedUtc = DateTime.UtcNow });
     public IReadOnlyList<NtfsVolume> Discover()
     {
         try
@@ -35,11 +41,51 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheD
                 Volatile.Write(ref metrics, current);
         }
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) { }
-        return VolumeDiscovery.Discover();
+        var volumes = VolumeDiscovery.Discover();
+        liveFeed.RemoveExcept(volumes);
+        return volumes;
     }
     public string CacheRevision(NtfsVolume volume) => cache.Revision(volume);
-    public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.Run(() =>
-        cache.Load(volume, token, new Progress<string>(message => Progress?.Invoke(volume.Root + " " + message))), token);
+    public async Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token)
+    {
+        if (cacheDirectory is null)
+        {
+            Task<CacheMigrationResult> pending;
+            lock (migrationGate)
+            {
+                if (migration is { IsFaulted: true } or { IsCanceled: true }) migration = null;
+                pending = migration ??= MigrateLegacyAsync(token);
+            }
+            await pending;
+        }
+        var loaded = await Task.Run(() => cache.Load(volume, token,
+            new Progress<string>(message => Progress?.Invoke(volume.Root + " " + message))), token);
+        if (loaded is null) return null;
+        return loaded with { Layers = await liveFeed.AttachAsync(volume, loaded, token) };
+    }
+
+    private async Task<CacheMigrationResult> MigrateLegacyAsync(CancellationToken token)
+    {
+        string marker = Path.Combine(cache.DirectoryPath, "migration.completed.json");
+        if (File.Exists(marker)) return new([], false, false);
+        var result = await CacheMigration.MigrateAsync(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NtfsSearch", "Volumes"), cache.DirectoryPath, token);
+        if (result.Volumes.All(v => v.Status != CacheMigrationStatus.Failed))
+            AtomicJson.Write(marker, new { CompletedUtc = DateTime.UtcNow, SourceRetained = true });
+        return result;
+    }
+
+    public Task RunLiveAsync(CancellationToken token)
+    {
+        liveFeed.Updated += update => LiveUpdated?.Invoke(update);
+        liveFeed.Failed += (volume, message) =>
+        {
+            Progress?.Invoke(volume.Root + " " + message);
+            try { RequestRebuild(volume, message); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        };
+        return liveFeed.RunAsync(token);
+    }
+
+    public void OnPublished(NtfsVolume volume, string? generation) => liveFeed.Activate(volume, generation);
 
     public async Task EnsureCollectorAsync(CancellationToken token)
     {

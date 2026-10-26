@@ -1,0 +1,38 @@
+[
+  {
+    "Path": "C:\\Program Files (x86)\\Microsoft Office\\Updates\\Download\\PackageFiles\\0AA2637C-6FFE-46AA-848E-1D7897D33DAD\\root\\Office16\\sdxs\\FA000000214\\OfflineFiles\\urlmap.ini",
+    "FileReference": "0026000000739711",
+    "EverythingCount": 1,
+    "Exists": true
+  },
+  {
+    "Path": "C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\sdxs\\FA000000214\\OfflineFiles\\urlmap.ini",
+    "FileReference": "0026000000739711",
+    "EverythingCount": 0,
+    "Exists": true
+  },
+  {
+    "Path": "C:\\Program Files (x86)\\Microsoft Office\\Updates\\Download\\PackageFiles\\0AA2637C-6FFE-46AA-848E-1D7897D33DAD\\root\\Office16\\sdxs\\FA000000214\\OfflineFiles\\taskpane_d5e8a042d9368b72a04ab01c358f2238.js",
+    "FileReference": "001B000000739710",
+    "EverythingCount": 1,
+    "Exists": true
+  },
+  {
+    "Path": "C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\sdxs\\FA000000214\\OfflineFiles\\taskpane_d5e8a042d9368b72a04ab01c358f2238.js",
+    "FileReference": "001B000000739710",
+    "EverythingCount": 0,
+    "Exists": true
+  },
+  {
+    "Path": "C:\\Program Files (x86)\\Microsoft Office\\Updates\\Download\\PackageFiles\\0AA2637C-6FFE-46AA-848E-1D7897D33DAD\\root\\Office16\\sdxs\\FA000000214\\OfflineFiles\\taskpane_afb70f3b854791c618ff6d941d35b02a.html",
+    "FileReference": "001600000073970F",
+    "EverythingCount": 1,
+    "Exists": true
+  },
+  {
+    "Path": "C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\sdxs\\FA000000214\\OfflineFiles\\taskpane_afb70f3b854791c618ff6d941d35b02a.html",
+    "FileReference": "001600000073970F",
+    "EverythingCount": 0,
+    "Exists": true
+  }
+]

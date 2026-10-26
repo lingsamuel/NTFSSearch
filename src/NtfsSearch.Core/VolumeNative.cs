@@ -13,5 +13,5 @@ internal static class VolumeNative
     private static extern SafeFileHandle CreateFileW(string path, uint access, uint share, nint security, uint creation, uint flags, nint template);
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DeviceIoControl(SafeFileHandle handle, uint code, byte[]? input, int inputSize, byte[] output, int outputSize, out int returned, nint overlapped);
+    private static extern bool DeviceIoControl(SafeFileHandle handle, uint code, byte[]? input, int inputSize, [Out] byte[] output, int outputSize, out int returned, nint overlapped);
 }

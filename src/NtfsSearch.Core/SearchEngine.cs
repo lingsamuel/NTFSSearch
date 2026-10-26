@@ -14,7 +14,7 @@ public sealed partial class SearchIndex
         var timer = Stopwatch.StartNew();
         using var query = Prepare(text, matchPath, cancellationToken);
         var rows = new List<SearchRow>(Math.Min(limit, Math.Min(Count, 1024)));
-        if (query.TotalCount == Count)
+        if (query.TotalCount == Count && !HasOrderCorrections)
         {
             int end = (int)Math.Min(Count, (long)offset + limit);
             for (int i = offset; i < end; i++)
@@ -42,7 +42,7 @@ public sealed partial class SearchIndex
         ValidateRequest(text, SortField.Name, 0, 0, cancellationToken);
         var terms = SearchQuery.Parse(text);
         if (terms.Length > 64) throw new ArgumentException("查询最多 64 个条件。", nameof(text));
-        if (terms.Length == 0) return new(this, null, Count);
+        if (terms.Length == 0) return new(this, null, VisibleCount);
         var states = new byte[terms.Length][];
         var suffixes = new string[terms.Length];
         for (int t = 0; t < terms.Length; t++)
@@ -76,6 +76,7 @@ public sealed partial class SearchIndex
                     ulong mask = 0;
                     for (int id = first; id < end; id++)
                     {
+                        if (!IsVisible(id)) continue;
                         ref readonly var record = ref Records[id];
                         bool matches = true;
                         for (int t = 0; t < terms.Length; t++)
@@ -125,12 +126,8 @@ public sealed partial class SearchIndex
             foreach (int id in ids) { token.ThrowIfCancellationRequested(); yield return id; }
             yield break;
         }
-        for (int position = 0; position < Count; position++)
-        {
-            if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
-            int id = OrderedId(sort, descending, position);
-            if (bits is null || (bits[id / 64] & (1UL << (id % 64))) != 0) yield return id;
-        }
+        foreach (int id in EnumerateOrdered(sort, descending, token))
+            if (IsVisible(id) && (bits is null || (bits[id / 64] & (1UL << (id % 64))) != 0)) yield return id;
     }
 
     internal static void ValidateRequest(string text, SortField sort, int offset, int limit, CancellationToken token)

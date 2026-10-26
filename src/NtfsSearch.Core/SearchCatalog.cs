@@ -5,24 +5,43 @@ namespace NtfsSearch.Core;
 public sealed class SearchCatalog
 {
     private readonly object gate = new();
-    private readonly Dictionary<string, SearchIndex> indexes = new(StringComparer.Ordinal);
-    private KeyValuePair<string, SearchIndex>[] published = [];
+    private readonly Dictionary<string, IReadOnlyList<SearchIndex>> indexes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string?> generations = new(StringComparer.Ordinal);
+    private KeyValuePair<string, IReadOnlyList<SearchIndex>>[] published = [];
     private long version;
-    public long Count => Volatile.Read(ref published).Sum(p => (long)p.Value.Count);
+    public long Count => Volatile.Read(ref published).Sum(p => p.Value.Sum(i => (long)i.VisibleCount));
     public int VolumeCount => Volatile.Read(ref published).Length;
     internal bool Contains(string key) => Volatile.Read(ref published).Any(p => p.Key == key);
     public long Version => Interlocked.Read(ref version);
     public event Action? Changed;
 
     public void Publish(string volumeId, SearchIndex index)
+        => PublishLayers(volumeId, [index]);
+
+    public void PublishLayers(string volumeId, IReadOnlyList<SearchIndex> layers, string? generation = null)
     {
+        ArgumentNullException.ThrowIfNull(layers);
+        var frozen = layers.ToArray();
         lock (gate)
         {
-            indexes[volumeId] = index;
+            indexes[volumeId] = frozen;
+            generations[volumeId] = generation;
             Volatile.Write(ref published, indexes.OrderBy(p => p.Key, StringComparer.Ordinal).ToArray());
             Interlocked.Increment(ref version);
         }
         Changed?.Invoke();
+    }
+
+    public bool PublishLiveLayers(string volumeId, string generation, IReadOnlyList<SearchIndex> layers)
+    {
+        lock (gate)
+        {
+            if (!generations.TryGetValue(volumeId, out string? current) || current != generation) return false;
+            indexes[volumeId] = layers.ToArray();
+            Volatile.Write(ref published, indexes.OrderBy(p => p.Key, StringComparer.Ordinal).ToArray());
+            Interlocked.Increment(ref version);
+        }
+        Changed?.Invoke(); return true;
     }
 
     public void RemoveExcept(IEnumerable<string> volumeIds)
@@ -31,7 +50,7 @@ public sealed class SearchCatalog
         bool changed = false;
         lock (gate)
         {
-            foreach (string key in indexes.Keys.Where(k => !keep.Contains(k)).ToArray()) changed |= indexes.Remove(key);
+            foreach (string key in indexes.Keys.Where(k => !keep.Contains(k)).ToArray()) { changed |= indexes.Remove(key); generations.Remove(key); }
             if (changed)
             {
                 Volatile.Write(ref published, indexes.OrderBy(p => p.Key, StringComparer.Ordinal).ToArray());
@@ -46,7 +65,7 @@ public sealed class SearchCatalog
     {
         SearchIndex.ValidateRequest(text, sort, offset, limit, cancellationToken);
         var timer = Stopwatch.StartNew();
-        var sources = Volatile.Read(ref published);
+        var sources = Volatile.Read(ref published).SelectMany(p => p.Value.Select(i => new KeyValuePair<string, SearchIndex>(p.Key, i))).ToArray();
         var cursors = new List<Cursor>();
         var queries = new List<PreparedSearch>();
         var queue = new PriorityQueue<Cursor, Priority>(Comparer<Priority>.Create((a, b) =>

@@ -42,8 +42,8 @@ public class VolumeSchedulerTests
         await using var scheduler = new VolumeWorkScheduler(3, 10, jobs.Execute);
         scheduler.Reconcile([Work(Disk("C", "0"), memory: 7), Work(Disk("D", "1"), memory: 7), Work(Disk("E", "2"), memory: 2)]); scheduler.Pump();
         await jobs.Started("C"); await jobs.Started("E"); Assert.False(jobs.HasStarted("D"));
-        jobs.Finish("C"); jobs.Finish("E"); await scheduler.WaitForActivityAsync(default); scheduler.Pump();
-        await jobs.Started("D"); jobs.Finish("D"); await scheduler.WaitUntilIdleAsync();
+        jobs.Finish("C"); await scheduler.WaitForActivityAsync(default); scheduler.Pump();
+        await jobs.Started("D"); jobs.Finish("E"); jobs.Finish("D"); await scheduler.WaitUntilIdleAsync();
         scheduler.Reconcile([Work(Disk("F", "3"), memory: 100)]); scheduler.Pump();
         await jobs.Started("F"); Assert.Equal(1, scheduler.ActiveCount); jobs.FinishAll();
     }

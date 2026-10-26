@@ -7,7 +7,27 @@ public delegate void UsnVisitor(ulong fileReference, ulong parentReference, Read
 
 public static class UsnParser
 {
-    public static void Visit(ReadOnlySpan<byte> buffer, UsnVisitor visitor)
+    public static IReadOnlyList<JournalRecord> ReadJournal(ReadOnlySpan<byte> buffer)
+    {
+        var records = new List<JournalRecord>();
+        VisitRecords(buffer, (record, name) => records.Add(new(
+            BinaryPrimitives.ReadUInt64LittleEndian(record[8..]),
+            BinaryPrimitives.ReadUInt64LittleEndian(record[16..]),
+            BinaryPrimitives.ReadInt64LittleEndian(record[24..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(record[40..]),
+            BinaryPrimitives.ReadUInt32LittleEndian(record[52..]), name.ToString())));
+        return records;
+    }
+
+    private delegate void RecordVisitor(ReadOnlySpan<byte> record, ReadOnlySpan<char> name);
+
+    public static void Visit(ReadOnlySpan<byte> buffer, UsnVisitor visitor) =>
+        VisitRecords(buffer, (record, name) => visitor(
+            BinaryPrimitives.ReadUInt64LittleEndian(record[8..]),
+            BinaryPrimitives.ReadUInt64LittleEndian(record[16..]), name,
+            BinaryPrimitives.ReadUInt32LittleEndian(record[52..])));
+
+    private static void VisitRecords(ReadOnlySpan<byte> buffer, RecordVisitor visitor)
     {
         if (buffer.Length < 8) throw new InvalidDataException("USN 缓冲区缺少游标。");
         int offset = 8;
@@ -23,10 +43,7 @@ public static class UsnParser
             int nameOffset = BinaryPrimitives.ReadUInt16LittleEndian(record[58..]);
             if ((bytes & 1) != 0 || (nameOffset & 1) != 0 || nameOffset < 60 || nameOffset > length || bytes > length - nameOffset)
                 throw new InvalidDataException("USN 名称字段越界。");
-            visitor(BinaryPrimitives.ReadUInt64LittleEndian(record[8..]),
-                BinaryPrimitives.ReadUInt64LittleEndian(record[16..]),
-                MemoryMarshal.Cast<byte, char>(record.Slice(nameOffset, bytes)),
-                BinaryPrimitives.ReadUInt32LittleEndian(record[52..]));
+            visitor(record[..(int)length], MemoryMarshal.Cast<byte, char>(record.Slice(nameOffset, bytes)));
             offset += (int)length;
         }
     }

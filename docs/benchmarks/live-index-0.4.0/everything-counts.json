@@ -1,0 +1,46 @@
+[
+  {
+    "Query": "",
+    "Count": 34402750
+  },
+  {
+    "Query": "C:\\",
+    "Count": 7683371
+  },
+  {
+    "Query": "D:\\",
+    "Count": 6106983
+  },
+  {
+    "Query": "E:\\",
+    "Count": 1614519
+  },
+  {
+    "Query": "F:\\",
+    "Count": 3426553
+  },
+  {
+    "Query": "G:\\",
+    "Count": 6528059
+  },
+  {
+    "Query": "H:\\",
+    "Count": 4712474
+  },
+  {
+    "Query": "I:\\",
+    "Count": 1497447
+  },
+  {
+    "Query": "J:\\",
+    "Count": 1796889
+  },
+  {
+    "Query": "K:\\",
+    "Count": 1036450
+  },
+  {
+    "Query": "\"H:\\Temp\\ntfs-live-full-4jrn80xg\\Data\"",
+    "Count": 207
+  }
+]

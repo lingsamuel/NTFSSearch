@@ -9,6 +9,12 @@ public partial class App : Application
     {
         base.OnStartup(e);
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        if (e.Args.Length == 2 && e.Args[0] == "--verify-live")
+        {
+            try { Shutdown(await NativeLiveVerification.RunAsync(e.Args[1])); }
+            catch (Exception error) { File.WriteAllText(e.Args[1], error.ToString()); Shutdown(1); }
+            return;
+        }
         if (e.Args.Length == 2 && e.Args[0] == "--probe-volumes")
         {
             try { Shutdown(await NativeProbe.RunAsync(e.Args[1])); }
@@ -28,7 +34,21 @@ public partial class App : Application
         }
         bool smoke = e.Args.Length == 2 && e.Args[0] == "--smoke-test";
         bool parallel = e.Args.Length == 2 && e.Args[0] == "--parallel-test";
-        var window = new MainWindow(smoke, parallel ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(e.Args[1]))!, "Cache") : null); MainWindow = window;
+        bool audit = e.Args.Length == 2 && e.Args[0] == "--full-audit";
+        MainWindow window;
+        try { window = new MainWindow(smoke, parallel || audit ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(e.Args[1]))!, "Data") : null); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show("无法在软件目录创建或访问 Data 数据目录。请把软件放在可写目录。\n" + error.Message, "NTFS Search");
+            Shutdown(1); return;
+        }
+        MainWindow = window;
+        if (audit)
+        {
+            try { NtfsSearch.Core.AtomicJson.Write(e.Args[1], await window.FullAuditAsync(Path.GetDirectoryName(Path.GetFullPath(e.Args[1]))!)); window.Close(); Shutdown(0); }
+            catch (Exception error) { File.WriteAllText(e.Args[1], error.ToString()); window.Close(); Shutdown(1); }
+            return;
+        }
         if (e.Args.Length == 2 && e.Args[0] is "--automatic-test" or "--parallel-test")
         {
             try { NtfsSearch.Core.AtomicJson.Write(e.Args[1], await window.AutomaticReadTestAsync(parallel)); window.Close(); Shutdown(0); }

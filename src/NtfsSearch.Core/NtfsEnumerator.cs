@@ -7,22 +7,39 @@ using Microsoft.Win32.SafeHandles;
 
 namespace NtfsSearch.Core;
 
+public sealed record NtfsScanResult(SearchIndex Index, JournalPosition Position, JournalCapture Capture);
+
 public static class NtfsEnumerator
 {
     public static SearchIndex Scan(char drive, CancellationToken cancellationToken = default,
-        IProgress<string>? progress = null, Action<long>? unreachableRecords = null)
+        IProgress<string>? progress = null, Action<long>? unreachableRecords = null, string? excludeDirectory = null)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("NTFS 枚举仅支持 Windows。");
         drive = char.ToUpperInvariant(drive);
         if (drive is < 'A' or > 'Z') throw new ArgumentException("请提供有效的盘符。", nameof(drive));
-        return ScanWindows(drive, cancellationToken, progress, unreachableRecords);
+        return ScanWindows(drive, cancellationToken, progress, unreachableRecords,
+            excludeDirectory is null ? null : NativeJournal.CanonicalPathForPath(excludeDirectory).TrimEnd('\\'));
+    }
+
+    public static NtfsScanResult ScanWithJournal(char drive, string workDirectory,
+        CancellationToken cancellationToken = default, IProgress<string>? progress = null,
+        Action<long>? unreachableRecords = null, string? excludeDirectory = null)
+    {
+        var capture = NativeJournal.Capture(drive, workDirectory, cancellationToken);
+        try
+        {
+            var index = Scan(drive, cancellationToken, progress, unreachableRecords, excludeDirectory);
+            // 捕获必须继续到调用者完成基线持久化与回放，不能在扫描结束时关闭。
+            return new(index, capture.Start, capture);
+        }
+        catch { capture.Dispose(); throw; }
     }
 
     [SupportedOSPlatform("windows")]
-    private static SearchIndex ScanWindows(char drive, CancellationToken token, IProgress<string>? progress, Action<long>? unreachableRecords)
+    private static SearchIndex ScanWindows(char drive, CancellationToken token, IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory)
     {
         using var handle = OpenVolume(drive);
-        return ScanOpenedVolume(drive, handle, token, progress, unreachableRecords);
+        return ScanOpenedVolume(drive, handle, token, progress, unreachableRecords, excludeDirectory);
     }
 
     [SupportedOSPlatform("windows")]
@@ -32,6 +49,7 @@ public static class NtfsEnumerator
         if (!GetVolumeInformationW($"{drive}:\\", null, 0, out _, out _, out _, fs, fs.Capacity))
             throw new Win32Exception(Marshal.GetLastWin32Error());
         if (!fs.ToString().Equals("NTFS", StringComparison.OrdinalIgnoreCase)) throw new NotSupportedException("只支持 NTFS 卷。");
+        NativePrivileges.EnsureBackupPrivilege();
         var handle = VolumeNative.Open(drive, 0x80000000);
         if (handle.IsInvalid)
         {
@@ -44,7 +62,7 @@ public static class NtfsEnumerator
     }
 
     [SupportedOSPlatform("windows")]
-    private static SearchIndex ScanOpenedVolume(char drive, SafeFileHandle handle, CancellationToken token, IProgress<string>? progress, Action<long>? unreachableRecords)
+    private static SearchIndex ScanOpenedVolume(char drive, SafeFileHandle handle, CancellationToken token, IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory)
     {
         var directories = new Dictionary<ulong, (ulong Parent, string Name)>();
         long recordCount = 0;
@@ -60,12 +78,31 @@ public static class NtfsEnumerator
         progress?.Report("建立名称索引（第 2 遍）…");
         var builder = new IndexBuilder((int)recordCount);
         long added = 0, skipped = 0;
+        progress?.Report("读取MFT元数据并补全硬链接…");
+        using var metadata = new MftMetadataReader(drive);
         Enumerate(handle, token, (frn, parent, name, attributes) =>
         {
             if (IsRoot(frn) || name.IsEmpty) return;
-            string? parentPath = resolver.Resolve(parent);
-            if (parentPath is null) { skipped++; return; }
-            builder.Add(parentPath, name, isDirectory: (attributes & 16) != 0);
+            var information = metadata.Read(frn);
+            bool directory = (attributes & 16) != 0;
+            if (!directory && information?.RequiresLinkEnumeration == true)
+            {
+                var state = NativeFileState.Read(handle, frn, id => metadata.ReadFileState(drive, id));
+                foreach (var link in state.Links)
+                {
+                    if (NativePathExclusion.Contains(excludeDirectory, link.ParentPath, link.Name)) continue;
+                    builder.Add(link.ParentPath, link.Name, state.Size, state.ModifiedUtcTicks, false,
+                        frn, link.ParentReference);
+                }
+            }
+            else
+            {
+                string? parentPath = resolver.Resolve(parent);
+                if (parentPath is null) { skipped++; return; }
+                if (NativePathExclusion.Contains(excludeDirectory, parentPath, name)) return;
+                builder.Add(parentPath, name, directory ? null : information?.Size,
+                information?.ModifiedUtcTicks, directory, frn, parent);
+            }
             if ((++added & 262143) == 0) progress?.Report($"已索引 {added:N0} 条记录…");
         });
         unreachableRecords?.Invoke(skipped);
@@ -78,53 +115,22 @@ public static class NtfsEnumerator
     [SupportedOSPlatform("windows")]
     private static string? DirectoryById(SafeFileHandle volume, ulong id, char drive)
     {
-        var descriptor = new FileIdDescriptor { Size = (uint)Marshal.SizeOf<FileIdDescriptor>(), FileId = id };
-        using var handle = OpenFileById(volume, ref descriptor, 0, 7, 0, 0x02000000);
-        if (handle.IsInvalid)
-        {
-            int error = Marshal.GetLastWin32Error();
-            if (error is 2 or 3 or 5 or 87 or 1168) return null;
-            throw new Win32Exception(error);
-        }
-        if (!GetFileInformationByHandle(handle, out var info)) throw new Win32Exception(Marshal.GetLastWin32Error());
-        if ((info.Attributes & 16) == 0) return null;
-        var path = new StringBuilder(512);
-        uint length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
-        if (length >= path.Capacity)
-        {
-            if (length > 32768) return null;
-            path = new((int)length + 1); length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
-        }
-        if (length >= path.Capacity) return null;
-        if (length == 0)
-        {
-            int error = Marshal.GetLastWin32Error();
-            if (error is 2 or 3 or 5) return null;
-            throw new Win32Exception(error);
-        }
-        string result = path.ToString();
-        if (result.StartsWith(@"\\?\", StringComparison.Ordinal)) result = result[4..];
-        if (!result.StartsWith($"{drive}:\\", StringComparison.OrdinalIgnoreCase)) return null;
-        return result.EndsWith('\\') ? result : result + '\\';
+        string? result = NativeFileState.DirectoryPath(volume, id);
+        return result is not null && result.StartsWith($"{drive}:\\", StringComparison.OrdinalIgnoreCase) ? result : null;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct FileIdDescriptor { public uint Size, Type; public ulong FileId, Reserved; }
-    [StructLayout(LayoutKind.Sequential)]
-    private struct HandleInformation
+    public static int ProbeMetadata(char drive, CancellationToken token = default)
     {
-        public uint Attributes;
-        public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
-        public uint Serial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("NTFS 探测仅支持 Windows。");
+        using var handle = OpenVolume(char.ToUpperInvariant(drive));
+        using var metadata = new MftMetadataReader(char.ToUpperInvariant(drive));
+        int matches = 0;
+        Enumerate(handle, token, (frn, _, _, _) =>
+        {
+            if (metadata.Read(frn) is not null) matches++;
+        }, batchLimit: 1);
+        return matches;
     }
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern SafeFileHandle OpenFileById(SafeFileHandle volume, ref FileIdDescriptor id, uint access, uint share, nint security, uint flags);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out HandleInformation info);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint capacity, uint flags);
 
     public static int Probe(char drive, CancellationToken token = default)
     {
@@ -151,7 +157,7 @@ public static class NtfsEnumerator
             {
                 int error = Marshal.GetLastWin32Error();
                 if (error == 38) return; // ERROR_HANDLE_EOF 是枚举正常结束。
-                throw new Win32Exception(error);
+                throw new Win32Exception(error, $"FSCTL_ENUM_USN_DATA失败，StartFRN=0x{previous:X16}：{new Win32Exception(error).Message}");
             }
             if (bytes < 8 || bytes > output.Length) throw new InvalidDataException("NTFS 返回无效的枚举缓冲区。");
             ulong next = BinaryPrimitives.ReadUInt64LittleEndian(output);

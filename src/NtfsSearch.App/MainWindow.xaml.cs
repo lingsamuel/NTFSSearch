@@ -30,6 +30,7 @@ public partial class MainWindow : Window
         {
             windowsBackend = new WindowsVolumeBackend(Dispatcher, cacheDirectory);
             windowsBackend.Progress += text => OnUi(() => { if (!closing) TaskStatus.Text = text; });
+            windowsBackend.LiveUpdated += update => catalog.PublishLiveLayers(update.VolumeKey, update.Generation, update.Layers);
             backend = windowsBackend;
         }
         var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
@@ -57,10 +58,13 @@ public partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         if (smokeTest) return;
-        try { await Task.Run(() => loader.RunAsync(lifetime.Token), lifetime.Token); }
+        try { await RunAutomaticAsync(lifetime.Token); }
         catch (OperationCanceledException) { }
         catch (Exception error) { if (!closing) TaskStatus.Text = error.Message; }
     }
+
+    private Task RunAutomaticAsync(CancellationToken token) => Task.WhenAll(
+        Task.Run(() => loader.RunAsync(token), token), windowsBackend is null ? Task.CompletedTask : Task.Run(() => windowsBackend.RunLiveAsync(token), token));
 
     private async Task SearchAsync()
     {
@@ -151,7 +155,7 @@ public partial class MainWindow : Window
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         deadline.CancelAfter(TimeSpan.FromMinutes(5));
-        Task running = Task.Run(() => loader.RunAsync(deadline.Token), deadline.Token);
+        Task running = RunAutomaticAsync(deadline.Token);
         try
         {
             while (catalog.Count == 0 || requireParallel && (windowsBackend?.Metrics?.PeakProcesses ?? 0) < 2)
@@ -175,6 +179,43 @@ public partial class MainWindow : Window
         {
             windowsBackend?.CancelCollection();
             await deadline.CancelAsync();
+            try { await running; } catch (OperationCanceledException) { }
+        }
+    }
+
+    internal async Task<object> FullAuditAsync(string diagnosticDirectory)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        deadline.CancelAfter(TimeSpan.FromMinutes(45));
+        Task running = RunAutomaticAsync(deadline.Token);
+        try
+        {
+            while (loader.Statuses.Count == 0 || windowsBackend!.LiveVolumeCount != loader.Statuses.Count)
+            {
+                if (running.IsCompleted) await running;
+                await Task.Delay(500, deadline.Token);
+            }
+            await Task.Delay(2500, deadline.Token);
+            var liveVerification = await AutomaticLiveVerification.RunAsync(catalog, diagnosticDirectory, deadline.Token);
+            var rows = new List<object>();
+            foreach (var status in loader.Statuses)
+            {
+                var result = await Task.Run(() => catalog.Search(status.Root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
+                rows.Add(new { status.Root, Count = result.TotalCount });
+            }
+            return new
+            {
+                Success = true,
+                Total = catalog.Count,
+                LiveVolumes = windowsBackend.LiveVolumeCount,
+                Volumes = rows,
+                ScansStarted = windowsBackend.Metrics?.ScansStarted,
+                LiveVerification = liveVerification
+            };
+        }
+        finally
+        {
+            windowsBackend?.CancelCollection(); await deadline.CancelAsync();
             try { await running; } catch (OperationCanceledException) { }
         }
     }
