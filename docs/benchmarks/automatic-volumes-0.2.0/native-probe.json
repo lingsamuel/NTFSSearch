@@ -1,0 +1,51 @@
+{
+  "Mode": "只读，每卷最多1个MFT批次，不写入磁盘索引",
+  "Elevated": true,
+  "Results": [
+    {
+      "Root": "C:\\",
+      "RecordsInFirstBatch": 9101,
+      "Error": null
+    },
+    {
+      "Root": "D:\\",
+      "RecordsInFirstBatch": 9701,
+      "Error": null
+    },
+    {
+      "Root": "E:\\",
+      "RecordsInFirstBatch": 11072,
+      "Error": null
+    },
+    {
+      "Root": "F:\\",
+      "RecordsInFirstBatch": 10133,
+      "Error": null
+    },
+    {
+      "Root": "G:\\",
+      "RecordsInFirstBatch": 6744,
+      "Error": null
+    },
+    {
+      "Root": "H:\\",
+      "RecordsInFirstBatch": 10954,
+      "Error": null
+    },
+    {
+      "Root": "I:\\",
+      "RecordsInFirstBatch": 8534,
+      "Error": null
+    },
+    {
+      "Root": "J:\\",
+      "RecordsInFirstBatch": 12206,
+      "Error": null
+    },
+    {
+      "Root": "K:\\",
+      "RecordsInFirstBatch": 10450,
+      "Error": null
+    }
+  ]
+}

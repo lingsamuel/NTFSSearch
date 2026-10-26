@@ -7,6 +7,8 @@ try
 {
     switch (args.FirstOrDefault())
     {
+        case "drives":
+            Console.WriteLine(JsonSerializer.Serialize(VolumeDiscovery.Discover())); break;
         case "demo" when args.Length == 2:
             SnapshotStore.Save(DemoData.Create(), args[1], cancellation.Token);
             Console.WriteLine("已保存 1000 条演示数据。"); break;
@@ -34,10 +36,10 @@ try
         case "bench":
             Benchmark.Run(args.Skip(1).ToArray(), cancellation.Token); break;
         default:
-            Console.WriteLine("NtfsSearch 0.1.0 技术原型\n\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>    Windows 管理员权限\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]\n\n空格分隔 AND 条件，双引号匹配连续文本；默认匹配完整路径。");
+            Console.WriteLine("NtfsSearch 0.2.0\n\n桌面程序自动发现并读取 NTFS 磁盘，无需输入索引。\n高级命令：\n  drives\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]");
             break;
     }
 }
 catch (OperationCanceledException) { Console.Error.WriteLine("已取消。"); Environment.ExitCode = 130; }
-catch (Exception e) when (e is IOException or ArgumentException or InvalidOperationException or UnauthorizedAccessException or NotSupportedException or System.ComponentModel.Win32Exception)
+catch (Exception e) when (e is IOException or InvalidDataException or ArgumentException or InvalidOperationException or UnauthorizedAccessException or NotSupportedException or System.ComponentModel.Win32Exception)
 { Console.Error.WriteLine(e.Message); Environment.ExitCode = 1; }

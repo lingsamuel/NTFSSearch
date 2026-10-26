@@ -5,7 +5,7 @@ namespace NtfsSearch.Core;
 
 public static class SnapshotStore
 {
-    private static readonly byte[] Magic = "NTSIDX01"u8.ToArray();
+    private static readonly byte[] Magic = "NTSIDX02"u8.ToArray();
 
     public static void Save(SearchIndex index, string path, CancellationToken cancellationToken = default)
     {
@@ -41,6 +41,20 @@ public static class SnapshotStore
                         cancellationToken.ThrowIfCancellationRequested();
                         crypto.Write(MemoryMarshal.AsBytes(index.Records.AsSpan(start, Math.Min(16_384, index.Count - start))));
                     }
+                    for (int field = 0; field < 4; field++)
+                    {
+                        int[] order = index.SortOrder((SortField)field);
+                        int alias = -1;
+                        for (int previous = 0; previous < field; previous++)
+                            if (ReferenceEquals(order, index.SortOrder((SortField)previous))) { alias = previous; break; }
+                        writer.Write(alias); writer.Write(index.KnownCount((SortField)field));
+                        if (alias >= 0) continue;
+                        for (int start = 0; start < order.Length; start += 65536)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            crypto.Write(MemoryMarshal.AsBytes(order.AsSpan(start, Math.Min(65536, order.Length - start))));
+                        }
+                    }
                     writer.Flush(); crypto.FlushFinalBlock();
                 }
                 stream.Write(hash.Hash!);
@@ -75,7 +89,9 @@ public static class SnapshotStore
         }
         stream.Position = 0;
         using var reader = new BinaryReader(stream);
-        if (!reader.ReadBytes(8).AsSpan().SequenceEqual(Magic)) throw new InvalidDataException("未知快照格式。");
+        var magic = reader.ReadBytes(8);
+        bool hasOrders = magic.AsSpan().SequenceEqual(Magic);
+        if (!hasOrders && !magic.AsSpan().SequenceEqual("NTSIDX01"u8)) throw new InvalidDataException("未知快照格式。");
         int count = ReadCount(reader, payload, 32), directoryCount = ReadCount(reader, payload, 4);
         int chunks = ReadCount(reader, payload, 4), lastUsed = ReadCount(reader, NameArena.ChunkChars, 1);
         var directories = new string[directoryCount];
@@ -104,7 +120,6 @@ public static class SnapshotStore
             cancellationToken.ThrowIfCancellationRequested();
             stream.ReadExactly(MemoryMarshal.AsBytes(records.AsSpan(start, Math.Min(16_384, count - start))));
         }
-        if (stream.Position != payload) throw new InvalidDataException("快照包含多余数据。");
         foreach (ref readonly var r in records.AsSpan())
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -113,7 +128,66 @@ public static class SnapshotStore
                 || offset + r.NameLength > arena.Chunks[(int)chunk].Length || (r.Flags & ~7) != 0 || r.NameLength == 0)
                 throw new InvalidDataException("快照记录引用越界。");
         }
-        return new(arena, records, directories, cancellationToken, progress);
+        int[][]? orders = null;
+        int[]? known = null;
+        if (hasOrders)
+        {
+            orders = new int[4][]; known = new int[4];
+            var seen = new byte[(int)(((long)count + 7) / 8)];
+            for (int field = 0; field < 4; field++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int alias = reader.ReadInt32(), knownCount = reader.ReadInt32();
+                if (alias < -1 || alias >= field || knownCount < 0 || knownCount > count
+                    || field < 2 && knownCount != count) throw new InvalidDataException("排序缓存头无效。");
+                known[field] = knownCount;
+                if (alias >= 0) orders[field] = orders[alias];
+                else
+                {
+                    if (count > (payload - stream.Position) / sizeof(int)) throw new InvalidDataException("排序缓存越界。");
+                    var order = new int[count];
+                    for (int start = 0; start < count; start += 65536)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        stream.ReadExactly(MemoryMarshal.AsBytes(order.AsSpan(start, Math.Min(65536, count - start))));
+                    }
+                    Array.Clear(seen);
+                    int checkedIds = 0;
+                    foreach (int id in order)
+                    {
+                        if ((checkedIds++ & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                        if (id < 0 || id >= count || (seen[id / 8] & (1 << (id % 8))) != 0)
+                            throw new InvalidDataException("排序缓存包含重复或越界 ID。");
+                        seen[id / 8] |= (byte)(1 << (id % 8));
+                    }
+                    orders[field] = order;
+                }
+                for (int i = 0; i < count; i++)
+                {
+                    if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    if (SearchIndex.IsKnown(records[orders[field][i]], (SortField)field) != (i < knownCount))
+                        throw new InvalidDataException("排序缓存的已知元数据边界不符。");
+                }
+            }
+        }
+        if (stream.Position != payload) throw new InvalidDataException("快照包含多余数据。");
+        var index = new SearchIndex(arena, records, directories, cancellationToken, progress, orders, known);
+        if (hasOrders)
+        {
+            for (int field = 0; field < 4; field++)
+            {
+                // 原生基本索引的未知大小/时间与路径排序等价，不重复验证同一排列。
+                if (field >= 2 && known![field] == 0 && ReferenceEquals(orders![field], orders[1])) continue;
+                for (int i = 1; i < count; i++)
+                {
+                    if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    if (index.Compare(orders![field][i - 1], orders[field][i], (SortField)field) > 0)
+                        throw new InvalidDataException("缓存排序顺序无效，将自动回退或重建。");
+                }
+            }
+        }
+        if (hasOrders) progress?.Report("缓存排序校验完成。");
+        return index;
     }
 
     private static int ReadCount(BinaryReader reader, long available, int unit)

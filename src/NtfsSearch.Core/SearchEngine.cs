@@ -10,17 +10,11 @@ public sealed partial class SearchIndex
     public SearchResult Search(string text, SortField sort = SortField.Name, bool descending = false,
         bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(text);
-        ArgumentOutOfRangeException.ThrowIfNegative(offset);
-        ArgumentOutOfRangeException.ThrowIfNegative(limit);
-        if (!Enum.IsDefined(sort)) throw new ArgumentOutOfRangeException(nameof(sort));
-        if (text.Length > 4096) throw new ArgumentException("查询最多 4096 个字符。", nameof(text));
-        cancellationToken.ThrowIfCancellationRequested();
+        ValidateRequest(text, sort, offset, limit, cancellationToken);
         var timer = Stopwatch.StartNew();
-        var terms = SearchQuery.Parse(text);
-        if (terms.Length > 64) throw new ArgumentException("查询最多 64 个条件。", nameof(text));
+        using var query = Prepare(text, matchPath, cancellationToken);
         var rows = new List<SearchRow>(Math.Min(limit, Math.Min(Count, 1024)));
-        if (terms.Length == 0)
+        if (query.TotalCount == Count)
         {
             int end = (int)Math.Min(Count, (long)offset + limit);
             for (int i = offset; i < end; i++)
@@ -30,7 +24,25 @@ public sealed partial class SearchIndex
             }
             return new(Count, rows, timer.Elapsed);
         }
+        if (limit > 0 && offset < query.TotalCount)
+        {
+            long skipped = 0;
+            foreach (int id in query.Ids(sort, descending, cancellationToken))
+            {
+                if (skipped++ < offset) continue;
+                rows.Add(GetRow(id));
+                if (rows.Count == limit) break;
+            }
+        }
+        return new(query.TotalCount, rows, timer.Elapsed);
+    }
 
+    internal PreparedSearch Prepare(string text, bool matchPath, CancellationToken cancellationToken)
+    {
+        ValidateRequest(text, SortField.Name, 0, 0, cancellationToken);
+        var terms = SearchQuery.Parse(text);
+        if (terms.Length > 64) throw new ArgumentException("查询最多 64 个条件。", nameof(text));
+        if (terms.Length == 0) return new(this, null, Count);
         var states = new byte[terms.Length][];
         var suffixes = new string[terms.Length];
         for (int t = 0; t < terms.Length; t++)
@@ -87,42 +99,47 @@ public sealed partial class SearchIndex
                 new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = Math.Min(Environment.ProcessorCount, 16) },
                 range => Scan(range.Item1, range.Item2));
 
-            if (total > 0 && limit > 0 && offset < total)
+            cancellationToken.ThrowIfCancellationRequested();
+            return new(this, bits, total);
+        }
+        catch { ArrayPool<ulong>.Shared.Return(bits); throw; }
+    }
+
+    internal IEnumerable<int> EnumerateMatches(ulong[]? bits, long total, SortField sort, bool descending, CancellationToken token)
+    {
+        if (bits is not null && total <= 16_384)
+        {
+            var ids = new int[(int)total];
+            int next = 0, words = (int)(((long)Count + 63) / 64);
+            for (int w = 0; w < words; w++)
             {
-                if (total <= 16_384)
+                if ((w & 4095) == 0) token.ThrowIfCancellationRequested();
+                ulong mask = bits[w];
+                while (mask != 0)
                 {
-                    var ids = new int[(int)total];
-                    int next = 0;
-                    for (int w = 0; w < words; w++)
-                    {
-                        if ((w & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                        ulong mask = bits[w];
-                        while (mask != 0)
-                        {
-                            ids[next++] = w * 64 + BitOperations.TrailingZeroCount(mask);
-                            mask &= mask - 1;
-                        }
-                    }
-                    Array.Sort(ids, (a, b) => descending && IsKnown(Records[a], sort) && IsKnown(Records[b], sort)
-                        ? Compare(b, a, sort) : Compare(a, b, sort));
-                    int end = (int)Math.Min(total, (long)offset + limit);
-                    for (int i = offset; i < end; i++) rows.Add(GetRow(ids[i]));
-                }
-                else
-                {
-                    long skipped = 0;
-                    for (int position = 0; position < Count && rows.Count < limit; position++)
-                    {
-                        if ((position & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                        int id = OrderedId(sort, descending, position);
-                        if ((bits[id / 64] & (1UL << (id % 64))) == 0) continue;
-                        if (skipped++ >= offset) rows.Add(GetRow(id));
-                    }
+                    ids[next++] = w * 64 + BitOperations.TrailingZeroCount(mask);
+                    mask &= mask - 1;
                 }
             }
-            cancellationToken.ThrowIfCancellationRequested();
-            return new(total, rows, timer.Elapsed);
+            Array.Sort(ids, (a, b) => CompareAcross(this, a, this, b, sort, descending));
+            foreach (int id in ids) { token.ThrowIfCancellationRequested(); yield return id; }
+            yield break;
         }
-        finally { ArrayPool<ulong>.Shared.Return(bits); }
+        for (int position = 0; position < Count; position++)
+        {
+            if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
+            int id = OrderedId(sort, descending, position);
+            if (bits is null || (bits[id / 64] & (1UL << (id % 64))) != 0) yield return id;
+        }
+    }
+
+    internal static void ValidateRequest(string text, SortField sort, int offset, int limit, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(limit);
+        if (!Enum.IsDefined(sort)) throw new ArgumentOutOfRangeException(nameof(sort));
+        if (text.Length > 4096) throw new ArgumentException("查询最多 4096 个字符。", nameof(text));
+        token.ThrowIfCancellationRequested();
     }
 }

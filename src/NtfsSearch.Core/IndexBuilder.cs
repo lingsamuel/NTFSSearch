@@ -45,6 +45,7 @@ public sealed class IndexBuilder
 
     public SearchIndex Build(CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (built) throw new InvalidOperationException("索引已冻结。");
         built = true;
         names.Seal();

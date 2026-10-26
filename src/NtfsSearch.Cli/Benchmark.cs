@@ -68,7 +68,7 @@ internal static class Benchmark
         process.Refresh();
         var report = new
         {
-            Version = "0.1.0",
+            Version = typeof(SearchIndex).Assembly.GetName().Version?.ToString(3),
             Environment.OSVersion,
             Environment.ProcessorCount,
             Runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,

@@ -1,0 +1,18 @@
+{
+  "DiscoveredRoots": [
+    "C:\\",
+    "D:\\",
+    "E:\\",
+    "F:\\",
+    "G:\\",
+    "H:\\",
+    "I:\\",
+    "J:\\",
+    "K:\\"
+  ],
+  "IndexedVolumes": 1,
+  "IndexedObjects": 7527764,
+  "SearchHasResults": true,
+  "FirstIndexedRoot": "C:\\",
+  "Mode": "正常自动发现、提权采集、缓存发布与自动加载路径；无手工索引、无主窗口、首卷就绪后停止测试。"
+}
