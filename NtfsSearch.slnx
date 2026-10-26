@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NtfsSearch.App/NtfsSearch.App.csproj" />
+    <Project Path="src/NtfsSearch.Cli/NtfsSearch.Cli.csproj" />
+    <Project Path="src/NtfsSearch.Core/NtfsSearch.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NtfsSearch.Tests/NtfsSearch.Tests.csproj" />
+  </Folder>
+</Solution>

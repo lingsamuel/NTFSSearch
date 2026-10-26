@@ -1,0 +1,320 @@
+{
+  "Version": "0.1.0",
+  "OSVersion": {
+    "Platform": 2,
+    "ServicePack": "",
+    "Version": "10.0.26200.0",
+    "VersionString": "Microsoft Windows NT 10.0.26200.0"
+  },
+  "ProcessorCount": 32,
+  "Runtime": ".NET 10.0.12",
+  "Count": 1000000,
+  "Workload": "unique-shuffled",
+  "Repetitions": 5,
+  "GenerationSeconds": 0.0726756,
+  "BuildSeconds": 1.3955028,
+  "PrivateBytesBeforeQueries": 99262464,
+  "WorkingSetBeforeQueries": 116367360,
+  "PrivateBytesAfterQueries": 105218048,
+  "WorkingSetAfterQueries": 124174336,
+  "Statistics": {
+    "Entries": 1000000,
+    "Directories": 1000,
+    "NameBytes": 34024240,
+    "RecordBytes": 32000000,
+    "SortBytes": 16000000,
+    "EstimatedDirectoryBytes": 74000,
+    "EstimatedPayloadBytes": 82098240
+  },
+  "Results": [
+    {
+      "Query": "",
+      "Sort": "Name",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        0.0152,
+        0.0055,
+        0.0057,
+        0.0111,
+        0.012
+      ]
+    },
+    {
+      "Query": "",
+      "Sort": "Path",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        0.0141,
+        0.012,
+        0.0114,
+        0.013,
+        0.0125
+      ]
+    },
+    {
+      "Query": "",
+      "Sort": "Size",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        0.0125,
+        0.0113,
+        0.0125,
+        0.0114,
+        0.0107
+      ]
+    },
+    {
+      "Query": "",
+      "Sort": "Modified",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        0.012,
+        0.0125,
+        0.0128,
+        0.0115,
+        0.0127
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Name",
+      "ExpectedCount": 125000,
+      "SamplesMs": [
+        1.5653,
+        1.2301,
+        1.0322,
+        0.9043,
+        0.767
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Path",
+      "ExpectedCount": 125000,
+      "SamplesMs": [
+        0.8746,
+        0.7804,
+        7.0587,
+        0.6675,
+        0.7062
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Size",
+      "ExpectedCount": 125000,
+      "SamplesMs": [
+        0.6896,
+        0.671,
+        0.8677,
+        0.7394,
+        0.8948
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Modified",
+      "ExpectedCount": 125000,
+      "SamplesMs": [
+        0.9408,
+        0.9767,
+        0.9865,
+        0.8482,
+        0.7442
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Name",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        1.0348,
+        1.1882,
+        1.0317,
+        1.0253,
+        0.9499
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Path",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        1.0597,
+        0.8697,
+        0.9495,
+        0.9717,
+        1.0821
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Size",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        1.0425,
+        0.8956,
+        0.965,
+        0.9651,
+        1.0445
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Modified",
+      "ExpectedCount": 1000000,
+      "SamplesMs": [
+        1.0371,
+        1.0597,
+        1.0099,
+        0.8516,
+        0.8691
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Name",
+      "ExpectedCount": 1004,
+      "SamplesMs": [
+        1.0548,
+        1.0119,
+        1.2447,
+        1.1796,
+        1.1125
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Path",
+      "ExpectedCount": 1004,
+      "SamplesMs": [
+        1.1135,
+        0.9785,
+        1.0376,
+        1.3008,
+        1.0225
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Size",
+      "ExpectedCount": 1004,
+      "SamplesMs": [
+        0.8257,
+        0.9131,
+        0.8949,
+        1.0441,
+        1.0353
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Modified",
+      "ExpectedCount": 1004,
+      "SamplesMs": [
+        1.0744,
+        0.9072,
+        0.8795,
+        0.8505,
+        0.8907
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Name",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        0.4666,
+        0.4369,
+        0.4663,
+        0.4773,
+        0.5547
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Path",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        0.6441,
+        0.5895,
+        0.5449,
+        0.55,
+        0.5489
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Size",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        0.4567,
+        0.406,
+        0.321,
+        0.3385,
+        0.3286
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Modified",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        0.3454,
+        0.3524,
+        0.4131,
+        0.4125,
+        0.3841
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Name",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        0.4959,
+        0.4904,
+        0.4962,
+        0.5289,
+        0.587
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Path",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        0.4863,
+        0.4785,
+        0.4896,
+        0.4059,
+        0.4551
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Size",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        0.5313,
+        0.45,
+        0.4659,
+        0.4632,
+        0.4305
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Modified",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        0.5846,
+        0.4842,
+        0.417,
+        0.4094,
+        0.4064
+      ]
+    }
+  ],
+  "Limitations": "\u5408\u6210\u540D\u79F0\u4E0E\u8DEF\u5F84\uFF1B\u672A\u63A5\u5165\u5B9E\u65F6\u66F4\u65B0\uFF1B\u672A\u5305\u542B\u751F\u4EA7 FRN \u6620\u5C04\uFF1B\u4E0D\u662F\u4E0E Everything \u7684\u771F\u5B9E\u6570\u636E\u5BF9\u6807\u3002\u65F6\u95F4\u5305\u542B\u7CBE\u786E\u8BA1\u6570\u3001\u5168\u5C40\u6392\u5E8F\u9996\u5C4F\uFF0C\u4E0D\u542B\u754C\u9762\u7ED8\u5236\u3002"
+}

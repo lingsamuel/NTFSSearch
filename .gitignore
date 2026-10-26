@@ -1,0 +1,7 @@
+**/bin/
+**/obj/
+artifacts/
+*.ntidx
+*.ntidx.bak
+*.tmp
+TestResults/

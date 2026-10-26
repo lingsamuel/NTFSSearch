@@ -1,0 +1,272 @@
+{
+  "Version": "0.1.0",
+  "OSVersion": {
+    "Platform": 2,
+    "ServicePack": "",
+    "Version": "10.0.26200.0",
+    "VersionString": "Microsoft Windows NT 10.0.26200.0"
+  },
+  "ProcessorCount": 32,
+  "Runtime": ".NET 10.0.12",
+  "Count": 100000000,
+  "Workload": "unique-ordered",
+  "Repetitions": 3,
+  "GenerationSeconds": 4.8746636,
+  "BuildSeconds": 12.2203114,
+  "PrivateBytesBeforeQueries": 8334348288,
+  "WorkingSetBeforeQueries": 8247930880,
+  "PrivateBytesAfterQueries": 8364417024,
+  "WorkingSetAfterQueries": 8280301568,
+  "Statistics": {
+    "Entries": 100000000,
+    "Directories": 100000,
+    "NameBytes": 3402423844,
+    "RecordBytes": 3200000000,
+    "SortBytes": 1600000000,
+    "EstimatedDirectoryBytes": 7400000,
+    "EstimatedPayloadBytes": 8209823844
+  },
+  "Results": [
+    {
+      "Query": "",
+      "Sort": "Name",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        0.0326,
+        0.0091,
+        0.0089
+      ]
+    },
+    {
+      "Query": "",
+      "Sort": "Path",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        0.009,
+        0.0082,
+        0.0114
+      ]
+    },
+    {
+      "Query": "",
+      "Sort": "Size",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        0.0115,
+        0.0082,
+        0.0082
+      ]
+    },
+    {
+      "Query": "",
+      "Sort": "Modified",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        0.0095,
+        0.0078,
+        0.0137
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Name",
+      "ExpectedCount": 12500000,
+      "SamplesMs": [
+        129.7185,
+        136.9695,
+        136.1234
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Path",
+      "ExpectedCount": 12500000,
+      "SamplesMs": [
+        143.5298,
+        140.1867,
+        137.9819
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Size",
+      "ExpectedCount": 12500000,
+      "SamplesMs": [
+        135.4222,
+        133.0825,
+        131.8501
+      ]
+    },
+    {
+      "Query": ".dll",
+      "Sort": "Modified",
+      "ExpectedCount": 12500000,
+      "SamplesMs": [
+        138.7275,
+        147.8364,
+        140.9602
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Name",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        149.8685,
+        144.6652,
+        147.6505
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Path",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        148.8454,
+        143.85,
+        134.8637
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Size",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        132.0084,
+        125.9031,
+        133.4045
+      ]
+    },
+    {
+      "Query": "file",
+      "Sort": "Modified",
+      "ExpectedCount": 100000000,
+      "SamplesMs": [
+        135.6838,
+        132.7427,
+        135.5575
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Name",
+      "ExpectedCount": 100301,
+      "SamplesMs": [
+        137.9389,
+        149.0787,
+        136.6206
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Path",
+      "ExpectedCount": 100301,
+      "SamplesMs": [
+        137.7845,
+        131.6858,
+        136.0069
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Size",
+      "ExpectedCount": 100301,
+      "SamplesMs": [
+        130.2881,
+        130.9321,
+        132.8442
+      ]
+    },
+    {
+      "Query": "\u0022hello world\u0022",
+      "Sort": "Modified",
+      "ExpectedCount": 100301,
+      "SamplesMs": [
+        139.2601,
+        140.1708,
+        130.7124
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Name",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        66.4146,
+        69.5434,
+        68.1167
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Path",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        66.6214,
+        69.5518,
+        70.0939
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Size",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        70.7948,
+        70.521,
+        71.0404
+      ]
+    },
+    {
+      "Query": "group000000\\",
+      "Sort": "Modified",
+      "ExpectedCount": 1000,
+      "SamplesMs": [
+        72.3295,
+        71.7338,
+        72.4904
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Name",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        69.1841,
+        73.5497,
+        75.1993
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Path",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        73.543,
+        69.7727,
+        70.5212
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Size",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        68.6348,
+        71.2263,
+        68.7585
+      ]
+    },
+    {
+      "Query": "codex-no-such-name-7c2e9b",
+      "Sort": "Modified",
+      "ExpectedCount": 0,
+      "SamplesMs": [
+        66.1606,
+        65.3591,
+        63.2949
+      ]
+    }
+  ],
+  "Limitations": "\u5408\u6210\u540D\u79F0\u4E0E\u8DEF\u5F84\uFF1B\u672A\u63A5\u5165\u5B9E\u65F6\u66F4\u65B0\uFF1B\u672A\u5305\u542B\u751F\u4EA7 FRN \u6620\u5C04\uFF1B\u4E0D\u662F\u4E0E Everything \u7684\u771F\u5B9E\u6570\u636E\u5BF9\u6807\u3002\u65F6\u95F4\u5305\u542B\u7CBE\u786E\u8BA1\u6570\u3001\u5168\u5C40\u6392\u5E8F\u9996\u5C4F\uFF0C\u4E0D\u542B\u754C\u9762\u7ED8\u5236\u3002"
+}
