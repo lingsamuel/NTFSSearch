@@ -27,10 +27,11 @@ public partial class App : Application
             return;
         }
         bool smoke = e.Args.Length == 2 && e.Args[0] == "--smoke-test";
-        var window = new MainWindow(smoke); MainWindow = window;
-        if (e.Args.Length == 2 && e.Args[0] == "--automatic-test")
+        bool parallel = e.Args.Length == 2 && e.Args[0] == "--parallel-test";
+        var window = new MainWindow(smoke, parallel ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(e.Args[1]))!, "Cache") : null); MainWindow = window;
+        if (e.Args.Length == 2 && e.Args[0] is "--automatic-test" or "--parallel-test")
         {
-            try { NtfsSearch.Core.AtomicJson.Write(e.Args[1], await window.AutomaticReadTestAsync()); window.Close(); Shutdown(0); }
+            try { NtfsSearch.Core.AtomicJson.Write(e.Args[1], await window.AutomaticReadTestAsync(parallel)); window.Close(); Shutdown(0); }
             catch (Exception error) { File.WriteAllText(e.Args[1], error.ToString()); window.Close(); Shutdown(1); }
             return;
         }

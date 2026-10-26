@@ -20,7 +20,7 @@ public partial class MainWindow : Window
     private bool ready, closing;
     private const int PageSize = 200;
 
-    public MainWindow(bool smokeTest = false)
+    public MainWindow(bool smokeTest = false, string? cacheDirectory = null)
     {
         InitializeComponent();
         this.smokeTest = smokeTest;
@@ -28,17 +28,20 @@ public partial class MainWindow : Window
         if (smokeTest) backend = new SmokeBackend();
         else
         {
-            windowsBackend = new WindowsVolumeBackend(Dispatcher);
+            windowsBackend = new WindowsVolumeBackend(Dispatcher, cacheDirectory);
             windowsBackend.Progress += text => OnUi(() => { if (!closing) TaskStatus.Text = text; });
             backend = windowsBackend;
         }
-        loader = new(backend, catalog);
+        var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
+        loader = new(backend, catalog, policy.CacheLoadLimit);
         catalog.Changed += () => OnUi(() => { if (!closing) { offset = 0; _ = SearchAsync(); } });
         loader.StatusChanged += () => OnUi(() =>
         {
             if (closing) return;
             DriveStatus.Text = string.Join("\n", loader.Statuses.Select(s => s.Root + "  " + s.Message));
-            TaskStatus.Text = $"已发现 {loader.Statuses.Count} 个 NTFS 卷；已读取 {catalog.Count:N0} 个对象。";
+            var metrics = windowsBackend?.Metrics;
+            TaskStatus.Text = $"已发现 {loader.Statuses.Count} 个 NTFS 卷；已读取 {catalog.Count:N0} 个对象。"
+                + (metrics is null ? "" : $" 后台并行 {metrics.ActiveRoots.Length}/{metrics.ScanLimit} 个卷。");
         });
         ready = true;
         TaskStatus.Text = "正在发现本机 NTFS 磁盘。已完成的磁盘会自动加入搜索。";
@@ -144,14 +147,14 @@ public partial class MainWindow : Window
         Measure(new Size(1120, 760)); Arrange(new Rect(0, 0, 1120, 760));
     }
 
-    internal async Task<object> AutomaticReadTestAsync()
+    internal async Task<object> AutomaticReadTestAsync(bool requireParallel = false)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         deadline.CancelAfter(TimeSpan.FromMinutes(5));
         Task running = Task.Run(() => loader.RunAsync(deadline.Token), deadline.Token);
         try
         {
-            while (catalog.Count == 0)
+            while (catalog.Count == 0 || requireParallel && (windowsBackend?.Metrics?.PeakProcesses ?? 0) < 2)
             {
                 if (running.IsCompleted) await running;
                 await Task.Delay(200, deadline.Token);
@@ -164,6 +167,7 @@ public partial class MainWindow : Window
                 IndexedObjects = result.TotalCount,
                 SearchHasResults = result.Rows.Count > 0,
                 FirstIndexedRoot = result.Rows.FirstOrDefault()?.FullPath[..3],
+                Parallel = windowsBackend?.Metrics,
                 Mode = "正常自动发现、提权采集、缓存发布与自动加载路径；无手工索引、无主窗口、首卷就绪后停止测试。"
             };
         }

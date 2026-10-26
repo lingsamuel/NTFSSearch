@@ -99,10 +99,10 @@ public class AutomaticVolumeTests
         public void RequestRebuild(NtfsVolume volume) => Rebuilds++;
         public IReadOnlyList<NtfsVolume> Discover() => Volumes;
         public string CacheRevision(NtfsVolume volume) => "v1";
-        public Task EnsureCollectorAsync(CancellationToken token) { Starts++; NeedsRestart = false; return Task.CompletedTask; }
+        public Task EnsureCollectorAsync(CancellationToken token) { Interlocked.Increment(ref Starts); NeedsRestart = false; return Task.CompletedTask; }
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token)
         {
-            Loads++;
+            Interlocked.Increment(ref Loads);
             if (DamageFirst && volume.Id == "one") throw new InvalidDataException("损坏的缓存");
             return Task.FromResult<CachedVolume?>(new(Index(volume.Root, ("real.txt", 1)), false));
         }

@@ -1,0 +1,38 @@
+{
+  "DiscoveredRoots": [
+    "C:\\",
+    "D:\\",
+    "E:\\",
+    "F:\\",
+    "G:\\",
+    "H:\\",
+    "I:\\",
+    "J:\\",
+    "K:\\"
+  ],
+  "IndexedVolumes": 1,
+  "IndexedObjects": 1614524,
+  "SearchHasResults": true,
+  "FirstIndexedRoot": "E:\\",
+  "Parallel": {
+    "Session": "e4633295217348818bd19369484fdbc1",
+    "ScanLimit": 4,
+    "WorkerProcessors": 6,
+    "MemoryBudget": 17894780928,
+    "ActiveRoots": [
+      "G:\\",
+      "D:\\",
+      "F:\\",
+      "C:\\"
+    ],
+    "ActiveProcesses": [
+      105836,
+      58020,
+      25452,
+      35184
+    ],
+    "PeakProcesses": 4,
+    "UpdatedUtc": "2026-10-26T03:22:21.786088Z"
+  },
+  "Mode": "正常自动发现、提权采集、缓存发布与自动加载路径；无手工索引、无主窗口、首卷就绪后停止测试。"
+}

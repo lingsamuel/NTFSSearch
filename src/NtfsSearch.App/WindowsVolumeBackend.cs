@@ -7,9 +7,11 @@ using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-internal sealed class WindowsVolumeBackend(Dispatcher dispatcher) : IAutomaticVolumeBackend
+internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheDirectory = null) : IAutomaticVolumeBackend
 {
-    private readonly VolumeCache cache = new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NtfsSearch", "Volumes"));
+    private readonly VolumeCache cache = new(cacheDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NtfsSearch", "Volumes"));
+    private CollectorMetrics? metrics;
+    public CollectorMetrics? Metrics => Volatile.Read(ref metrics);
     private readonly string session = Guid.NewGuid().ToString("N");
     private Process? launchedCollector;
     private bool expectingCollector, suspended, permissionRefused;
@@ -21,7 +23,20 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher) : IAutomaticVo
     public event Action<string>? Progress;
     public void RequestRebuild(NtfsVolume volume) => AtomicJson.Write(Path.Combine(cache.DirectoryPath,
         VolumeCache.Key(volume) + ".rebuild.json"), new { Id = Guid.NewGuid().ToString("N") });
-    public IReadOnlyList<NtfsVolume> Discover() => VolumeDiscovery.Discover();
+    public IReadOnlyList<NtfsVolume> Discover()
+    {
+        try
+        {
+            string path = Path.Combine(cache.DirectoryPath, "collector-metrics.json");
+            if (File.Exists(path) && JsonSerializer.Deserialize<CollectorMetrics>(AtomicJson.ReadText(path)) is
+                { ActiveRoots: not null, ActiveProcesses: not null } current
+                && Guid.TryParseExact(current.Session, "N", out _) && current.ScanLimit > 0 && current.WorkerProcessors > 0
+                && current.PeakProcesses >= 0 && current.ActiveRoots.Length == current.ActiveProcesses.Length)
+                Volatile.Write(ref metrics, current);
+        }
+        catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) { }
+        return VolumeDiscovery.Discover();
+    }
     public string CacheRevision(NtfsVolume volume) => cache.Revision(volume);
     public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.Run(() =>
         cache.Load(volume, token, new Progress<string>(message => Progress?.Invoke(volume.Root + " " + message))), token);

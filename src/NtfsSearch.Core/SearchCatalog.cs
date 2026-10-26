@@ -10,6 +10,7 @@ public sealed class SearchCatalog
     private long version;
     public long Count => Volatile.Read(ref published).Sum(p => (long)p.Value.Count);
     public int VolumeCount => Volatile.Read(ref published).Length;
+    internal bool Contains(string key) => Volatile.Read(ref published).Any(p => p.Key == key);
     public long Version => Interlocked.Read(ref version);
     public event Action? Changed;
 

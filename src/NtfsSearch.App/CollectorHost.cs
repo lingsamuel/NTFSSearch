@@ -8,7 +8,8 @@ using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-internal sealed record CollectorProgress(string Message, DateTime UpdatedUtc);
+internal sealed record CollectorProgress(string Message, DateTime UpdatedUtc)
+{ public int ProcessorCount { get; init; } = Environment.ProcessorCount; }
 
 internal static class CollectorHost
 {
@@ -30,7 +31,7 @@ internal static class CollectorHost
         var monitor = MonitorParentAsync(parentId, parentStarted, Path.Combine(root, session + ".stop"), lifetime);
         try
         {
-            return args[0] == "--collect" ? await CollectAsync(root, lifetime.Token) : 2;
+            return args[0] == "--collect" ? await CollectAsync(root, session, lifetime.Token) : 2;
         }
         catch (OperationCanceledException) { return 130; }
         finally
@@ -40,58 +41,81 @@ internal static class CollectorHost
         }
     }
 
-    private static async Task<int> CollectAsync(string root, CancellationToken token)
+    private static async Task<int> CollectAsync(string root, string session, CancellationToken token)
     {
         FileStream ownership;
         try { ownership = new(Path.Combine(root, "collector.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
         catch (IOException e) when ((e.HResult & 0xffff) is 32 or 33) { return 0; }
         using (ownership)
         {
-            var scanned = new HashSet<string>(StringComparer.Ordinal);
-            var repairs = new Dictionary<string, string>(StringComparer.Ordinal);
-            string? refresh = null;
-            while (true)
+            var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
+            var metrics = new CollectorMetricsWriter(root, session, policy); metrics.Initialize();
+            var cache = new VolumeCache(root);
+            var estimates = new Dictionary<string, long>(StringComparer.Ordinal);
+            var announced = new Dictionary<string, string>(StringComparer.Ordinal);
+            await using var scheduler = new VolumeWorkScheduler(policy.ScanLimit, policy.MemoryBudget, async (work, cancellation) =>
             {
-                token.ThrowIfCancellationRequested();
-                string request = Path.Combine(root, "refresh.request.json");
-                string? nextRefresh = File.Exists(request) ? AtomicJson.ReadText(request) : null;
-                if (refresh != nextRefresh) { scanned.Clear(); refresh = nextRefresh; }
-                var volumes = VolumeDiscovery.Discover();
-                scanned.IntersectWith(volumes.Select(VolumeCache.Key));
-                foreach (var volume in volumes.Where(v => !scanned.Contains(VolumeCache.Key(v))))
+                try { await ScanInChildAsync(root, work.Volume, cancellation, policy.WorkerProcessors, metrics); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
                 {
-                    try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(volume) + ".progress.json"), new CollectorProgress("排队读取…", DateTime.UtcNow)); }
+                    try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(work.Volume) + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow)); }
                     catch (IOException) { }
                     catch (UnauthorizedAccessException) { }
                 }
-                foreach (var volume in volumes)
+            });
+            DateTime nextDiscovery = DateTime.MinValue;
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                if (DateTime.UtcNow >= nextDiscovery)
                 {
-                    token.ThrowIfCancellationRequested();
-                    string key = VolumeCache.Key(volume);
-                    try
+                    string request = Path.Combine(root, "refresh.request.json");
+                    string refresh = File.Exists(request) ? AtomicJson.ReadText(request) : "initial";
+                    var volumes = VolumeDiscovery.Discover();
+                    var work = new List<VolumeWork>();
+                    foreach (var volume in volumes)
                     {
-                        string repairPath = Path.Combine(root, key + ".rebuild.json");
-                        if (File.Exists(repairPath))
+                        token.ThrowIfCancellationRequested();
+                        try
                         {
-                            string repair = AtomicJson.ReadText(repairPath);
-                            if (!repairs.TryGetValue(key, out string? previous) || previous != repair)
-                            { repairs[key] = repair; scanned.Remove(key); }
+                            string key = VolumeCache.Key(volume);
+                            string repairPath = Path.Combine(root, key + ".rebuild.json");
+                            string revision = refresh + "|" + (File.Exists(repairPath) ? AtomicJson.ReadText(repairPath) : "");
+                            bool changed = !announced.TryGetValue(key, out string? previous) || previous != revision;
+                            if (!estimates.TryGetValue(key, out long estimate) || changed)
+                                estimates[key] = estimate = VolumeResources.EstimateBuildBytes(volume.Root[0], cache.CachedSnapshotBytes(volume));
+                            work.Add(new(volume, revision, estimate));
+                            if (changed)
+                            {
+                                announced[key] = revision;
+                                if (!scheduler.ActiveRoots.Contains(volume.Root))
+                                {
+                                    try { AtomicJson.Write(Path.Combine(root, key + ".progress.json"), new CollectorProgress("排队读取…", DateTime.UtcNow)); }
+                                    catch (IOException) { }
+                                    catch (UnauthorizedAccessException) { }
+                                }
+                            }
                         }
-                        if (!scanned.Add(key)) continue;
-                        await ScanInChildAsync(root, volume, token);
+                        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                        {
+                            try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(volume) + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow)); }
+                            catch (IOException) { }
+                            catch (UnauthorizedAccessException) { }
+                        }
                     }
-                    catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
-                    {
-                        try { AtomicJson.Write(Path.Combine(root, key + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow)); }
-                        catch (IOException) { }
-                    }
+                    var keys = volumes.Select(VolumeCache.Key).ToHashSet(StringComparer.Ordinal);
+                    foreach (string key in announced.Keys.Where(k => !keys.Contains(k)).ToArray()) { announced.Remove(key); estimates.Remove(key); }
+                    scheduler.Reconcile(work);
+                    nextDiscovery = DateTime.UtcNow.AddSeconds(2);
                 }
-                await Task.Delay(TimeSpan.FromSeconds(5), token);
+                // 保留系统余量；已经运行的任务继续完成，内存紧张时停止接纳新任务。
+                scheduler.Pump(token, allowNew: VolumeResources.AvailableMemoryBytes() >= Math.Max(1, policy.MemoryBudget / 2));
+                await Task.Delay(200, token);
             }
         }
     }
 
-    private static async Task ScanInChildAsync(string root, NtfsVolume volume, CancellationToken token)
+    private static async Task ScanInChildAsync(string root, NtfsVolume volume, CancellationToken token, int processors, CollectorMetricsWriter metrics)
     {
         token.ThrowIfCancellationRequested();
         string state = Path.Combine(root, VolumeCache.Key(volume) + ".progress.json");
@@ -100,7 +124,10 @@ internal static class CollectorHost
         using var parent = Process.GetCurrentProcess();
         using var child = AppProcess.Start(["--scan-volume", root,
             Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(volume))),
-            Environment.ProcessId.ToString(CultureInfo.InvariantCulture), parent.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture)], elevate: false);
+            Environment.ProcessId.ToString(CultureInfo.InvariantCulture), parent.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture)], elevate: false, processorLimit: processors);
+        try { child.PriorityClass = ProcessPriorityClass.BelowNormal; }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { }
+        if (!child.HasExited) metrics.Started(volume, child.Id);
         var timer = Stopwatch.StartNew();
         try
         {
@@ -118,14 +145,15 @@ internal static class CollectorHost
         }
         catch (OperationCanceledException)
         {
-            if (!child.HasExited) child.Kill(entireProcessTree: true);
+            if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); }
             Report("采集已取消，已有索引继续可用。"); throw;
         }
         catch (TimeoutException e)
         {
-            if (!child.HasExited) child.Kill(entireProcessTree: true);
+            if (!child.HasExited) { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); }
             Report(e.Message);
         }
+        finally { metrics.Stopped(volume); }
     }
 
     public static async Task<int> ScanVolumeAsync(string[] args)

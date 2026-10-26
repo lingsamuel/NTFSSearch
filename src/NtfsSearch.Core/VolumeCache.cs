@@ -14,6 +14,17 @@ public sealed class VolumeCache
 
     public static string Key(NtfsVolume volume) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(volume.Id + "|" + volume.Root)))[..24];
     public string ManifestPath(NtfsVolume volume) => Path.Combine(DirectoryPath, Key(volume) + ".ready.json");
+    public long CachedSnapshotBytes(NtfsVolume volume)
+    {
+        try
+        {
+            var manifest = ReadManifest(volume, ManifestPath(volume));
+            if (manifest is null) return 0;
+            var info = new FileInfo(Path.Combine(DirectoryPath, manifest.SnapshotFile));
+            return info.Exists ? info.Length : 0;
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or JsonException or UnauthorizedAccessException) { return 0; }
+    }
     public string Revision(NtfsVolume volume)
     {
         string Stamp(string path)

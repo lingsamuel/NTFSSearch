@@ -4,7 +4,7 @@ using System.Text;
 
 namespace NtfsSearch.Core;
 
-public sealed record NtfsVolume(string Id, string Root, long TotalBytes, string Label);
+public sealed record NtfsVolume(string Id, string Root, long TotalBytes, string Label, string[]? PhysicalDisks = null);
 
 public static class VolumeDiscovery
 {
@@ -21,7 +21,7 @@ public static class VolumeDiscovery
                 var id = new StringBuilder(64);
                 if (!GetVolumeNameForVolumeMountPointW(drive.RootDirectory.FullName, id, id.Capacity))
                     throw new Win32Exception(Marshal.GetLastWin32Error());
-                volumes.Add(new(id.ToString(), drive.RootDirectory.FullName, drive.TotalSize, drive.VolumeLabel));
+                volumes.Add(new(id.ToString(), drive.RootDirectory.FullName, drive.TotalSize, drive.VolumeLabel, VolumeResources.PhysicalDisks(drive.Name[0])));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or Win32Exception)
             { /* 离线或锁定卷不应阻止发现其他磁盘；下一轮重新探测。 */ }

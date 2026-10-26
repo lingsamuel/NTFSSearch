@@ -5,7 +5,7 @@ namespace NtfsSearch.App;
 
 internal static class AppProcess
 {
-    public static Process Start(IEnumerable<string> arguments, bool elevate)
+    public static Process Start(IEnumerable<string> arguments, bool elevate, int? processorLimit = null)
     {
         string host = Environment.ProcessPath ?? throw new InvalidOperationException("无法定位采集进程入口。");
         var start = new ProcessStartInfo(host)
@@ -18,6 +18,11 @@ internal static class AppProcess
             start.ArgumentList.Add(typeof(App).Assembly.Location);
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         if (elevate) start.Verb = "runas";
+        if (processorLimit is not null)
+        {
+            if (elevate || processorLimit < 1) throw new ArgumentException("处理器限制仅用于非Shell采集子进程。");
+            start.Environment["DOTNET_PROCESSOR_COUNT"] = processorLimit.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
         return Process.Start(start) ?? throw new InvalidOperationException("采集进程未能启动。");
     }
 }

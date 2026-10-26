@@ -1,0 +1,83 @@
+[
+  {
+    "Id": "\\\\?\\Volume{29384f25-fdec-40d2-ae0f-403c5d104070}\\",
+    "Root": "C:\\",
+    "TotalBytes": 2047191896064,
+    "Label": "Win10",
+    "PhysicalDisks": [
+      "disk:6"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{951b5c46-5e5f-47dd-a082-4da8f575af36}\\",
+    "Root": "D:\\",
+    "TotalBytes": 2048390066176,
+    "Label": "Data",
+    "PhysicalDisks": [
+      "disk:3"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{af4e2e86-b5fa-414c-884f-466145745ef8}\\",
+    "Root": "E:\\",
+    "TotalBytes": 2000381014016,
+    "Label": "SSDGames",
+    "PhysicalDisks": [
+      "disk:8"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{80cc30cc-07c2-4e25-b791-e90acc1a3ed4}\\",
+    "Root": "F:\\",
+    "TotalBytes": 8001113362432,
+    "Label": "Games",
+    "PhysicalDisks": [
+      "disk:0"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{af045239-4c49-4b27-b3b2-fbe0d389a1c2}\\",
+    "Root": "G:\\",
+    "TotalBytes": 16000881782784,
+    "Label": "HDDGames",
+    "PhysicalDisks": [
+      "disk:1"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{5aa5436a-afa0-4780-bce3-9e08a8bb84eb}\\",
+    "Root": "H:\\",
+    "TotalBytes": 2047473631232,
+    "Label": "Win10",
+    "PhysicalDisks": [
+      "disk:7"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{314b96df-8dd4-4d59-90d6-62e554cc48ce}\\",
+    "Root": "I:\\",
+    "TotalBytes": 2048074780672,
+    "Label": "Sys11",
+    "PhysicalDisks": [
+      "disk:5"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{0cf8e677-e9c6-47fa-8d79-e8ca5d857d94}\\",
+    "Root": "J:\\",
+    "TotalBytes": 16000881782784,
+    "Label": "HDDBackup",
+    "PhysicalDisks": [
+      "disk:2"
+    ]
+  },
+  {
+    "Id": "\\\\?\\Volume{e5ce6625-f73a-44b9-835f-3ba26ba9c28c}\\",
+    "Root": "K:\\",
+    "TotalBytes": 2048390066176,
+    "Label": "SSDGames2",
+    "PhysicalDisks": [
+      "disk:4"
+    ]
+  }
+]

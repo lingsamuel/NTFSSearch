@@ -13,7 +13,7 @@ public interface IAutomaticVolumeBackend
 
 public sealed record VolumeStatus(string Root, string Message);
 
-public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, SearchCatalog catalog)
+public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, SearchCatalog catalog, int maxConcurrentLoads = 2)
 {
     private readonly SemaphoreSlim gate = new(1);
     private readonly Dictionary<string, string> attempted = new(StringComparer.Ordinal);
@@ -30,43 +30,79 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
             var volumes = await Task.Run(backend.Discover, token);
             catalog.RemoveExcept(volumes.Select(VolumeCache.Key));
             foreach (string key in attempted.Keys.Except(volumes.Select(VolumeCache.Key)).ToArray()) attempted.Remove(key);
-            var next = new List<VolumeStatus>();
-            foreach (var volume in volumes)
+            if (maxConcurrentLoads < 1) throw new InvalidOperationException("缓存加载并发必须为正数。");
+            var oldStatuses = Statuses.ToDictionary(s => s.Root, StringComparer.Ordinal);
+            var next = new VolumeStatus[volumes.Count];
+            var visible = new bool[volumes.Count];
+            var pending = new List<(NtfsVolume Volume, int Position)>();
+            for (int position = 0; position < volumes.Count; position++)
             {
+                var volume = volumes[position];
                 token.ThrowIfCancellationRequested();
                 string key = VolumeCache.Key(volume), revision = backend.CacheRevision(volume);
                 string message = backend.ReadStatus(volume);
+                visible[position] = catalog.Contains(key);
                 if (!attempted.TryGetValue(key, out string? previous) || previous != revision)
                 {
                     // 先记录已尝试的版本；损坏主库回退后也不会每两秒反复加载同一损坏版本。
                     attempted[key] = revision;
-                    try
-                    {
-                        if (await backend.LoadAsync(volume, token) is { } loaded)
-                        {
-                            catalog.Publish(key, loaded.Index);
-                            if (loaded.UsedBackup) backend.RequestRebuild(volume);
-                            message = loaded.UsedBackup ? "缓存损坏，已自动回退上一代，等待重建" : $"已加载 {loaded.Index.Count:N0} 个对象";
-                        }
-                    }
-                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
-                    { message = e.Message; if (e is InvalidDataException) backend.RequestRebuild(volume); }
+                    pending.Add((volume, position));
                 }
-                else if (Statuses.FirstOrDefault(s => s.Root == volume.Root) is { } old && message == "等待后台采集") message = old.Message;
-                next.Add(new(volume.Root, message));
-                Volatile.Write(ref statuses, next.ToArray()); StatusChanged?.Invoke();
+                else if (oldStatuses.TryGetValue(volume.Root, out var old) && message == "等待后台采集") message = old.Message;
+                next[position] = new(volume.Root, message);
             }
             Volatile.Write(ref statuses, next.ToArray()); StatusChanged?.Invoke();
-            if (!collectorAttempted || retryCollector || backend.CollectorNeedsRestart)
+            var statusGate = new object();
+            void UpdateStatus(int position, string message, bool loaded = false)
             {
+                lock (statusGate)
+                {
+                    visible[position] |= loaded;
+                    next[position] = new(volumes[position].Root, message);
+                    Volatile.Write(ref statuses, next.ToArray());
+                }
+                StatusChanged?.Invoke();
+            }
+            async Task EnsureCollector()
+            {
+                if (collectorAttempted && !retryCollector && !backend.CollectorNeedsRestart) return;
                 collectorAttempted = true;
                 try { await backend.EnsureCollectorAsync(token); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
                 {
-                    Volatile.Write(ref statuses, volumes.Select(v => new VolumeStatus(v.Root, e.Message)).ToArray());
+                    lock (statusGate)
+                    {
+                        for (int i = 0; i < next.Length; i++) if (!visible[i]) next[i] = new(volumes[i].Root, e.Message);
+                        Volatile.Write(ref statuses, next.ToArray());
+                    }
                     StatusChanged?.Invoke();
                 }
             }
+            string RequestRebuild(NtfsVolume volume)
+            {
+                try { backend.RequestRebuild(volume); return ""; }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                { return "；无法写入重建请求：" + error.Message; }
+            }
+            // 采集启动与已有缓存恢复独立推进，完成的卷立即发布，不等慢卷或整批结束。
+            Task collector = EnsureCollector();
+            Task loading = Parallel.ForEachAsync(pending,
+                new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = maxConcurrentLoads }, async (work, cancellation) =>
+                {
+                    try
+                    {
+                        if (await backend.LoadAsync(work.Volume, cancellation) is not { } loaded) return;
+                        catalog.Publish(VolumeCache.Key(work.Volume), loaded.Index);
+                        string repairError = loaded.UsedBackup ? RequestRebuild(work.Volume) : "";
+                        UpdateStatus(work.Position, loaded.UsedBackup ? "缓存损坏，已自动回退上一代，等待重建" + repairError : $"已加载 {loaded.Index.Count:N0} 个对象", loaded: true);
+                    }
+                    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+                    {
+                        string repairError = e is InvalidDataException ? RequestRebuild(work.Volume) : "";
+                        UpdateStatus(work.Position, e.Message + repairError);
+                    }
+                });
+            await Task.WhenAll(collector, loading);
         }
         finally { gate.Release(); }
     }

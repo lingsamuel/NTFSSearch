@@ -32,7 +32,7 @@ public static class NtfsEnumerator
         if (!GetVolumeInformationW($"{drive}:\\", null, 0, out _, out _, out _, fs, fs.Capacity))
             throw new Win32Exception(Marshal.GetLastWin32Error());
         if (!fs.ToString().Equals("NTFS", StringComparison.OrdinalIgnoreCase)) throw new NotSupportedException("只支持 NTFS 卷。");
-        var handle = CreateFileW($"\\\\.\\{drive}:", 0x80000000, 7, 0, 3, 0, 0);
+        var handle = VolumeNative.Open(drive, 0x80000000);
         if (handle.IsInvalid)
         {
             int error = Marshal.GetLastWin32Error();
@@ -147,7 +147,7 @@ public static class NtfsEnumerator
         while (true)
         {
             token.ThrowIfCancellationRequested();
-            if (!DeviceIoControl(handle, 0x000900B3, input, input.Length, output, output.Length, out int bytes, 0))
+            if (!VolumeNative.Control(handle, 0x000900B3, input, output, out int bytes))
             {
                 int error = Marshal.GetLastWin32Error();
                 if (error == 38) return; // ERROR_HANDLE_EOF 是枚举正常结束。
@@ -162,11 +162,6 @@ public static class NtfsEnumerator
         }
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(string path, uint access, uint share, nint security, uint creation, uint flags, nint template);
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DeviceIoControl(SafeFileHandle handle, uint code, byte[] input, int inputSize, byte[] output, int outputSize, out int returned, nint overlapped);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetVolumeInformationW(string root, StringBuilder? label, int labelSize, out uint serial, out uint maxName, out uint flags, StringBuilder fs, int fsSize);
