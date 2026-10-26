@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-
 namespace NtfsSearch.Core;
 
 // 单卷单写者复用工作区；祖先缓存有界，避免为每次目录变化建立全卷身份字典。
@@ -12,7 +10,7 @@ internal sealed class DirectoryAncestryFilter
 
     internal void Reset() => cached.Clear();
 
-    internal bool Contains(ulong reference, ImmutableDictionary<ulong, LiveVolumeIndex.DirectoryNode> graph,
+    internal bool Contains(ulong reference, DirectoryGraph graph,
         HashSet<ulong> changed, CancellationToken token)
     {
         chain.Clear(); visiting.Clear();

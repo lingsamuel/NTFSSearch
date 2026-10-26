@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
@@ -7,7 +6,8 @@ namespace NtfsSearch.Core;
 // 检查点只写小型视图清单与首次出现的增量段；基线继续使用已有卷快照。
 internal static class LiveViewStore
 {
-    private static readonly byte[] Magic = "NTSLIVE1"u8.ToArray();
+    private static readonly byte[] Magic = "NTSLIVE2"u8.ToArray();
+    private static readonly byte[] LegacyMagic = "NTSLIVE1"u8.ToArray();
     internal static void Save(LiveVolumeIndex live, string path, long sequence, CancellationToken token)
     {
         if (sequence < live.AppliedSequence) throw new ArgumentOutOfRangeException(nameof(sequence));
@@ -21,7 +21,7 @@ internal static class LiveViewStore
             string segment = Path.Combine(segments, layers[i].StorageId + ".ntidx");
             if (!File.Exists(segment)) SnapshotStore.Save(layers[i], segment, token);
         }
-        byte[] fingerprint = Fingerprint(layers[0], token);
+        byte[] fingerprint = IndexFingerprint.Canonical(layers[0], token);
         SnapshotStore.SaveChecked(path, (writer, stream) =>
         {
             writer.Write(Magic); writer.Write(fingerprint); writer.Write(sequence);
@@ -43,7 +43,7 @@ internal static class LiveViewStore
             {
                 token.ThrowIfCancellationRequested();
                 writer.Write(reference); writer.Write(node.Parent); writer.Write(node.Deleted);
-                WriteText(writer, stream, node.Name);
+                WriteText(writer, stream, node.Name.Span);
                 writer.Write(node.RootPath is not null);
                 if (node.RootPath is { } root) WriteText(writer, stream, root);
             }
@@ -60,8 +60,11 @@ internal static class LiveViewStore
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         long payload = SnapshotStore.ValidatePayload(stream, token); stream.Position = 0;
         using var reader = new BinaryReader(stream);
-        if (!reader.ReadBytes(8).AsSpan().SequenceEqual(Magic)) throw new InvalidDataException("未知实时检查点格式。");
-        if (!CryptographicOperations.FixedTimeEquals(reader.ReadBytes(32), Fingerprint(baseIndex, token)))
+        byte[] magic = reader.ReadBytes(8);
+        bool legacy = magic.AsSpan().SequenceEqual(LegacyMagic);
+        if (!legacy && !magic.AsSpan().SequenceEqual(Magic)) throw new InvalidDataException("未知实时检查点格式。");
+        if (!CryptographicOperations.FixedTimeEquals(reader.ReadBytes(32),
+            legacy ? IndexFingerprint.Legacy(baseIndex, token) : IndexFingerprint.Canonical(baseIndex, token)))
             throw new InvalidDataException("实时检查点与基线身份不符。");
         long sequence = reader.ReadInt64();
         if (sequence < 0) throw new InvalidDataException("检查点序号无效。");
@@ -94,17 +97,48 @@ internal static class LiveViewStore
             layers[i] = layer.WithView(hidden, changed ? paths : layer.Directories, token, i == 0 ? null : id);
         }
         int nodes = Count(reader, payload - stream.Position, 22);
-        var graph = ImmutableDictionary.CreateBuilder<ulong, LiveVolumeIndex.DirectoryNode>();
+        var graph = DirectoryGraph.Create(baseIndex, token);
+        var originalAnchors = graph.Overrides;
+        // 旧清单保存完整图。同值节点也必须验证重复和缺失，不能因借用基线而静默补齐损坏清单。
+        ulong[]? seenRows = legacy ? new ulong[(int)(((long)baseIndex.Count + 63) / 64)] : null;
+        var seenExtra = new HashSet<ulong>();
         for (int i = 0; i < nodes; i++)
         {
             token.ThrowIfCancellationRequested();
             ulong reference = reader.ReadUInt64(), parent = reader.ReadUInt64(); bool deleted = reader.ReadBoolean();
-            string name = ReadText(reader, stream, payload, textBuffer);
-            string? root = reader.ReadBoolean() ? ReadText(reader, stream, payload, textBuffer) : null;
-            if (!graph.TryAdd(reference, new(parent, name, root, deleted))) throw new InvalidDataException("检查点包含重复目录身份。");
+            bool hasBaseline = graph.TryGetBaseline(reference, out var baselineNode, out int row);
+            if (legacy && hasBaseline)
+            {
+                ulong bit = 1UL << (row % 64);
+                if ((seenRows![row / 64] & bit) != 0) throw new InvalidDataException("检查点包含重复目录身份。");
+                seenRows[row / 64] |= bit;
+            }
+            else if (!seenExtra.Add(reference)) throw new InvalidDataException("检查点包含重复目录身份。");
+            var existing = hasBaseline ? baselineNode : graph.TryGetValue(reference, out var anchor) ? anchor : default;
+            int chars = TextLength(reader, stream, payload);
+            var nameText = textBuffer.AsSpan(0, chars); stream.ReadExactly(MemoryMarshal.AsBytes(nameText));
+            ReadOnlyMemory<char> name = nameText.SequenceEqual(existing.Name.Span) ? existing.Name : new string(nameText).AsMemory();
+            string? root = reader.ReadBoolean() ? ReadText(reader, stream, payload, textBuffer, existing.RootPath) : null;
+            graph = graph.SetItem(reference, new(parent, name, root, deleted));
+        }
+        if (legacy)
+        {
+            ulong previous = 0; bool hasPrevious = false;
+            for (int id = baseIndex.Count - 1; id >= 0; id--)
+            {
+                if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
+                if (!baseIndex.Records[id].IsDirectory || !baseIndex.IsVisible(id)) continue;
+                ulong reference = baseIndex.FileReferences![id];
+                if (hasPrevious && reference == previous) continue;
+                previous = reference; hasPrevious = true;
+                if ((seenRows![id / 64] & (1UL << (id % 64))) == 0)
+                    throw new InvalidDataException("检查点缺少基线目录身份。");
+            }
+            foreach (ulong reference in originalAnchors.Keys)
+                if (!seenExtra.Contains(reference)) throw new InvalidDataException("检查点缺少基线父目录锚。");
         }
         if (stream.Position != payload) throw new InvalidDataException("检查点长度不符。");
-        return new LiveVolumeIndex(layers, graph.ToImmutable(), sequence, position);
+        return new LiveVolumeIndex(layers, graph, sequence, position);
     }
 
     private static IEnumerable<string> SegmentNames(string path, CancellationToken token)
@@ -132,29 +166,9 @@ internal static class LiveViewStore
         }
     }
 
-    private static byte[] Fingerprint(SearchIndex index, CancellationToken token)
+    private static void WriteText(BinaryWriter writer, Stream stream, ReadOnlySpan<char> text)
     {
-        index = index.IdentitySource;
-        if (index.CheckpointFingerprint is { } cached) return cached;
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        foreach (string directory in index.Directories)
-        {
-            token.ThrowIfCancellationRequested();
-            hash.AppendData(MemoryMarshal.AsBytes(directory.AsSpan()));
-        }
-        for (int start = 0; start < index.Count; start += 65536)
-        {
-            token.ThrowIfCancellationRequested(); int length = Math.Min(65536, index.Count - start);
-            hash.AppendData(MemoryMarshal.AsBytes(index.Records.AsSpan(start, length)));
-            hash.AppendData(MemoryMarshal.AsBytes(index.FileReferences!.AsSpan(start, length)));
-        }
-        hash.AppendData(MemoryMarshal.AsBytes(index.DirectoryReferences!.AsSpan()));
-        foreach (var chunk in index.Names.Chunks) { token.ThrowIfCancellationRequested(); hash.AppendData(MemoryMarshal.AsBytes(chunk.AsSpan())); }
-        return index.CheckpointFingerprint = hash.GetHashAndReset();
-    }
-    private static void WriteText(BinaryWriter writer, Stream stream, string text)
-    {
-        writer.Write(text.Length); stream.Write(MemoryMarshal.AsBytes(text.AsSpan()));
+        writer.Write(text.Length); stream.Write(MemoryMarshal.AsBytes(text));
     }
     private static int TextLength(BinaryReader reader, Stream stream, long payload)
     {

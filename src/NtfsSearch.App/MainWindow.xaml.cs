@@ -144,42 +144,56 @@ public partial class MainWindow : Window
         Task running = RunAutomaticAsync(deadline.Token);
         try
         {
-            while (loader.Statuses.Count == 0 || windowsBackend!.LiveVolumeCount != loader.Statuses.Count)
+            while (true)
             {
-                if (running.IsCompleted) await running;
-                await Task.Delay(500, deadline.Token);
+                await WaitForFullAuditReadinessAsync(running, deadline.Token);
+                var liveVerification = await AutomaticLiveVerification.RunAsync(catalog, diagnosticDirectory, deadline.Token);
+                var rows = new List<object>();
+                foreach (var status in loader.Statuses)
+                {
+                    var result = await Task.Run(() => catalog.Search(status.Root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
+                    rows.Add(new { status.Root, Count = result.TotalCount });
+                }
+                // CRUD或查询期间若日志失效触发修复，等新代提交且发布后重新审计，避免关闭时取消修复子进程。
+                if (!windowsBackend!.AuditCanFinish) continue;
+                using var process = Process.GetCurrentProcess();
+                var memory = new
+                {
+                    WorkingSetBytes = process.WorkingSet64,
+                    PrivateBytes = process.PrivateMemorySize64,
+                    ManagedBytes = GC.GetTotalMemory(false),
+                    AllocatedBytes = GC.GetTotalAllocatedBytes(false)
+                };
+                return new
+                {
+                    Success = true,
+                    Total = catalog.Count,
+                    LiveVolumes = windowsBackend.LiveVolumeCount,
+                    Volumes = rows,
+                    ScansStarted = windowsBackend.Metrics?.ScansStarted,
+                    LiveVerification = liveVerification,
+                    Memory = memory
+                };
             }
-            await Task.Delay(2500, deadline.Token);
-            var liveVerification = await AutomaticLiveVerification.RunAsync(catalog, diagnosticDirectory, deadline.Token);
-            var rows = new List<object>();
-            foreach (var status in loader.Statuses)
-            {
-                var result = await Task.Run(() => catalog.Search(status.Root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
-                rows.Add(new { status.Root, Count = result.TotalCount });
-            }
-            using var process = Process.GetCurrentProcess();
-            var memory = new
-            {
-                WorkingSetBytes = process.WorkingSet64,
-                PrivateBytes = process.PrivateMemorySize64,
-                ManagedBytes = GC.GetTotalMemory(false),
-                AllocatedBytes = GC.GetTotalAllocatedBytes(false)
-            };
-            return new
-            {
-                Success = true,
-                Total = catalog.Count,
-                LiveVolumes = windowsBackend.LiveVolumeCount,
-                Volumes = rows,
-                ScansStarted = windowsBackend.Metrics?.ScansStarted,
-                LiveVerification = liveVerification,
-                Memory = memory
-            };
         }
         finally
         {
             windowsBackend?.CancelCollection(); await deadline.CancelAsync();
             try { await running; } catch (OperationCanceledException) { }
+        }
+    }
+
+    private async Task WaitForFullAuditReadinessAsync(Task running, CancellationToken token)
+    {
+        while (true)
+        {
+            while (loader.Statuses.Count == 0 || !windowsBackend!.AuditCanFinish)
+            {
+                if (running.IsCompleted) await running;
+                await Task.Delay(500, token);
+            }
+            await Task.Delay(2500, token);
+            if (windowsBackend.AuditCanFinish) return;
         }
     }
 

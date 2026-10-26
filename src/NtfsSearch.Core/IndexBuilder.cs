@@ -3,6 +3,7 @@ namespace NtfsSearch.Core;
 public sealed class IndexBuilder
 {
     private readonly NameArena names;
+    private readonly SizeTable sizes = new();
     private IndexRecord[] records;
     private int count;
     private ulong[]? fileReferences;
@@ -44,8 +45,6 @@ public sealed class IndexBuilder
         if (!fileReference.HasValue || !parentReference.HasValue) identityComplete = false;
         if (parentReference.HasValue && directoryReferences[directory] != parentReference.Value)
             throw new ArgumentException("同一路径的父目录身份不一致。", nameof(parentReference));
-        ushort flags = (ushort)((isDirectory ? 1 : 0) | (size.HasValue && !isDirectory ? 2 : 0)
-            | (modifiedUtcTicks.HasValue ? 4 : 0));
         if (count == records.Length) Array.Resize(ref records, Math.Max(16, checked(count + Math.Max(count / 2, 1))));
         if (fileReference.HasValue)
         {
@@ -53,8 +52,8 @@ public sealed class IndexBuilder
             if (fileReferences.Length != records.Length) Array.Resize(ref fileReferences, records.Length);
             fileReferences[count] = fileReference.Value;
         }
-        records[count++] = new(names.Add(name), size.GetValueOrDefault(), modifiedUtcTicks.GetValueOrDefault(),
-            directory, (ushort)name.Length, flags);
+        records[count++] = new(names.Add(name, isDirectory), sizes.Add(isDirectory ? -1 : size ?? -1), modifiedUtcTicks.GetValueOrDefault(),
+            directory, isDirectory, modifiedUtcTicks.HasValue);
     }
 
     public SearchIndex Build(CancellationToken cancellationToken = default, IProgress<string>? progress = null)
@@ -63,22 +62,21 @@ public sealed class IndexBuilder
         if (built) throw new InvalidOperationException("索引已冻结。");
         built = true;
         names.Seal();
-        // 转移底层记录数组，避免在亿级构建收尾时再复制一份记录。
-        if (records.Length != count) Array.Resize(ref records, count);
-        var array = records;
+        // 终态大数组与构建期增长、散列表隔离，避免长期活对象夹住临时LOH空洞。
+        var array = IndexArrays.Freeze(records, count);
         records = [];
         directoryIds.Clear();
         ulong[]? references = count == 0 ? [] : null;
         if (identityComplete && fileReferences is not null)
         {
-            Array.Resize(ref fileReferences, count);
-            references = fileReferences;
+            references = IndexArrays.Freeze(fileReferences, count);
             bool sorted = true;
             for (int i = 1; i < count; i++)
                 if (SearchIndex.CompareReference(references[i - 1], references[i]) > 0) { sorted = false; break; }
             if (!sorted) Array.Sort(references, array, Comparer<ulong>.Create(SearchIndex.CompareReference));
         }
+        fileReferences = null;
         return new(names, array, directories.ToArray(), cancellationToken, progress,
-            fileReferences: references, directoryReferences: references is null ? null : directoryReferences.ToArray());
+            fileReferences: references, directoryReferences: references is null ? null : IndexArrays.Copy<ulong>(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(directoryReferences)), bigSizes: sizes.Freeze());
     }
 }

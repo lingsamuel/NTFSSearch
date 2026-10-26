@@ -1,0 +1,217 @@
+{
+  "metadata": {
+    "kind": "metadata",
+    "utc": "2026-10-26T08:55:10.4807423Z",
+    "processorCount": 32,
+    "coreVersion": "0.4.1.0",
+    "coreSha256": "09807AD6CE0A607912B0E8327A0E78F30CD69867571784F26F9A8B3495E5899E",
+    "runtime": ".NET 10.0.12"
+  },
+  "everythingFastSort": {
+    "kind": "everythingFastSort",
+    "dbLoaded": true,
+    "Name": true,
+    "Path": true,
+    "Size": true,
+    "Modified": true
+  },
+  "rowCount": 34408942,
+  "method": {
+    "input": "fresh identity row IDs [0..Count-1], persistent FRN row layout, never use cached sorted arrays as sort input",
+    "comparison": "actual Core.SearchIndex.Compare",
+    "sort": "actual Core.SortIndex.Sort; automatic min(cpu,16,ceil(rows/1e6)) parts; preallocated reusable scratch",
+    "parallelism": "9 resident volumes sorted concurrently per column; each volume uses existing Core partition strategy",
+    "wallIncludes": "allocate order+scratch, initialize identity order, full sort, worker dispatch, tiny diagnostic logging",
+    "wallExcludes": "snapshot load, stored-order validation while loading, full monotonicity verification after each timed column",
+    "warmup": "first E volume 20,000 identity rows per column before measurements",
+    "validation": "all nine output permutations checked pairwise monotonic for every column; completion observed",
+    "scope": "single run per column; isolated diagnostic process; app/Everything configuration/data untouched; existing fixed snapshot baseline, no live WAL replay"
+  },
+  "columns": {
+    "Name": {
+      "actualParallelWallSeconds": 5.9921188,
+      "sumConcurrentPerVolumeSortDurationsSeconds": 27.0818126,
+      "maxConcurrentPerVolumeSortDurationSeconds": 5.9461279,
+      "note": "sum of overlapping durations is not a serial benchmark and is not column switch latency"
+    },
+    "Path": {
+      "actualParallelWallSeconds": 7.0104297,
+      "sumConcurrentPerVolumeSortDurationsSeconds": 34.215175099999996,
+      "maxConcurrentPerVolumeSortDurationSeconds": 6.998525,
+      "note": "sum of overlapping durations is not a serial benchmark and is not column switch latency"
+    },
+    "Size": {
+      "actualParallelWallSeconds": 6.3973518,
+      "sumConcurrentPerVolumeSortDurationsSeconds": 27.9660869,
+      "maxConcurrentPerVolumeSortDurationSeconds": 6.3745683,
+      "note": "sum of overlapping durations is not a serial benchmark and is not column switch latency"
+    },
+    "Modified": {
+      "actualParallelWallSeconds": 2.1242057,
+      "sumConcurrentPerVolumeSortDurationsSeconds": 9.9693193,
+      "maxConcurrentPerVolumeSortDurationSeconds": 2.0998701,
+      "note": "sum of overlapping durations is not a serial benchmark and is not column switch latency"
+    }
+  },
+  "volumes": [
+    {
+      "root": "C:\\",
+      "count": 7689757,
+      "parts": 8,
+      "sortSeconds": {
+        "Name": 5.9461279,
+        "Path": 6.998525,
+        "Size": 6.3745683,
+        "Modified": 2.0998701
+      },
+      "prepareSeconds": {
+        "Name": 0.04322,
+        "Path": 0.0108898,
+        "Size": 0.0219945,
+        "Modified": 0.0230848
+      }
+    },
+    {
+      "root": "D:\\",
+      "count": 6106982,
+      "parts": 7,
+      "sortSeconds": {
+        "Name": 4.539808,
+        "Path": 5.7744211,
+        "Size": 4.5483548,
+        "Modified": 1.5652866
+      },
+      "prepareSeconds": {
+        "Name": 0.0325385,
+        "Path": 0.00898,
+        "Size": 0.0143148,
+        "Modified": 0.0155096
+      }
+    },
+    {
+      "root": "E:\\",
+      "count": 1614526,
+      "parts": 2,
+      "sortSeconds": {
+        "Name": 2.055849,
+        "Path": 2.1882289,
+        "Size": 1.8718081,
+        "Modified": 0.5929877
+      },
+      "prepareSeconds": {
+        "Name": 0.0082458,
+        "Path": 0.0017619,
+        "Size": 0.0030629,
+        "Modified": 0.0088223
+      }
+    },
+    {
+      "root": "F:\\",
+      "count": 3426560,
+      "parts": 4,
+      "sortSeconds": {
+        "Name": 2.4508759,
+        "Path": 3.4687848,
+        "Size": 2.4708095,
+        "Modified": 0.9169866
+      },
+      "prepareSeconds": {
+        "Name": 0.0260405,
+        "Path": 0.0043352,
+        "Size": 0.0066008,
+        "Modified": 0.0101493
+      }
+    },
+    {
+      "root": "G:\\",
+      "count": 6528065,
+      "parts": 7,
+      "sortSeconds": {
+        "Name": 3.6145097,
+        "Path": 4.4290874,
+        "Size": 4.0118684,
+        "Modified": 1.3919164
+      },
+      "prepareSeconds": {
+        "Name": 0.0360801,
+        "Path": 0.009727,
+        "Size": 0.0156704,
+        "Modified": 0.0165409
+      }
+    },
+    {
+      "root": "H:\\",
+      "count": 4712245,
+      "parts": 5,
+      "sortSeconds": {
+        "Name": 3.7458903,
+        "Path": 4.4122156,
+        "Size": 3.9270815,
+        "Modified": 1.6952654
+      },
+      "prepareSeconds": {
+        "Name": 0.0292119,
+        "Path": 0.0061671,
+        "Size": 0.0093324,
+        "Modified": 0.0133465
+      }
+    },
+    {
+      "root": "I:\\",
+      "count": 1497454,
+      "parts": 2,
+      "sortSeconds": {
+        "Name": 1.7122427,
+        "Path": 2.3698245,
+        "Size": 1.9044837,
+        "Modified": 0.6243854
+      },
+      "prepareSeconds": {
+        "Name": 0.0127493,
+        "Path": 0.0021525,
+        "Size": 0.0027469,
+        "Modified": 0.0070153
+      }
+    },
+    {
+      "root": "J:\\",
+      "count": 1796896,
+      "parts": 2,
+      "sortSeconds": {
+        "Name": 1.9423197,
+        "Path": 2.535303,
+        "Size": 1.8024254,
+        "Modified": 0.6342477
+      },
+      "prepareSeconds": {
+        "Name": 0.0153773,
+        "Path": 0.0025966,
+        "Size": 0.0041178,
+        "Modified": 0.0074644
+      }
+    },
+    {
+      "root": "K:\\",
+      "count": 1036457,
+      "parts": 2,
+      "sortSeconds": {
+        "Name": 1.0741894,
+        "Path": 2.0387848,
+        "Size": 1.0546872,
+        "Modified": 0.4483734
+      },
+      "prepareSeconds": {
+        "Name": 0.0085215,
+        "Path": 0.0015422,
+        "Size": 0.0022012,
+        "Modified": 0.0063147
+      }
+    }
+  ],
+  "memory": {
+    "oneOrderMiB": 131.25969696044922,
+    "threeOrdersSavedMiB": 393.77909088134766,
+    "transientNewOrderPlusScratchMiB": 262.51939392089844,
+    "note": "diagnostic loaded existing 4 sort arrays, then allocates temporary new arrays; accumulated private size after columns includes collectible arrays and is not proposed resident memory"
+  }
+}

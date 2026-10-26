@@ -221,13 +221,7 @@ public class LiveIndexTests
         try
         {
             var builder = new IndexBuilder(); builder.Add(@"C:\", "legacy");
-            SnapshotStore.Save(builder.Build(), path);
-            byte[] current = System.IO.File.ReadAllBytes(path);
-            byte[] old = new byte[current.Length - 1];
-            current.AsSpan(0, current.Length - 33).CopyTo(old);
-            "NTSIDX02"u8.CopyTo(old);
-            System.Security.Cryptography.SHA256.HashData(old.AsSpan(0, old.Length - 32)).CopyTo(old, old.Length - 32);
-            System.IO.File.WriteAllBytes(path, old);
+            LegacySnapshotFixture.Write(builder.Build(), path, 2);
             SnapshotStore.ValidateChecksum(path);
             var loaded = SnapshotStore.Load(path);
             Assert.False(loaded.HasIdentity);

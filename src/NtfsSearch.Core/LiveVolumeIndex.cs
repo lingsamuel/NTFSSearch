@@ -1,12 +1,14 @@
-using System.Collections.Immutable;
-
 namespace NtfsSearch.Core;
 
 // 单卷单写者；发布出来的记录、名称、位图与目录表均不再修改。
 public sealed class LiveVolumeIndex
 {
-    internal sealed record DirectoryNode(ulong Parent, string Name, string? RootPath = null, bool Deleted = false);
-    internal ImmutableDictionary<ulong, DirectoryNode> DirectoryGraph { get; private set; }
+    internal readonly record struct DirectoryNode(ulong Parent, ReadOnlyMemory<char> Name, string? RootPath = null, bool Deleted = false)
+    {
+        internal bool SameValue(DirectoryNode other) => Parent == other.Parent && Deleted == other.Deleted
+            && RootPath == other.RootPath && Name.Span.SequenceEqual(other.Name.Span);
+    }
+    internal DirectoryGraph DirectoryGraph { get; private set; }
     private DirectoryAncestryFilter? ancestryFilter;
     private SearchIndex[] layers;
     public IReadOnlyList<SearchIndex> Layers => Array.AsReadOnly(Volatile.Read(ref layers));
@@ -17,21 +19,7 @@ public sealed class LiveVolumeIndex
     {
         if (!baseIndex.HasIdentity) throw new ArgumentException("实时索引要求包含完整文件身份的基线。", nameof(baseIndex));
         layers = [baseIndex]; Position = position;
-        var graph = ImmutableDictionary.CreateBuilder<ulong, DirectoryNode>();
-        for (int id = 0; id < baseIndex.Count; id++)
-        {
-            if ((id & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
-            ref readonly var record = ref baseIndex.Records[id];
-            if (record.IsDirectory && baseIndex.IsVisible(id))
-                graph[baseIndex.FileReferences![id]] = new(baseIndex.DirectoryReferences![record.Directory], baseIndex.Name(id).ToString());
-        }
-        for (int d = 0; d < baseIndex.Directories.Length; d++)
-        {
-            if ((d & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
-            if (!graph.ContainsKey(baseIndex.DirectoryReferences![d]))
-                graph[baseIndex.DirectoryReferences[d]] = new(0, "", baseIndex.Directories[d]);
-        }
-        DirectoryGraph = graph.ToImmutable();
+        DirectoryGraph = DirectoryGraph.Create(baseIndex, cancellationToken);
     }
 
     public bool Apply(CommittedChange change, CancellationToken token = default)
@@ -80,7 +68,7 @@ public sealed class LiveVolumeIndex
         foreach (ulong reference in replaced)
             if (graph.ContainsKey(reference))
             {
-                graph = graph.SetItem(reference, new(0, "", Deleted: true)); changedDirectories.Add(reference);
+                graph = graph.SetItem(reference, new(0, ReadOnlyMemory<char>.Empty, Deleted: true)); changedDirectories.Add(reference);
             }
         foreach (var file in changedFiles)
         {
@@ -90,9 +78,9 @@ public sealed class LiveVolumeIndex
                 && existing.RootPath is null;
             if (!file.IsDirectory && !deletedDirectory) continue;
             var node = file.Links.Count == 0
-                ? new DirectoryNode(0, "", Deleted: true)
-                : new DirectoryNode(file.Links[0].ParentReference, file.Links[0].Name);
-            if (!graph.TryGetValue(file.FileReference, out var previous) || previous != node)
+                ? new DirectoryNode(0, ReadOnlyMemory<char>.Empty, Deleted: true)
+                : new DirectoryNode(file.Links[0].ParentReference, file.Links[0].Name.AsMemory());
+            if (!graph.TryGetValue(file.FileReference, out var previous) || !previous.SameValue(node))
             {
                 graph = graph.SetItem(file.FileReference, node); changedDirectories.Add(file.FileReference);
             }
@@ -100,7 +88,7 @@ public sealed class LiveVolumeIndex
         foreach (var file in changedFiles)
             foreach (var link in file.Links)
                 if (!graph.ContainsKey(link.ParentReference))
-                    graph = graph.SetItem(link.ParentReference, new(0, "", Normalize(link.ParentPath)));
+                    graph = graph.SetItem(link.ParentReference, new(0, ReadOnlyMemory<char>.Empty, Normalize(link.ParentPath)));
         changedDirectories.RemoveWhere(reference => !DirectoryGraph.ContainsKey(reference));
         if (changedDirectories.Count > 0)
         {
@@ -187,20 +175,24 @@ public sealed class LiveVolumeIndex
                 if (layer.IsVisible(id)) links.Add((layer, id));
         if (links.Count != file.Links.Count) return false;
         var remaining = file.Links.ToList();
+        Span<char> scratch = stackalloc char[255];
         foreach (var (index, id) in links)
         {
             var r = index.Records[id];
-            if (r.IsDirectory != file.IsDirectory || (r.HasSize ? r.Size : (long?)null) != (file.IsDirectory ? null : file.Size)
+            if (r.IsDirectory != file.IsDirectory || (r.HasSize ? index.Size(id) : (long?)null) != (file.IsDirectory ? null : file.Size)
                 || (r.HasModified ? r.Modified : (long?)null) != file.ModifiedUtcTicks) return false;
-            int found = remaining.FindIndex(l => l.ParentReference == index.DirectoryReferences![r.Directory]
-                && index.Name(id).SequenceEqual(l.Name.AsSpan()));
+            int found = -1;
+            var name = index.Name(id, scratch);
+            for (int link = 0; link < remaining.Count; link++)
+                if (remaining[link].ParentReference == index.DirectoryReferences![r.Directory] && name.SequenceEqual(remaining[link].Name.AsSpan()))
+                { found = link; break; }
             if (found < 0) return false;
             remaining.RemoveAt(found);
         }
         return true;
     }
 
-    private static string? ResolveDirectory(ulong reference, ImmutableDictionary<ulong, DirectoryNode> graph,
+    private static string? ResolveDirectory(ulong reference, DirectoryGraph graph,
         Dictionary<ulong, string?> resolved, CancellationToken token)
     {
         if (resolved.TryGetValue(reference, out var cached)) return cached;
@@ -217,7 +209,7 @@ public sealed class LiveVolumeIndex
         }
         for (int i = chain.Count - 1; i >= 0; i--)
         {
-            path = path is null ? null : path + graph[chain[i]].Name + "\\";
+            path = path is null ? null : string.Concat(path.AsSpan(), graph[chain[i]].Name.Span, "\\".AsSpan());
             resolved[chain[i]] = path;
         }
         resolved[reference] = path; return path;
@@ -226,13 +218,14 @@ public sealed class LiveVolumeIndex
     private static SearchIndex Merge(SearchIndex left, SearchIndex right, CancellationToken token)
     {
         var builder = new IndexBuilder(checked(left.VisibleCount + right.VisibleCount));
+        Span<char> scratch = stackalloc char[255];
         foreach (var index in new[] { left, right })
             for (int id = 0; id < index.Count; id++)
             {
                 if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
                 if (!index.IsVisible(id)) continue;
                 ref readonly var r = ref index.Records[id];
-                builder.Add(index.Directories[r.Directory], index.Name(id), r.HasSize ? r.Size : null,
+                builder.Add(index.Directories[r.Directory], index.Name(id, scratch), r.HasSize ? index.Size(id) : null,
                     r.HasModified ? r.Modified : null, r.IsDirectory, index.FileReferences![id], index.DirectoryReferences![r.Directory]);
             }
         return builder.Build(token);
@@ -245,7 +238,7 @@ public sealed class LiveVolumeIndex
     }
     public static LiveVolumeIndex LoadCheckpoint(SearchIndex baseIndex, string path, CancellationToken token = default)
         => LiveViewStore.Load(baseIndex, path, token);
-    internal LiveVolumeIndex(SearchIndex[] restored, ImmutableDictionary<ulong, DirectoryNode> graph, long sequence, JournalPosition? position)
+    internal LiveVolumeIndex(SearchIndex[] restored, DirectoryGraph graph, long sequence, JournalPosition? position)
     {
         layers = restored; DirectoryGraph = graph; AppliedSequence = sequence; Position = position;
     }

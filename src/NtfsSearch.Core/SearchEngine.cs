@@ -61,13 +61,20 @@ public sealed partial class SearchIndex
             }
         }
 
+        var asciiTerms = terms.Select(AsciiQuery.Encode).ToArray();
+        var asciiSuffixes = suffixes.Select(AsciiQuery.Encode).ToArray();
         int words = (int)(((long)Count + 63) / 64);
         var bits = ArrayPool<ulong>.Shared.Rent(Math.Max(words, 1));
         long total = 0;
+        byte[]? memo = null;
         try
         {
+            bool prefixPredicate = terms[0].Contains('\\');
+            if (!prefixPredicate || suffixes[0].Length != 0)
+                memo = Names.TryRentWorkspace(prefixPredicate ? suffixes[0] : terms[0], prefixPredicate);
             void Scan(int from, int to)
             {
+                Span<char> scratch = stackalloc char[255];
                 long local = 0;
                 for (int w = from; w < to; w++)
                 {
@@ -83,10 +90,14 @@ public sealed partial class SearchIndex
                         {
                             byte state = states[t][record.Directory];
                             if (state == 1) continue;
-                            if (state == 3 || (state == 2
-                                ? !Name(id).StartsWith(suffixes[t], StringComparison.OrdinalIgnoreCase)
-                                : !Name(id).Contains(terms[t], StringComparison.OrdinalIgnoreCase)))
-                            { matches = false; break; }
+                            if (state == 3) { matches = false; break; }
+                            byte cached = t == 0 && memo is not null ? memo[record.NameId] : (byte)0;
+                            if (cached != 0) { if (cached == 1) { matches = false; break; } continue; }
+                            bool found = state == 2
+                                ? Names.Matches(record.NameId, suffixes[t], asciiSuffixes[t], true, scratch)
+                                : Names.Matches(record.NameId, terms[t], asciiTerms[t], false, scratch);
+                            if (t == 0 && memo is not null) memo[record.NameId] = found ? (byte)2 : (byte)1;
+                            if (!found) { matches = false; break; }
                         }
                         if (matches) mask |= 1UL << (id - first);
                     }
@@ -104,6 +115,7 @@ public sealed partial class SearchIndex
             return new(this, bits, total);
         }
         catch { ArrayPool<ulong>.Shared.Return(bits); throw; }
+        finally { if (memo is not null) Names.ReturnWorkspace(); }
     }
 
     internal IEnumerable<int> EnumerateMatches(ulong[]? bits, long total, SortField sort, bool descending, CancellationToken token)

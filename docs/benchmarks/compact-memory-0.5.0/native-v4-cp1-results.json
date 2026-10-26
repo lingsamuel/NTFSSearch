@@ -1,0 +1,132 @@
+{
+  "CoreVersion": "0.5.0.0",
+  "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+  "Layout": "20B_UTF16_POH",
+  "LoadedRows": 34414502,
+  "Source": "H:\\Temp\\ntfs-native-v4-20261026\\Data",
+  "Rows": 34414505,
+  "Reports": [
+    {
+      "Phase": "loaded_without_forced_gc",
+      "LiveRows": 34414502,
+      "ElapsedSeconds": 38.9317898,
+      "AllocatedBytes": 4882177160,
+      "ManagedBytes": 3827298712,
+      "WorkingSet": 3906899968,
+      "Private": 3944488960,
+      "GCHeap": 3691966376,
+      "GCCommitted": 3748126720,
+      "Fragmented": 10588344,
+      "Generations": [
+        {
+          "Generation": 0,
+          "SizeAfterBytes": 0,
+          "FragmentationAfterBytes": 0
+        },
+        {
+          "Generation": 1,
+          "SizeAfterBytes": 25533480,
+          "FragmentationAfterBytes": 541152
+        },
+        {
+          "Generation": 2,
+          "SizeAfterBytes": 832839544,
+          "FragmentationAfterBytes": 8911424
+        },
+        {
+          "Generation": 3,
+          "SizeAfterBytes": 90187840,
+          "FragmentationAfterBytes": 917760
+        },
+        {
+          "Generation": 4,
+          "SizeAfterBytes": 2743405512,
+          "FragmentationAfterBytes": 218008
+        }
+      ]
+    },
+    {
+      "Phase": "live_after_diagnostic_gc",
+      "LiveRows": 34414502,
+      "ElapsedSeconds": 39.3087074,
+      "AllocatedBytes": 4882184720,
+      "ManagedBytes": 3748364904,
+      "WorkingSet": 3897532416,
+      "Private": 3917574144,
+      "GCHeap": 3815148416,
+      "GCCommitted": 3854508032,
+      "Fragmented": 66799960,
+      "Generations": [
+        {
+          "Generation": 0,
+          "SizeAfterBytes": 0,
+          "FragmentationAfterBytes": 0
+        },
+        {
+          "Generation": 1,
+          "SizeAfterBytes": 0,
+          "FragmentationAfterBytes": 0
+        },
+        {
+          "Generation": 2,
+          "SizeAfterBytes": 870602408,
+          "FragmentationAfterBytes": 15808592
+        },
+        {
+          "Generation": 3,
+          "SizeAfterBytes": 90389712,
+          "FragmentationAfterBytes": 48822424
+        },
+        {
+          "Generation": 4,
+          "SizeAfterBytes": 2854156296,
+          "FragmentationAfterBytes": 2168944
+        }
+      ]
+    },
+    {
+      "Phase": "three_unrelated_directory_creates_in_memory",
+      "AllocatedBytes": 38128,
+      "Seconds": 0.0009406
+    },
+    {
+      "Phase": "after_three_changes_without_forced_gc",
+      "LiveRows": 34414505,
+      "ElapsedSeconds": 39.3318511,
+      "AllocatedBytes": 4882227752,
+      "ManagedBytes": 3748405944,
+      "WorkingSet": 3897585664,
+      "Private": 3917574144,
+      "GCHeap": 3815148416,
+      "GCCommitted": 3854508032,
+      "Fragmented": 66799960,
+      "Generations": [
+        {
+          "Generation": 0,
+          "SizeAfterBytes": 0,
+          "FragmentationAfterBytes": 0
+        },
+        {
+          "Generation": 1,
+          "SizeAfterBytes": 0,
+          "FragmentationAfterBytes": 0
+        },
+        {
+          "Generation": 2,
+          "SizeAfterBytes": 870602408,
+          "FragmentationAfterBytes": 15808592
+        },
+        {
+          "Generation": 3,
+          "SizeAfterBytes": 90389712,
+          "FragmentationAfterBytes": 48822424
+        },
+        {
+          "Generation": 4,
+          "SizeAfterBytes": 2854156296,
+          "FragmentationAfterBytes": 2168944
+        }
+      ]
+    }
+  ]
+}

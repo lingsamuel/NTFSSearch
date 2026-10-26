@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -7,16 +8,52 @@ using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheDirectory = null) : IAutomaticVolumeBackend
+internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
 {
-    private readonly VolumeCache cache = new(cacheDirectory ?? PortableDataDirectory.Resolve());
-    private readonly LiveIndexFeed liveFeed = new(cacheDirectory ?? PortableDataDirectory.Resolve());
+    private readonly Dispatcher dispatcher;
+    private readonly string? cacheDirectory;
+    private readonly VolumeCache cache;
+    private readonly LiveIndexFeed liveFeed;
+    private readonly SnapshotFormatMaintenance snapshotFormats;
+
+    public WindowsVolumeBackend(Dispatcher dispatcher, string? cacheDirectory = null)
+    {
+        this.dispatcher = dispatcher; this.cacheDirectory = cacheDirectory;
+        cache = new(cacheDirectory ?? PortableDataDirectory.Resolve());
+        liveFeed = new(cache.DirectoryPath); snapshotFormats = new(cache);
+    }
+
     private readonly object migrationGate = new();
     private Task<CacheMigrationResult>? migration;
     public event Action<LiveIndexUpdate>? LiveUpdated;
+    private readonly ConcurrentDictionary<string, string> publishedGenerations = new(StringComparer.Ordinal);
+    private NtfsVolume[] lastDiscoveredVolumes = [];
     private CollectorMetrics? metrics;
     public CollectorMetrics? Metrics => Volatile.Read(ref metrics);
     public int LiveVolumeCount => liveFeed.ActiveVolumeCount;
+    // 仅供全量诊断准入；正式界面仍即时展示可用的旧基线。
+    internal bool AuditCanFinish
+    {
+        get
+        {
+            var volumes = Volatile.Read(ref lastDiscoveredVolumes);
+            if (!FullAuditReadiness.CanFinish(volumes.Length, LiveVolumeCount, Metrics?.ActiveRoots.Length)) return false;
+            try
+            {
+                foreach (var volume in volumes)
+                {
+                    string key = VolumeCache.Key(volume);
+                    publishedGenerations.TryGetValue(key, out var published);
+                    var repair = new FileInfo(Path.Combine(cache.DirectoryPath, key + ".rebuild.json"));
+                    DateTime? requested = repair.Exists ? repair.LastWriteTimeUtc : null;
+                    if (!FullAuditReadiness.VolumeReady(cache.CurrentManifest(volume), published, requested)) return false;
+                }
+                return true;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+        }
+    }
+
     private readonly string session = Guid.NewGuid().ToString("N");
     private Process? launchedCollector;
     private bool expectingCollector, suspended, permissionRefused;
@@ -43,6 +80,10 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheD
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException) { }
         var volumes = VolumeDiscovery.Discover();
         liveFeed.RemoveExcept(volumes);
+        Volatile.Write(ref lastDiscoveredVolumes, volumes.ToArray());
+        var keys = volumes.Select(VolumeCache.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (string key in publishedGenerations.Keys)
+            if (!keys.Contains(key)) publishedGenerations.TryRemove(key, out _);
         return volumes;
     }
     public string CacheRevision(NtfsVolume volume) => cache.Revision(volume);
@@ -61,7 +102,9 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheD
         var loaded = await Task.Run(() => cache.Load(volume, token,
             new Progress<string>(message => Progress?.Invoke(volume.Root + " " + message))), token);
         if (loaded is null) return null;
-        return loaded with { Layers = await liveFeed.AttachAsync(volume, loaded, token) };
+        var layers = await liveFeed.AttachAsync(volume, loaded, token);
+        snapshotFormats.Enqueue(volume, loaded);
+        return loaded with { Layers = layers };
     }
 
     private async Task<CacheMigrationResult> MigrateLegacyAsync(CancellationToken token)
@@ -74,7 +117,7 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheD
         return result;
     }
 
-    public Task RunLiveAsync(CancellationToken token)
+    public async Task RunLiveAsync(CancellationToken token)
     {
         liveFeed.Updated += update => LiveUpdated?.Invoke(update);
         liveFeed.Failed += (volume, message) =>
@@ -82,10 +125,21 @@ internal sealed class WindowsVolumeBackend(Dispatcher dispatcher, string? cacheD
             Progress?.Invoke(volume.Root + " " + message);
             try { RequestRebuild(volume, message); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         };
-        return liveFeed.RunAsync(token);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var encoding = snapshotFormats.RunAsync(lifetime.Token);
+        try { await liveFeed.RunAsync(token); }
+        finally
+        {
+            lifetime.Cancel();
+            try { await encoding; } catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        }
     }
 
-    public void OnPublished(NtfsVolume volume, string? generation) => liveFeed.Activate(volume, generation);
+    public void OnPublished(NtfsVolume volume, string? generation)
+    {
+        if (generation is not null && liveFeed.Activate(volume, generation))
+            publishedGenerations[VolumeCache.Key(volume)] = generation;
+    }
 
     public async Task EnsureCollectorAsync(CancellationToken token)
     {

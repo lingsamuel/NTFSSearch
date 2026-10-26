@@ -1,0 +1,839 @@
+{
+  "layout": "20B_UTF16_POH",
+  "sourceUnchanged": true,
+  "originalSourceFiles": 189,
+  "baselineRows": 34408942,
+  "loadedRows": 34414502,
+  "oldCp1BaselineAndLiveVerified": [
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "H:\\",
+      "SnapshotFile": "11AA4CA82E49A838D206F5A4.67bdb5b5380d430bb91dbd231956a0d4.ntidx",
+      "BaselineRows": 4712245,
+      "OriginalSnapshotBytes": 595906855,
+      "CompactSnapshotBytes": 465428470,
+      "Canonical": "C69EFD5FC37E3EC71AA5A690F93A2C93CB5133679E3A0D090ACBFBA5B9C4A5BF",
+      "LegacyFingerprint": "CD56341CE7FC11E4763B2221B0BAAFD3A31DC1C25AA700B938B070E747870662",
+      "LiveDigest": "E3BFC7594F44DF2D8740CE1ED4700BC0F9AB68C7A9AB57D7FA9A15475A3EA407",
+      "LiveRows": 4712606,
+      "AppliedSequence": 798,
+      "Position": {
+        "JournalId": 131779422321705405,
+        "NextUsn": 272773559864
+      },
+      "CheckpointSequence": 797,
+      "Replayed": 1,
+      "Layers": 5,
+      "GraphOverrides": 206,
+      "Seconds": 17.3266923,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "J:\\",
+      "SnapshotFile": "16EAC3ECD5BD24DEC89AC3C1.716e0f0c9c50490880138ea2215f24de.ntidx",
+      "BaselineRows": 1796896,
+      "OriginalSnapshotBytes": 207689949,
+      "CompactSnapshotBytes": 163685014,
+      "Canonical": "DC76509380414A723AD75B06954130641600AB98225B4CB39B161357275A4A23",
+      "LegacyFingerprint": "34D10A9689D762960FE2CE938F64722FB3C114ABC2F8CE08FF52742F5A7E32F4",
+      "LiveDigest": "5E1D5082E5516F374279B362AF80C8BCEF97E36056AB8B6E31EAF273A7CE0A91",
+      "LiveRows": 1796896,
+      "AppliedSequence": 3,
+      "Position": {
+        "JournalId": 133302556235008133,
+        "NextUsn": 1607489256
+      },
+      "CheckpointSequence": 3,
+      "Replayed": 0,
+      "Layers": 1,
+      "GraphOverrides": 2,
+      "Seconds": 4.4805074,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "K:\\",
+      "SnapshotFile": "1BDC2BDEA2126F6CDAB43289.125acf1c016b4063b515ac838fefd0b9.ntidx",
+      "BaselineRows": 1036457,
+      "OriginalSnapshotBytes": 130324689,
+      "CompactSnapshotBytes": 101713380,
+      "Canonical": "22A95E96F2306AD66767E989E449F61161D5F1ED93125368197C68848A7EC00D",
+      "LegacyFingerprint": "E47E5EA45D7C0499B26D6F4A7D85DA5583BBF2CCB5B89FA55F51CA70B6B4F288",
+      "LiveDigest": "386CE82011923D10F4C674B8695B540951791CCAC28146306D5A072624B2A75F",
+      "LiveRows": 1036455,
+      "AppliedSequence": 8,
+      "Position": {
+        "JournalId": 133939942325560118,
+        "NextUsn": 4011697168
+      },
+      "CheckpointSequence": 8,
+      "Replayed": 0,
+      "Layers": 2,
+      "GraphOverrides": 3,
+      "Seconds": 2.9015647,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "D:\\",
+      "SnapshotFile": "33BE767FF626ADE31E92A4B1.4997a38a76ee4770a489109c7915a596.ntidx",
+      "BaselineRows": 6106982,
+      "OriginalSnapshotBytes": 805323791,
+      "CompactSnapshotBytes": 714866482,
+      "Canonical": "EC2EC18730CF4A7B6295C1E5F75066168BB234F5E1B9272B8BAB474D846588E0",
+      "LegacyFingerprint": "D2D32F7CCD5D0F1DF8CE9E115F2FB78863E674804908DC543F7DE36E7556FD22",
+      "LiveDigest": "C2FB121EEF0D9AB03924BD59ED9F1EB559BE7FA8BB55D2D01FE8840764BFCB88",
+      "LiveRows": 6108066,
+      "AppliedSequence": 331,
+      "Position": {
+        "JournalId": 133296735913020668,
+        "NextUsn": 25109112368
+      },
+      "CheckpointSequence": 331,
+      "Replayed": 0,
+      "Layers": 6,
+      "GraphOverrides": 73,
+      "Seconds": 26.8755651,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "I:\\",
+      "SnapshotFile": "4F82F8257A9D4B909FF5D594.be1d99197f5d449f96134dc580842dff.ntidx",
+      "BaselineRows": 1497454,
+      "OriginalSnapshotBytes": 198514689,
+      "CompactSnapshotBytes": 160969428,
+      "Canonical": "F2FDD71E39CF16232A716C471F89FE7EF506D17171C8D1E2D517FC19255E020D",
+      "LegacyFingerprint": "9E6AAE7065FDB4D261A82B94618DC6FB0D37D7B20D8A4F67677BDB7F35DC396B",
+      "LiveDigest": "70981E3DACC9CC1D3429135C6733F42D2B50543AA365A5319C0AD10C72E07581",
+      "LiveRows": 1497454,
+      "AppliedSequence": 3,
+      "Position": {
+        "JournalId": 133302238399207174,
+        "NextUsn": 2120855344
+      },
+      "CheckpointSequence": 3,
+      "Replayed": 0,
+      "Layers": 2,
+      "GraphOverrides": 2,
+      "Seconds": 5.0926186,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "F:\\",
+      "SnapshotFile": "9405DCA923EBD92F25AC2653.64a2f0c476be470d8a06eac2076dd3d6.ntidx",
+      "BaselineRows": 3426560,
+      "OriginalSnapshotBytes": 386338087,
+      "CompactSnapshotBytes": 331827794,
+      "Canonical": "E75C3D49D90D84BDA32F38C0B1A5CA3970A9C485EC8BA47FA60B75D5418D2CFE",
+      "LegacyFingerprint": "A3A1D49EEA975BD8AD66199E967E01EE31D45E4CF84D3C7AA67C595283D55055",
+      "LiveDigest": "C219526C356A10C31AC87B5C7C2C8E9806A5B3933EF1A0F61553E1C28B97BE81",
+      "LiveRows": 3426560,
+      "AppliedSequence": 35,
+      "Position": {
+        "JournalId": 132962553567301116,
+        "NextUsn": 10097981856
+      },
+      "CheckpointSequence": 35,
+      "Replayed": 0,
+      "Layers": 2,
+      "GraphOverrides": 2,
+      "Seconds": 9.2338161,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "G:\\",
+      "SnapshotFile": "9A3D06851656FBC5A1BBBA50.6422fe91c4984371ac3e6e6364893bbc.ntidx",
+      "BaselineRows": 6528065,
+      "OriginalSnapshotBytes": 777793043,
+      "CompactSnapshotBytes": 653285064,
+      "Canonical": "2C86CD53A6A6765643F1C37A2309AD1D7BB6FF8D1153EDD6395847C4A27D3A45",
+      "LegacyFingerprint": "4C7C0B125D921BA97D3EDC05466A9C6B6CBC78563952106C24B57D247B1AEDA2",
+      "LiveDigest": "2D261A716A8D05DA0B0679614C4DF1708000B9675E0E990D1BE3BED49788FF5E",
+      "LiveRows": 6528066,
+      "AppliedSequence": 12,
+      "Position": {
+        "JournalId": 133124697551879220,
+        "NextUsn": 15680417632
+      },
+      "CheckpointSequence": 12,
+      "Replayed": 0,
+      "Layers": 2,
+      "GraphOverrides": 3,
+      "Seconds": 19.3390428,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "C:\\",
+      "SnapshotFile": "A1009547D24B1B761C4E648E.acf714d29e42473e845b0fd5a7975007.ntidx",
+      "BaselineRows": 7689757,
+      "OriginalSnapshotBytes": 1081233363,
+      "CompactSnapshotBytes": 847716150,
+      "Canonical": "C10AA8530C50C02349D51A10F271E28B90386B8B6D878A04224D8AD4534BCE93",
+      "LegacyFingerprint": "4EF571384B3339F699B20EEA488487254DB235963AFB5B4ECE777CF3F605DCC4",
+      "LiveDigest": "915D5D1BA43DE158E2B4B5A12EC85478CACC695750BD4A135A8022EF8CE6E3EB",
+      "LiveRows": 7693600,
+      "AppliedSequence": 1692,
+      "Position": {
+        "JournalId": 131779422321705405,
+        "NextUsn": 334510181824
+      },
+      "CheckpointSequence": 1689,
+      "Replayed": 3,
+      "Layers": 7,
+      "GraphOverrides": 210,
+      "Seconds": 31.5594977,
+      "OldCheckpointMagic": "NTSLIVE1"
+    },
+    {
+      "Mode": "convert",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "E:\\",
+      "SnapshotFile": "F8287E5B0282FFD4B33C68BA.2abfda7d9d34420b837a6f708b777fb2.ntidx",
+      "BaselineRows": 1614526,
+      "OriginalSnapshotBytes": 214867565,
+      "CompactSnapshotBytes": 172764278,
+      "Canonical": "F9C5FDAEE88750B9D77EA12FE568412C6D3F2E22415DBFEBB74B974B2B37F88C",
+      "LegacyFingerprint": "EB38E8045FBC32237A84CB6F45307BFF6BCE656F72E30FE7B3320DF9233F5B88",
+      "LiveDigest": "BF8F7E3E7318246FFDE9F2AC5F4DD967E8EF273526603DEEAC8A446FA73C7384",
+      "LiveRows": 1614799,
+      "AppliedSequence": 3,
+      "Position": {
+        "JournalId": 133124697547510142,
+        "NextUsn": 5401403928
+      },
+      "CheckpointSequence": 3,
+      "Replayed": 0,
+      "Layers": 2,
+      "GraphOverrides": 44,
+      "Seconds": 5.8336446,
+      "OldCheckpointMagic": "NTSLIVE1"
+    }
+  ],
+  "cp2Verified": [
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "H:\\",
+      "SnapshotFile": "11AA4CA82E49A838D206F5A4.67bdb5b5380d430bb91dbd231956a0d4.ntidx",
+      "LiveRows": 4712606,
+      "LiveDigest": "E3BFC7594F44DF2D8740CE1ED4700BC0F9AB68C7A9AB57D7FA9A15475A3EA407",
+      "AppliedSequence": 798,
+      "Position": {
+        "JournalId": 131779422321705405,
+        "NextUsn": 272773559864
+      },
+      "CheckpointSequence": 798,
+      "Replayed": 0,
+      "CheckpointBytes": 101709622,
+      "OldCheckpointBytes": 127689834,
+      "GraphOverrides": 206,
+      "Seconds": 10.3793367
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "J:\\",
+      "SnapshotFile": "16EAC3ECD5BD24DEC89AC3C1.716e0f0c9c50490880138ea2215f24de.ntidx",
+      "LiveRows": 1796896,
+      "LiveDigest": "5E1D5082E5516F374279B362AF80C8BCEF97E36056AB8B6E31EAF273A7CE0A91",
+      "AppliedSequence": 3,
+      "Position": {
+        "JournalId": 133302556235008133,
+        "NextUsn": 1607489256
+      },
+      "CheckpointSequence": 3,
+      "Replayed": 0,
+      "CheckpointBytes": 23320514,
+      "OldCheckpointBytes": 28440664,
+      "GraphOverrides": 2,
+      "Seconds": 2.7373165
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "K:\\",
+      "SnapshotFile": "1BDC2BDEA2126F6CDAB43289.125acf1c016b4063b515ac838fefd0b9.ntidx",
+      "LiveRows": 1036455,
+      "LiveDigest": "386CE82011923D10F4C674B8695B540951791CCAC28146306D5A072624B2A75F",
+      "AppliedSequence": 8,
+      "Position": {
+        "JournalId": 133939942325560118,
+        "NextUsn": 4011697168
+      },
+      "CheckpointSequence": 8,
+      "Replayed": 0,
+      "CheckpointBytes": 23354683,
+      "OldCheckpointBytes": 28125965,
+      "GraphOverrides": 3,
+      "Seconds": 2.3201658
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "D:\\",
+      "SnapshotFile": "33BE767FF626ADE31E92A4B1.4997a38a76ee4770a489109c7915a596.ntidx",
+      "LiveRows": 6108066,
+      "LiveDigest": "C2FB121EEF0D9AB03924BD59ED9F1EB559BE7FA8BB55D2D01FE8840764BFCB88",
+      "AppliedSequence": 331,
+      "Position": {
+        "JournalId": 133296735913020668,
+        "NextUsn": 25109112368
+      },
+      "CheckpointSequence": 331,
+      "Replayed": 0,
+      "CheckpointBytes": 215210125,
+      "OldCheckpointBytes": 267572079,
+      "GraphOverrides": 73,
+      "Seconds": 18.8032651
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "I:\\",
+      "SnapshotFile": "4F82F8257A9D4B909FF5D594.be1d99197f5d449f96134dc580842dff.ntidx",
+      "LiveRows": 1497454,
+      "LiveDigest": "70981E3DACC9CC1D3429135C6733F42D2B50543AA365A5319C0AD10C72E07581",
+      "AppliedSequence": 3,
+      "Position": {
+        "JournalId": 133302238399207174,
+        "NextUsn": 2120855344
+      },
+      "CheckpointSequence": 3,
+      "Replayed": 0,
+      "CheckpointBytes": 42085089,
+      "OldCheckpointBytes": 52451541,
+      "GraphOverrides": 2,
+      "Seconds": 3.0342004
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "F:\\",
+      "SnapshotFile": "9405DCA923EBD92F25AC2653.64a2f0c476be470d8a06eac2076dd3d6.ntidx",
+      "LiveRows": 3426560,
+      "LiveDigest": "C219526C356A10C31AC87B5C7C2C8E9806A5B3933EF1A0F61553E1C28B97BE81",
+      "AppliedSequence": 35,
+      "Position": {
+        "JournalId": 132962553567301116,
+        "NextUsn": 10097981856
+      },
+      "CheckpointSequence": 35,
+      "Replayed": 0,
+      "CheckpointBytes": 33056165,
+      "OldCheckpointBytes": 39658589,
+      "GraphOverrides": 2,
+      "Seconds": 5.4298884
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "G:\\",
+      "SnapshotFile": "9A3D06851656FBC5A1BBBA50.6422fe91c4984371ac3e6e6364893bbc.ntidx",
+      "LiveRows": 6528066,
+      "LiveDigest": "2D261A716A8D05DA0B0679614C4DF1708000B9675E0E990D1BE3BED49788FF5E",
+      "AppliedSequence": 12,
+      "Position": {
+        "JournalId": 133124697551879220,
+        "NextUsn": 15680417632
+      },
+      "CheckpointSequence": 12,
+      "Replayed": 0,
+      "CheckpointBytes": 115627429,
+      "OldCheckpointBytes": 146372647,
+      "GraphOverrides": 3,
+      "Seconds": 11.5564634
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "C:\\",
+      "SnapshotFile": "A1009547D24B1B761C4E648E.acf714d29e42473e845b0fd5a7975007.ntidx",
+      "LiveRows": 7693600,
+      "LiveDigest": "915D5D1BA43DE158E2B4B5A12EC85478CACC695750BD4A135A8022EF8CE6E3EB",
+      "AppliedSequence": 1692,
+      "Position": {
+        "JournalId": 131779422321705405,
+        "NextUsn": 334510181824
+      },
+      "CheckpointSequence": 1692,
+      "Replayed": 0,
+      "CheckpointBytes": 161001496,
+      "OldCheckpointBytes": 205931479,
+      "GraphOverrides": 210,
+      "Seconds": 17.6500361
+    },
+    {
+      "Mode": "cp2",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Root": "E:\\",
+      "SnapshotFile": "F8287E5B0282FFD4B33C68BA.2abfda7d9d34420b837a6f708b777fb2.ntidx",
+      "LiveRows": 1614799,
+      "LiveDigest": "BF8F7E3E7318246FFDE9F2AC5F4DD967E8EF273526603DEEAC8A446FA73C7384",
+      "AppliedSequence": 3,
+      "Position": {
+        "JournalId": 133124697547510142,
+        "NextUsn": 5401403928
+      },
+      "CheckpointSequence": 3,
+      "Replayed": 0,
+      "CheckpointBytes": 49502579,
+      "OldCheckpointBytes": 60021051,
+      "GraphOverrides": 44,
+      "Seconds": 3.3981985
+    }
+  ],
+  "profiles": {
+    "v3-cp1": {
+      "CoreVersion": "0.5.0.0",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Layout": "20B_UTF16_POH",
+      "LoadedRows": 34414502,
+      "Source": "H:\\Temp\\ntfs-live-full-4jrn80xg\\Data",
+      "Rows": 34414505,
+      "Reports": [
+        {
+          "Phase": "loaded_without_forced_gc",
+          "LiveRows": 34414502,
+          "ElapsedSeconds": 49.7675181,
+          "AllocatedBytes": 6372832624,
+          "ManagedBytes": 3821063464,
+          "WorkingSet": 4206682112,
+          "Private": 4215083008,
+          "GCHeap": 4046381376,
+          "GCCommitted": 4086775808,
+          "Fragmented": 333663440,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 16184016,
+              "FragmentationAfterBytes": 8379960
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 25532752,
+              "FragmentationAfterBytes": 540368
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 830873904,
+              "FragmentationAfterBytes": 8931944
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 379438072,
+              "FragmentationAfterBytes": 309519640
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2794352632,
+              "FragmentationAfterBytes": 6291528
+            }
+          ]
+        },
+        {
+          "Phase": "live_after_diagnostic_gc",
+          "LiveRows": 34414502,
+          "ElapsedSeconds": 50.0842325,
+          "AllocatedBytes": 6372838840,
+          "ManagedBytes": 3748344392,
+          "WorkingSet": 4168302592,
+          "Private": 4173336576,
+          "GCHeap": 3903173824,
+          "GCCommitted": 3946307584,
+          "Fragmented": 154837656,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 872615792,
+              "FragmentationAfterBytes": 17834264
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 178570680,
+              "FragmentationAfterBytes": 137003392
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2851987352,
+              "FragmentationAfterBytes": 0
+            }
+          ]
+        },
+        {
+          "Phase": "three_unrelated_directory_creates_in_memory",
+          "AllocatedBytes": 38128,
+          "Seconds": 0.0013006
+        },
+        {
+          "Phase": "after_three_changes_without_forced_gc",
+          "LiveRows": 34414505,
+          "ElapsedSeconds": 50.1071898,
+          "AllocatedBytes": 6372883216,
+          "ManagedBytes": 3748393656,
+          "WorkingSet": 4168368128,
+          "Private": 4173336576,
+          "GCHeap": 3903173824,
+          "GCCommitted": 3946307584,
+          "Fragmented": 154837656,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 872615792,
+              "FragmentationAfterBytes": 17834264
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 178570680,
+              "FragmentationAfterBytes": 137003392
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2851987352,
+              "FragmentationAfterBytes": 0
+            }
+          ]
+        }
+      ]
+    },
+    "v4-cp1": {
+      "CoreVersion": "0.5.0.0",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Layout": "20B_UTF16_POH",
+      "LoadedRows": 34414502,
+      "Source": "H:\\Temp\\ntfs-native-v4-20261026\\Data",
+      "Rows": 34414505,
+      "Reports": [
+        {
+          "Phase": "loaded_without_forced_gc",
+          "LiveRows": 34414502,
+          "ElapsedSeconds": 38.9317898,
+          "AllocatedBytes": 4882177160,
+          "ManagedBytes": 3827298712,
+          "WorkingSet": 3906899968,
+          "Private": 3944488960,
+          "GCHeap": 3691966376,
+          "GCCommitted": 3748126720,
+          "Fragmented": 10588344,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 25533480,
+              "FragmentationAfterBytes": 541152
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 832839544,
+              "FragmentationAfterBytes": 8911424
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 90187840,
+              "FragmentationAfterBytes": 917760
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2743405512,
+              "FragmentationAfterBytes": 218008
+            }
+          ]
+        },
+        {
+          "Phase": "live_after_diagnostic_gc",
+          "LiveRows": 34414502,
+          "ElapsedSeconds": 39.3087074,
+          "AllocatedBytes": 4882184720,
+          "ManagedBytes": 3748364904,
+          "WorkingSet": 3897532416,
+          "Private": 3917574144,
+          "GCHeap": 3815148416,
+          "GCCommitted": 3854508032,
+          "Fragmented": 66799960,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 870602408,
+              "FragmentationAfterBytes": 15808592
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 90389712,
+              "FragmentationAfterBytes": 48822424
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2854156296,
+              "FragmentationAfterBytes": 2168944
+            }
+          ]
+        },
+        {
+          "Phase": "three_unrelated_directory_creates_in_memory",
+          "AllocatedBytes": 38128,
+          "Seconds": 0.0009406
+        },
+        {
+          "Phase": "after_three_changes_without_forced_gc",
+          "LiveRows": 34414505,
+          "ElapsedSeconds": 39.3318511,
+          "AllocatedBytes": 4882227752,
+          "ManagedBytes": 3748405944,
+          "WorkingSet": 3897585664,
+          "Private": 3917574144,
+          "GCHeap": 3815148416,
+          "GCCommitted": 3854508032,
+          "Fragmented": 66799960,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 870602408,
+              "FragmentationAfterBytes": 15808592
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 90389712,
+              "FragmentationAfterBytes": 48822424
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2854156296,
+              "FragmentationAfterBytes": 2168944
+            }
+          ]
+        }
+      ]
+    },
+    "v4-cp2": {
+      "CoreVersion": "0.5.0.0",
+      "CoreSha256": "E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422",
+      "Layout": "20B_UTF16_POH",
+      "LoadedRows": 34414502,
+      "Source": "H:\\Temp\\ntfs-native-v4-20261026\\Data",
+      "Rows": 34414505,
+      "Reports": [
+        {
+          "Phase": "loaded_without_forced_gc",
+          "LiveRows": 34414502,
+          "ElapsedSeconds": 37.3837773,
+          "AllocatedBytes": 4842553392,
+          "ManagedBytes": 3824588896,
+          "WorkingSet": 3910787072,
+          "Private": 3933650944,
+          "GCHeap": 3682863456,
+          "GCCommitted": 3697000448,
+          "Fragmented": 36719848,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 50327928,
+              "FragmentationAfterBytes": 25849056
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 816745992,
+              "FragmentationAfterBytes": 9062416
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 78675552,
+              "FragmentationAfterBytes": 1590368
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2737113984,
+              "FragmentationAfterBytes": 218008
+            }
+          ]
+        },
+        {
+          "Phase": "live_after_diagnostic_gc",
+          "LiveRows": 34414502,
+          "ElapsedSeconds": 37.7222683,
+          "AllocatedBytes": 4842560952,
+          "ManagedBytes": 3748345296,
+          "WorkingSet": 3892756480,
+          "Private": 3898097664,
+          "GCHeap": 3833326528,
+          "GCCommitted": 3834736640,
+          "Fragmented": 84993488,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 912029488,
+              "FragmentationAfterBytes": 57251088
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 69237920,
+              "FragmentationAfterBytes": 27670632
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2852059120,
+              "FragmentationAfterBytes": 71768
+            }
+          ]
+        },
+        {
+          "Phase": "three_unrelated_directory_creates_in_memory",
+          "AllocatedBytes": 38864,
+          "Seconds": 0.0135637
+        },
+        {
+          "Phase": "after_three_changes_without_forced_gc",
+          "LiveRows": 34414505,
+          "ElapsedSeconds": 37.7534514,
+          "AllocatedBytes": 4842629344,
+          "ManagedBytes": 3748419016,
+          "WorkingSet": 3893379072,
+          "Private": 3898183680,
+          "GCHeap": 3833326528,
+          "GCCommitted": 3834736640,
+          "Fragmented": 84993488,
+          "Generations": [
+            {
+              "Generation": 0,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 1,
+              "SizeAfterBytes": 0,
+              "FragmentationAfterBytes": 0
+            },
+            {
+              "Generation": 2,
+              "SizeAfterBytes": 912029488,
+              "FragmentationAfterBytes": 57251088
+            },
+            {
+              "Generation": 3,
+              "SizeAfterBytes": 69237920,
+              "FragmentationAfterBytes": 27670632
+            },
+            {
+              "Generation": 4,
+              "SizeAfterBytes": 2852059120,
+              "FragmentationAfterBytes": 71768
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "comparison": [
+    {
+      "phase": "v3-cp1",
+      "loadSeconds": 49.7675181,
+      "allocatedBytes": 6372832624,
+      "privateWithoutForcedGcBytes": 4215083008,
+      "workingSetWithoutForcedGcBytes": 4206682112,
+      "privateAfterDiagnosticGcBytes": 4173336576,
+      "managedLiveAfterDiagnosticGcBytes": 3748344392,
+      "fragmentedAfterDiagnosticGcBytes": 154837656
+    },
+    {
+      "phase": "v4-cp1",
+      "loadSeconds": 38.9317898,
+      "allocatedBytes": 4882177160,
+      "privateWithoutForcedGcBytes": 3944488960,
+      "workingSetWithoutForcedGcBytes": 3906899968,
+      "privateAfterDiagnosticGcBytes": 3917574144,
+      "managedLiveAfterDiagnosticGcBytes": 3748364904,
+      "fragmentedAfterDiagnosticGcBytes": 66799960
+    },
+    {
+      "phase": "v4-cp2",
+      "loadSeconds": 37.3837773,
+      "allocatedBytes": 4842553392,
+      "privateWithoutForcedGcBytes": 3933650944,
+      "workingSetWithoutForcedGcBytes": 3910787072,
+      "privateAfterDiagnosticGcBytes": 3898097664,
+      "managedLiveAfterDiagnosticGcBytes": 3748345296,
+      "fragmentedAfterDiagnosticGcBytes": 84993488
+    }
+  ],
+  "checkpointBytes": {
+    "cp1": 956263849,
+    "cp2": 764867702
+  },
+  "method": {
+    "assembly": "frozen E9B547DD923FDD7AA2C01E21AD9F5DB95599660406BCE5732BA50FA5202F0422; version 0.5.0.0; 20-byte records, UTF16 unique names, POH placement",
+    "execution": "one isolated Windows process per phase, sequential with no other benchmark; identical whole9 readonly harness; per-volume converters are separate processes and are not included in startup timing",
+    "identity": "all nine baseline Canonical and legacy source fingerprints equal; each original/reloaded actual live-layer metadata, current paths, hidden rows and graph overlay digest equal; source 189-file size/mtime inventory unchanged",
+    "recovery": "V3 and V4+CP1 both load existing legacy checkpoints, then H consumes one committed WAL frame and C consumes three; all other volumes zero; V4+CP2 loads same final sequence/USN and consumes no extra frames; no MFT scan",
+    "limits": "one measured process per phase; warm filesystem cache; native V4 is experimental 20B UTF16 schema, not final ASCII schema; forced GC only in isolated diagnostic process after natural-load metrics; production automatic transcoding not implemented or approved"
+  }
+}

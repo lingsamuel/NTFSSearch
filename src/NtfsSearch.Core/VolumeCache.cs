@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace NtfsSearch.Core;
 
 public sealed record VolumeManifest(string VolumeId, string Root, string SnapshotFile, DateTime IndexedUtc, JournalPosition? Journal = null);
-public sealed record CachedVolume(SearchIndex Index, bool UsedBackup, VolumeManifest? Manifest = null, IReadOnlyList<SearchIndex>? Layers = null);
+public sealed record CachedVolume(SearchIndex Index, bool UsedBackup, VolumeManifest? Manifest = null, IReadOnlyList<SearchIndex>? Layers = null, bool UsedSnapshotBackup = false);
 
 public sealed class VolumeCache
 {
@@ -72,6 +72,11 @@ public sealed class VolumeCache
             if (keep.Contains(Path.GetFileName(file))) continue;
             try { File.Delete(file); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+        foreach (string backup in Directory.EnumerateFiles(DirectoryPath, Key(volume) + ".*.ntidx.bak"))
+        {
+            if (keep.Contains(Path.GetFileName(backup)[..^4])) continue;
+            try { File.Delete(backup); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
         GenerationGarbageCollector.Clean(DirectoryPath, volume, keep);
     }
 
@@ -132,12 +137,29 @@ public sealed class VolumeCache
                 var manifest = ReadManifest(volume, path);
                 if (manifest is null) continue;
                 found = true;
-                return new(SnapshotStore.Load(Path.Combine(DirectoryPath, manifest.SnapshotFile), token, progress), backup, manifest);
+                string snapshot = Path.Combine(DirectoryPath, manifest.SnapshotFile);
+                try { return new(SnapshotStore.Load(snapshot, token, progress), backup, manifest); }
+                catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException)
+                {
+                    // 同一基线的格式备份保持原日志身份；它不属于上一代清单回退，不应触发MFT重建。
+                    return new(SnapshotStore.Load(snapshot + ".bak", token, progress), backup, manifest, UsedSnapshotBackup: true);
+                }
             }
             catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException) { found = true; }
         }
         if (found) throw new InvalidDataException("磁盘缓存损坏，后台将自动重建；其他磁盘仍可查询。");
         return null;
+    }
+
+    public bool TryUpgradeSnapshot(NtfsVolume volume, CachedVolume loaded, CancellationToken token = default)
+    {
+        try { return SnapshotFormatUpgrade.Run(this, volume, loaded, token); }
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException
+            or JsonException or OperationCanceledException)
+        {
+            // 只是已恢复基线的存储优化；磁盘满、锁冲突和取消均不能撤销可查询结果或请求重建。
+            return false;
+        }
     }
 
     internal static VolumeManifest? ReadManifest(NtfsVolume volume, string path)

@@ -1,0 +1,2384 @@
+{
+  "metadata": {
+    "old": {
+      "kind": "metadata",
+      "label": "int32-same-source",
+      "utc": "2026-10-26T13:30:49.7998795Z",
+      "processorCount": 32,
+      "coreVersion": "0.5.0.0",
+      "assemblyVersion": "0.5.0.0",
+      "coreSha256": "4645A2DFFC92BB55003BC5E79C89CF99FE3BD9FBF4DF37C5A213A3AC9BADBEBB",
+      "corePath": "H:\\Temp\\ntfs-packed-order-bench\\final4b\\bin\\NtfsSearch.Core.dll",
+      "runtime": ".NET 10.0.12"
+    },
+    "new": {
+      "kind": "metadata",
+      "label": "packed24-final",
+      "utc": "2026-10-26T13:29:43.3243369Z",
+      "processorCount": 32,
+      "coreVersion": "0.5.0.0",
+      "assemblyVersion": "0.5.0.0",
+      "coreSha256": "45EBB324ADA85F7B553BD41B03E82A019C128613B941324DB3FA6971399B4A8A",
+      "corePath": "H:\\Temp\\ntfs-packed-order-bench\\finalpacked\\bin\\NtfsSearch.Core.dll",
+      "runtime": ".NET 10.0.12"
+    }
+  },
+  "loaded": {
+    "old": {
+      "kind": "allLoaded",
+      "count": 34408942,
+      "volumes": 9,
+      "loadSeconds": 51.8252762,
+      "loadCpuSeconds": 52.640625,
+      "managedLiveBytes": 3323882760,
+      "privateBytes": 3557363712,
+      "workingSetBytes": 3531800576,
+      "totalStatistics": [
+        {
+          "Entries": 7689757,
+          "Directories": 766484,
+          "NameBytes": 215265561,
+          "RecordBytes": 153795420,
+          "SortBytes": 123036112,
+          "EstimatedDirectoryBytes": 181364028,
+          "EstimatedPayloadBytes": 673461121
+        },
+        {
+          "Entries": 6106982,
+          "Directories": 1774500,
+          "NameBytes": 133185374,
+          "RecordBytes": 122139960,
+          "SortBytes": 97711712,
+          "EstimatedDirectoryBytes": 264100790,
+          "EstimatedPayloadBytes": 617137836
+        },
+        {
+          "Entries": 1614526,
+          "Directories": 205675,
+          "NameBytes": 42200110,
+          "RecordBytes": 32290848,
+          "SortBytes": 25832416,
+          "EstimatedDirectoryBytes": 55043274,
+          "EstimatedPayloadBytes": 155366648
+        },
+        {
+          "Entries": 3426560,
+          "Directories": 174904,
+          "NameBytes": 99784163,
+          "RecordBytes": 68534024,
+          "SortBytes": 54824960,
+          "EstimatedDirectoryBytes": 37524744,
+          "EstimatedPayloadBytes": 260667891
+        },
+        {
+          "Entries": 6528065,
+          "Directories": 872566,
+          "NameBytes": 164344000,
+          "RecordBytes": 130569060,
+          "SortBytes": 104449040,
+          "EstimatedDirectoryBytes": 139242690,
+          "EstimatedPayloadBytes": 538604790
+        },
+        {
+          "Entries": 4712245,
+          "Directories": 475737,
+          "NameBytes": 117044341,
+          "RecordBytes": 94244916,
+          "SortBytes": 75395920,
+          "EstimatedDirectoryBytes": 114422282,
+          "EstimatedPayloadBytes": 401107459
+        },
+        {
+          "Entries": 1497454,
+          "Directories": 194685,
+          "NameBytes": 39137321,
+          "RecordBytes": 29949688,
+          "SortBytes": 23959264,
+          "EstimatedDirectoryBytes": 47348672,
+          "EstimatedPayloadBytes": 140394945
+        },
+        {
+          "Entries": 1796896,
+          "Directories": 116851,
+          "NameBytes": 45322059,
+          "RecordBytes": 35949544,
+          "SortBytes": 28750336,
+          "EstimatedDirectoryBytes": 26592080,
+          "EstimatedPayloadBytes": 136614019
+        },
+        {
+          "Entries": 1036457,
+          "Directories": 104892,
+          "NameBytes": 24754772,
+          "RecordBytes": 20729740,
+          "SortBytes": 16583312,
+          "EstimatedDirectoryBytes": 26161416,
+          "EstimatedPayloadBytes": 88229240
+        }
+      ],
+      "actualSortBytes": 550543072,
+      "actualSortMiB": 525.0387878417969
+    },
+    "new": {
+      "kind": "allLoaded",
+      "count": 34408942,
+      "volumes": 9,
+      "loadSeconds": 54.7462617,
+      "loadCpuSeconds": 54.765625,
+      "managedLiveBytes": 3186234880,
+      "privateBytes": 3491561472,
+      "workingSetBytes": 3477958656,
+      "totalStatistics": [
+        {
+          "Entries": 7689757,
+          "Directories": 766484,
+          "NameBytes": 215265561,
+          "RecordBytes": 153795420,
+          "SortBytes": 92277088,
+          "EstimatedDirectoryBytes": 181364028,
+          "EstimatedPayloadBytes": 642702097
+        },
+        {
+          "Entries": 6106982,
+          "Directories": 1774500,
+          "NameBytes": 133185374,
+          "RecordBytes": 122139960,
+          "SortBytes": 73283788,
+          "EstimatedDirectoryBytes": 264100790,
+          "EstimatedPayloadBytes": 592709912
+        },
+        {
+          "Entries": 1614526,
+          "Directories": 205675,
+          "NameBytes": 42200110,
+          "RecordBytes": 32290848,
+          "SortBytes": 19374316,
+          "EstimatedDirectoryBytes": 55043274,
+          "EstimatedPayloadBytes": 148908548
+        },
+        {
+          "Entries": 3426560,
+          "Directories": 174904,
+          "NameBytes": 99784163,
+          "RecordBytes": 68534024,
+          "SortBytes": 41118724,
+          "EstimatedDirectoryBytes": 37524744,
+          "EstimatedPayloadBytes": 246961655
+        },
+        {
+          "Entries": 6528065,
+          "Directories": 872566,
+          "NameBytes": 164344000,
+          "RecordBytes": 130569060,
+          "SortBytes": 78336784,
+          "EstimatedDirectoryBytes": 139242690,
+          "EstimatedPayloadBytes": 512492534
+        },
+        {
+          "Entries": 4712245,
+          "Directories": 475737,
+          "NameBytes": 117044341,
+          "RecordBytes": 94244916,
+          "SortBytes": 56546944,
+          "EstimatedDirectoryBytes": 114422282,
+          "EstimatedPayloadBytes": 382258483
+        },
+        {
+          "Entries": 1497454,
+          "Directories": 194685,
+          "NameBytes": 39137321,
+          "RecordBytes": 29949688,
+          "SortBytes": 17969452,
+          "EstimatedDirectoryBytes": 47348672,
+          "EstimatedPayloadBytes": 134405133
+        },
+        {
+          "Entries": 1796896,
+          "Directories": 116851,
+          "NameBytes": 45322059,
+          "RecordBytes": 35949544,
+          "SortBytes": 21562756,
+          "EstimatedDirectoryBytes": 26592080,
+          "EstimatedPayloadBytes": 129426439
+        },
+        {
+          "Entries": 1036457,
+          "Directories": 104892,
+          "NameBytes": 24754772,
+          "RecordBytes": 20729740,
+          "SortBytes": 12437488,
+          "EstimatedDirectoryBytes": 26161416,
+          "EstimatedPayloadBytes": 84083416
+        }
+      ],
+      "actualSortBytes": 412907340,
+      "actualSortMiB": 393.77912521362305
+    }
+  },
+  "correctness": {
+    "casesPerVersion": 84,
+    "baselineRows": 34408942,
+    "exactTotalsEqual": true,
+    "allReturnedPathsEqual": true,
+    "repeatStability": true
+  },
+  "method": {
+    "data": "identical manifest-selected NTSIDX03 snapshot files; static complete nine-volume catalog; no WAL replay",
+    "execution": "sequential isolated Windows processes; identical source; separate project obj/bin and literal frozen DLL HintPath",
+    "warmup": "one full readme query plus empty query for all four cached sort columns, excluded",
+    "query": "actual SearchCatalog.Search; matchPath=true; ascending; offset=0; limit=200; exact TotalCount before returning",
+    "timing": "Stopwatch around SearchCatalog.Search only; full row hashes/path capture and logging outside timing; full load and GC outside each query",
+    "memory": "loaded live managed memory measured after explicit GC of diagnostic process only; no per-query forced GC",
+    "warning": "three repetitions per case, one process/version; measurements characterize this run, not UI or Everything SDK timings",
+    "control": "Same optimized source and SortPermutation API, with UsesPackedStorage returning false in an isolated temporary Core copy; actual int32 arrays, not assumed accounting.",
+    "order": "Packed process first, same-source 4B process second; single process per variant, no query-time forced GC.",
+    "interpretation": "Run-to-run timing varies; absence of a consistent regression is not proof of broad speedup. Initial pre-optimization run had a sparse path slowdown; both initial logs are retained."
+  },
+  "cases": [
+    {
+      "queryId": "empty",
+      "text": "",
+      "field": "Name",
+      "total": 34408942,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 0.3689,
+          "min": 0.3206,
+          "max": 0.5476,
+          "samples": [
+            0.3206,
+            0.3689,
+            0.5476
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 81488,
+          "min": 78448,
+          "max": 86568,
+          "samples": [
+            81488,
+            86568,
+            78448
+          ]
+        },
+        "maxPrivateBytes": 3571830784,
+        "maxWorkingSetBytes": 3547754496
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 0.3288,
+          "min": 0.3279,
+          "max": 0.4478,
+          "samples": [
+            0.3279,
+            0.3288,
+            0.4478
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 86576,
+          "min": 81744,
+          "max": 86648,
+          "samples": [
+            81744,
+            86576,
+            86648
+          ]
+        },
+        "maxPrivateBytes": 3508801536,
+        "maxWorkingSetBytes": 3498328064
+      },
+      "newToOldElapsedRatio": 0.8912984548658173
+    },
+    {
+      "queryId": "empty",
+      "text": "",
+      "field": "Path",
+      "total": 34408942,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 0.4313,
+          "min": 0.2723,
+          "max": 0.4598,
+          "samples": [
+            0.4598,
+            0.2723,
+            0.4313
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 59656,
+          "min": 56576,
+          "max": 62048,
+          "samples": [
+            62048,
+            56576,
+            59656
+          ]
+        },
+        "maxPrivateBytes": 3572158464,
+        "maxWorkingSetBytes": 3548069888
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 0.2746,
+          "min": 0.2026,
+          "max": 0.4713,
+          "samples": [
+            0.4713,
+            0.2026,
+            0.2746
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 67296,
+          "min": 62048,
+          "max": 68112,
+          "samples": [
+            62048,
+            67296,
+            68112
+          ]
+        },
+        "maxPrivateBytes": 3509194752,
+        "maxWorkingSetBytes": 3498721280
+      },
+      "newToOldElapsedRatio": 0.6366798052399721
+    },
+    {
+      "queryId": "empty",
+      "text": "",
+      "field": "Size",
+      "total": 34408942,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 0.3188,
+          "min": 0.2509,
+          "max": 0.5575,
+          "samples": [
+            0.3188,
+            0.2509,
+            0.5575
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 76312,
+          "min": 72904,
+          "max": 79856,
+          "samples": [
+            76312,
+            72904,
+            79856
+          ]
+        },
+        "maxPrivateBytes": 3572686848,
+        "maxWorkingSetBytes": 3548610560
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 0.2747,
+          "min": 0.2173,
+          "max": 0.3069,
+          "samples": [
+            0.3069,
+            0.2747,
+            0.2173
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 73176,
+          "min": 67856,
+          "max": 79856,
+          "samples": [
+            67856,
+            73176,
+            79856
+          ]
+        },
+        "maxPrivateBytes": 3509657600,
+        "maxWorkingSetBytes": 3499184128
+      },
+      "newToOldElapsedRatio": 0.8616687578419072
+    },
+    {
+      "queryId": "empty",
+      "text": "",
+      "field": "Modified",
+      "total": 34408942,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 0.2409,
+          "min": 0.2276,
+          "max": 0.2435,
+          "samples": [
+            0.2435,
+            0.2276,
+            0.2409
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 70168,
+          "min": 66928,
+          "max": 71656,
+          "samples": [
+            71656,
+            66928,
+            70168
+          ]
+        },
+        "maxPrivateBytes": 3573080064,
+        "maxWorkingSetBytes": 3549020160
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 0.2184,
+          "min": 0.213,
+          "max": 0.2216,
+          "samples": [
+            0.2216,
+            0.2184,
+            0.213
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 0,
+          "min": 0,
+          "max": 0,
+          "samples": [
+            0,
+            0,
+            0
+          ]
+        },
+        "allocatedBytes": {
+          "median": 63456,
+          "min": 61968,
+          "max": 66944,
+          "samples": [
+            63456,
+            66944,
+            61968
+          ]
+        },
+        "maxPrivateBytes": 3510116352,
+        "maxWorkingSetBytes": 3499642880
+      },
+      "newToOldElapsedRatio": 0.9066002490660026
+    },
+    {
+      "queryId": "readme",
+      "text": "readme",
+      "field": "Name",
+      "total": 71883,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 201.0959,
+          "min": 189.1814,
+          "max": 204.3238,
+          "samples": [
+            201.0959,
+            204.3238,
+            189.1814
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 484.375,
+          "min": 468.75,
+          "max": 671.875,
+          "samples": [
+            484.375,
+            671.875,
+            468.75
+          ]
+        },
+        "allocatedBytes": {
+          "median": 5010280,
+          "min": 4899352,
+          "max": 5014008,
+          "samples": [
+            5014008,
+            4899352,
+            5010280
+          ]
+        },
+        "maxPrivateBytes": 3575001088,
+        "maxWorkingSetBytes": 3551903744
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 193.4319,
+          "min": 192.0568,
+          "max": 194.3711,
+          "samples": [
+            193.4319,
+            192.0568,
+            194.3711
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 546.875,
+          "min": 484.375,
+          "max": 578.125,
+          "samples": [
+            546.875,
+            484.375,
+            578.125
+          ]
+        },
+        "allocatedBytes": {
+          "median": 5010384,
+          "min": 4897520,
+          "max": 5016872,
+          "samples": [
+            5016872,
+            4897520,
+            5010384
+          ]
+        },
+        "maxPrivateBytes": 3511713792,
+        "maxWorkingSetBytes": 3502448640
+      },
+      "newToOldElapsedRatio": 0.9618888301551648
+    },
+    {
+      "queryId": "readme",
+      "text": "readme",
+      "field": "Path",
+      "total": 71883,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 120.3179,
+          "min": 118.9229,
+          "max": 160.4613,
+          "samples": [
+            118.9229,
+            120.3179,
+            160.4613
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 406.25,
+          "min": 359.375,
+          "max": 484.375,
+          "samples": [
+            359.375,
+            406.25,
+            484.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4905432,
+          "min": 4897440,
+          "max": 5000056,
+          "samples": [
+            4897440,
+            5000056,
+            4905432
+          ]
+        },
+        "maxPrivateBytes": 3576082432,
+        "maxWorkingSetBytes": 3553415168
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 125.7178,
+          "min": 124.4772,
+          "max": 128.5334,
+          "samples": [
+            125.7178,
+            128.5334,
+            124.4772
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 421.875,
+          "min": 171.875,
+          "max": 468.75,
+          "samples": [
+            171.875,
+            468.75,
+            421.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4904616,
+          "min": 4901424,
+          "max": 5000016,
+          "samples": [
+            4901424,
+            5000016,
+            4904616
+          ]
+        },
+        "maxPrivateBytes": 3512827904,
+        "maxWorkingSetBytes": 3503960064
+      },
+      "newToOldElapsedRatio": 1.0448802713478211
+    },
+    {
+      "queryId": "readme",
+      "text": "readme",
+      "field": "Size",
+      "total": 71883,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 119.5595,
+          "min": 115.7758,
+          "max": 121.5523,
+          "samples": [
+            121.5523,
+            115.7758,
+            119.5595
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 203.125,
+          "min": 187.5,
+          "max": 250,
+          "samples": [
+            187.5,
+            203.125,
+            250
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4987064,
+          "min": 4930304,
+          "max": 4991152,
+          "samples": [
+            4987064,
+            4930304,
+            4991152
+          ]
+        },
+        "maxPrivateBytes": 3577339904,
+        "maxWorkingSetBytes": 3555004416
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 101.6141,
+          "min": 100.7942,
+          "max": 104.5306,
+          "samples": [
+            101.6141,
+            104.5306,
+            100.7942
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 500,
+          "min": 343.75,
+          "max": 546.875,
+          "samples": [
+            343.75,
+            500,
+            546.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4979384,
+          "min": 4930544,
+          "max": 5004544,
+          "samples": [
+            5004544,
+            4930544,
+            4979384
+          ]
+        },
+        "maxPrivateBytes": 3514015744,
+        "maxWorkingSetBytes": 3505426432
+      },
+      "newToOldElapsedRatio": 0.8499040226832665
+    },
+    {
+      "queryId": "readme",
+      "text": "readme",
+      "field": "Modified",
+      "total": 71883,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 126.3445,
+          "min": 120.892,
+          "max": 135.1219,
+          "samples": [
+            120.892,
+            126.3445,
+            135.1219
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 281.25,
+          "min": 218.75,
+          "max": 296.875,
+          "samples": [
+            281.25,
+            218.75,
+            296.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4949224,
+          "min": 4930144,
+          "max": 4972528,
+          "samples": [
+            4930144,
+            4972528,
+            4949224
+          ]
+        },
+        "maxPrivateBytes": 3578486784,
+        "maxWorkingSetBytes": 3556233216
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 111.9761,
+          "min": 101.6788,
+          "max": 115.592,
+          "samples": [
+            101.6788,
+            115.592,
+            111.9761
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 328.125,
+          "min": 296.875,
+          "max": 531.25,
+          "samples": [
+            328.125,
+            531.25,
+            296.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4944072,
+          "min": 4933152,
+          "max": 4980672,
+          "samples": [
+            4933152,
+            4980672,
+            4944072
+          ]
+        },
+        "maxPrivateBytes": 3515224064,
+        "maxWorkingSetBytes": 3506647040
+      },
+      "newToOldElapsedRatio": 0.8862760151807163
+    },
+    {
+      "queryId": "dll",
+      "text": ".dll",
+      "field": "Name",
+      "total": 662492,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 131.2731,
+          "min": 116.3416,
+          "max": 174.7592,
+          "samples": [
+            174.7592,
+            131.2731,
+            116.3416
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 562.5,
+          "min": 484.375,
+          "max": 1312.5,
+          "samples": [
+            1312.5,
+            484.375,
+            562.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4848288,
+          "min": 4842112,
+          "max": 4857680,
+          "samples": [
+            4857680,
+            4848288,
+            4842112
+          ]
+        },
+        "maxPrivateBytes": 3591532544,
+        "maxWorkingSetBytes": 3569319936
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 99.058,
+          "min": 94.2656,
+          "max": 181.588,
+          "samples": [
+            181.588,
+            99.058,
+            94.2656
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 515.625,
+          "min": 328.125,
+          "max": 1062.5,
+          "samples": [
+            1062.5,
+            515.625,
+            328.125
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4855472,
+          "min": 4836080,
+          "max": 4857456,
+          "samples": [
+            4857456,
+            4836080,
+            4855472
+          ]
+        },
+        "maxPrivateBytes": 3515990016,
+        "maxWorkingSetBytes": 3507462144
+      },
+      "newToOldElapsedRatio": 0.7545948103609955
+    },
+    {
+      "queryId": "dll",
+      "text": ".dll",
+      "field": "Path",
+      "total": 662492,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 108.6273,
+          "min": 106.7184,
+          "max": 110.5744,
+          "samples": [
+            110.5744,
+            106.7184,
+            108.6273
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 312.5,
+          "min": 140.625,
+          "max": 765.625,
+          "samples": [
+            765.625,
+            140.625,
+            312.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4857680,
+          "min": 4855032,
+          "max": 4870968,
+          "samples": [
+            4870968,
+            4857680,
+            4855032
+          ]
+        },
+        "maxPrivateBytes": 3606310912,
+        "maxWorkingSetBytes": 3584233472
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 89.9179,
+          "min": 89.6388,
+          "max": 91.2047,
+          "samples": [
+            91.2047,
+            89.9179,
+            89.6388
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 328.125,
+          "min": 265.625,
+          "max": 390.625,
+          "samples": [
+            265.625,
+            328.125,
+            390.625
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4889200,
+          "min": 4834680,
+          "max": 4901304,
+          "samples": [
+            4889200,
+            4834680,
+            4901304
+          ]
+        },
+        "maxPrivateBytes": 3516813312,
+        "maxWorkingSetBytes": 3508379648
+      },
+      "newToOldElapsedRatio": 0.827765211875836
+    },
+    {
+      "queryId": "dll",
+      "text": ".dll",
+      "field": "Size",
+      "total": 662492,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 92.5232,
+          "min": 82.9039,
+          "max": 97.6028,
+          "samples": [
+            97.6028,
+            92.5232,
+            82.9039
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 93.75,
+          "min": 78.125,
+          "max": 359.375,
+          "samples": [
+            93.75,
+            78.125,
+            359.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4933552,
+          "min": 4918144,
+          "max": 4934104,
+          "samples": [
+            4934104,
+            4918144,
+            4933552
+          ]
+        },
+        "maxPrivateBytes": 3621777408,
+        "maxWorkingSetBytes": 3599659008
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 89.3513,
+          "min": 79.6193,
+          "max": 90.4891,
+          "samples": [
+            79.6193,
+            90.4891,
+            89.3513
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 453.125,
+          "min": 281.25,
+          "max": 531.25,
+          "samples": [
+            453.125,
+            281.25,
+            531.25
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4892776,
+          "min": 4882392,
+          "max": 4962736,
+          "samples": [
+            4882392,
+            4962736,
+            4892776
+          ]
+        },
+        "maxPrivateBytes": 3519127552,
+        "maxWorkingSetBytes": 3510665216
+      },
+      "newToOldElapsedRatio": 0.9657177875386929
+    },
+    {
+      "queryId": "dll",
+      "text": ".dll",
+      "field": "Modified",
+      "total": 662492,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 81.0131,
+          "min": 80.6931,
+          "max": 92.529,
+          "samples": [
+            80.6931,
+            92.529,
+            81.0131
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 343.75,
+          "min": 312.5,
+          "max": 484.375,
+          "samples": [
+            484.375,
+            343.75,
+            312.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4874384,
+          "min": 4872288,
+          "max": 4875296,
+          "samples": [
+            4872288,
+            4874384,
+            4875296
+          ]
+        },
+        "maxPrivateBytes": 3636719616,
+        "maxWorkingSetBytes": 3614593024
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 96.7784,
+          "min": 88.7716,
+          "max": 96.7818,
+          "samples": [
+            96.7784,
+            96.7818,
+            88.7716
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 265.625,
+          "min": 93.75,
+          "max": 328.125,
+          "samples": [
+            328.125,
+            93.75,
+            265.625
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4908312,
+          "min": 4857424,
+          "max": 4909880,
+          "samples": [
+            4909880,
+            4857424,
+            4908312
+          ]
+        },
+        "maxPrivateBytes": 3534139392,
+        "maxWorkingSetBytes": 3525664768
+      },
+      "newToOldElapsedRatio": 1.1946018606867286
+    },
+    {
+      "queryId": "common-a",
+      "text": "a",
+      "field": "Name",
+      "total": 34050022,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 103.0466,
+          "min": 95.7753,
+          "max": 110.5772,
+          "samples": [
+            110.5772,
+            103.0466,
+            95.7753
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 343.75,
+          "min": 250,
+          "max": 671.875,
+          "samples": [
+            343.75,
+            671.875,
+            250
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4859312,
+          "min": 4850696,
+          "max": 4862360,
+          "samples": [
+            4850696,
+            4859312,
+            4862360
+          ]
+        },
+        "maxPrivateBytes": 3651530752,
+        "maxWorkingSetBytes": 3629387776
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 91.4111,
+          "min": 91.2869,
+          "max": 92.5155,
+          "samples": [
+            91.4111,
+            91.2869,
+            92.5155
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 546.875,
+          "min": 78.125,
+          "max": 562.5,
+          "samples": [
+            562.5,
+            78.125,
+            546.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4830240,
+          "min": 4826752,
+          "max": 4883544,
+          "samples": [
+            4826752,
+            4883544,
+            4830240
+          ]
+        },
+        "maxPrivateBytes": 3548880896,
+        "maxWorkingSetBytes": 3540406272
+      },
+      "newToOldElapsedRatio": 0.8870850663680316
+    },
+    {
+      "queryId": "common-a",
+      "text": "a",
+      "field": "Path",
+      "total": 34050022,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 108.3927,
+          "min": 103.9402,
+          "max": 112.3166,
+          "samples": [
+            112.3166,
+            103.9402,
+            108.3927
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 296.875,
+          "min": 109.375,
+          "max": 531.25,
+          "samples": [
+            109.375,
+            531.25,
+            296.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4827608,
+          "min": 4821888,
+          "max": 4843056,
+          "samples": [
+            4821888,
+            4843056,
+            4827608
+          ]
+        },
+        "maxPrivateBytes": 3666227200,
+        "maxWorkingSetBytes": 3644162048
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 98.9777,
+          "min": 96.7613,
+          "max": 100.4536,
+          "samples": [
+            98.9777,
+            96.7613,
+            100.4536
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 281.25,
+          "min": 109.375,
+          "max": 312.5,
+          "samples": [
+            281.25,
+            312.5,
+            109.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4860472,
+          "min": 4802632,
+          "max": 4862704,
+          "samples": [
+            4862704,
+            4802632,
+            4860472
+          ]
+        },
+        "maxPrivateBytes": 3563622400,
+        "maxWorkingSetBytes": 3555094528
+      },
+      "newToOldElapsedRatio": 0.9131399070232589
+    },
+    {
+      "queryId": "common-a",
+      "text": "a",
+      "field": "Size",
+      "total": 34050022,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 97.2432,
+          "min": 93.5866,
+          "max": 105.9529,
+          "samples": [
+            93.5866,
+            105.9529,
+            97.2432
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 359.375,
+          "min": 343.75,
+          "max": 703.125,
+          "samples": [
+            359.375,
+            703.125,
+            343.75
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4841544,
+          "min": 4840072,
+          "max": 4856952,
+          "samples": [
+            4840072,
+            4856952,
+            4841544
+          ]
+        },
+        "maxPrivateBytes": 3683704832,
+        "maxWorkingSetBytes": 3662024704
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 97.7048,
+          "min": 93.5426,
+          "max": 125.6896,
+          "samples": [
+            125.6896,
+            97.7048,
+            93.5426
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 312.5,
+          "min": 281.25,
+          "max": 500,
+          "samples": [
+            312.5,
+            500,
+            281.25
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4810240,
+          "min": 4806928,
+          "max": 4891376,
+          "samples": [
+            4810240,
+            4891376,
+            4806928
+          ]
+        },
+        "maxPrivateBytes": 3579146240,
+        "maxWorkingSetBytes": 3570823168
+      },
+      "newToOldElapsedRatio": 1.0047468614772035
+    },
+    {
+      "queryId": "common-a",
+      "text": "a",
+      "field": "Modified",
+      "total": 34050022,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 99.3607,
+          "min": 94.6619,
+          "max": 105.3795,
+          "samples": [
+            99.3607,
+            94.6619,
+            105.3795
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 93.75,
+          "min": 93.75,
+          "max": 437.5,
+          "samples": [
+            93.75,
+            93.75,
+            437.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4847872,
+          "min": 4816920,
+          "max": 4859056,
+          "samples": [
+            4847872,
+            4859056,
+            4816920
+          ]
+        },
+        "maxPrivateBytes": 3698188288,
+        "maxWorkingSetBytes": 3676520448
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 93.1207,
+          "min": 82.8698,
+          "max": 101.3701,
+          "samples": [
+            93.1207,
+            82.8698,
+            101.3701
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 187.5,
+          "min": 93.75,
+          "max": 312.5,
+          "samples": [
+            93.75,
+            312.5,
+            187.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4862344,
+          "min": 4810776,
+          "max": 4880368,
+          "samples": [
+            4880368,
+            4810776,
+            4862344
+          ]
+        },
+        "maxPrivateBytes": 3593625600,
+        "maxWorkingSetBytes": 3585277952
+      },
+      "newToOldElapsedRatio": 0.937198510074909
+    },
+    {
+      "queryId": "space-phrase",
+      "text": "\"Program Files\"",
+      "field": "Name",
+      "total": 877733,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 99.7156,
+          "min": 97.9166,
+          "max": 121.99,
+          "samples": [
+            121.99,
+            97.9166,
+            99.7156
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 578.125,
+          "min": 78.125,
+          "max": 1250,
+          "samples": [
+            1250,
+            78.125,
+            578.125
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4852440,
+          "min": 4826224,
+          "max": 4870736,
+          "samples": [
+            4870736,
+            4826224,
+            4852440
+          ]
+        },
+        "maxPrivateBytes": 3713077248,
+        "maxWorkingSetBytes": 3691565056
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 108.6884,
+          "min": 81.2231,
+          "max": 125.3238,
+          "samples": [
+            125.3238,
+            81.2231,
+            108.6884
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 390.625,
+          "min": 359.375,
+          "max": 468.75,
+          "samples": [
+            468.75,
+            390.625,
+            359.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4836472,
+          "min": 4833232,
+          "max": 4858600,
+          "samples": [
+            4833232,
+            4858600,
+            4836472
+          ]
+        },
+        "maxPrivateBytes": 3608424448,
+        "maxWorkingSetBytes": 3600117760
+      },
+      "newToOldElapsedRatio": 1.089983914252133
+    },
+    {
+      "queryId": "space-phrase",
+      "text": "\"Program Files\"",
+      "field": "Path",
+      "total": 877733,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 130.8816,
+          "min": 114.243,
+          "max": 135.7353,
+          "samples": [
+            114.243,
+            135.7353,
+            130.8816
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 265.625,
+          "min": 140.625,
+          "max": 296.875,
+          "samples": [
+            296.875,
+            140.625,
+            265.625
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4843744,
+          "min": 4831024,
+          "max": 4848304,
+          "samples": [
+            4843744,
+            4831024,
+            4848304
+          ]
+        },
+        "maxPrivateBytes": 3727880192,
+        "maxWorkingSetBytes": 3706359808
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 104.1433,
+          "min": 88.9742,
+          "max": 110.111,
+          "samples": [
+            110.111,
+            88.9742,
+            104.1433
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 109.375,
+          "min": 93.75,
+          "max": 328.125,
+          "samples": [
+            109.375,
+            328.125,
+            93.75
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4848984,
+          "min": 4830744,
+          "max": 4852880,
+          "samples": [
+            4852880,
+            4830744,
+            4848984
+          ]
+        },
+        "maxPrivateBytes": 3623489536,
+        "maxWorkingSetBytes": 3614916608
+      },
+      "newToOldElapsedRatio": 0.7957061955232821
+    },
+    {
+      "queryId": "space-phrase",
+      "text": "\"Program Files\"",
+      "field": "Size",
+      "total": 877733,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 112.5741,
+          "min": 110.261,
+          "max": 115.8708,
+          "samples": [
+            115.8708,
+            112.5741,
+            110.261
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 562.5,
+          "min": 281.25,
+          "max": 1156.25,
+          "samples": [
+            1156.25,
+            281.25,
+            562.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4841176,
+          "min": 4813168,
+          "max": 4870104,
+          "samples": [
+            4841176,
+            4870104,
+            4813168
+          ]
+        },
+        "maxPrivateBytes": 3742752768,
+        "maxWorkingSetBytes": 3721269248
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 87.5629,
+          "min": 79.8925,
+          "max": 89.8127,
+          "samples": [
+            89.8127,
+            79.8925,
+            87.5629
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 406.25,
+          "min": 62.5,
+          "max": 531.25,
+          "samples": [
+            62.5,
+            406.25,
+            531.25
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4832496,
+          "min": 4821096,
+          "max": 4878104,
+          "samples": [
+            4832496,
+            4878104,
+            4821096
+          ]
+        },
+        "maxPrivateBytes": 3638366208,
+        "maxWorkingSetBytes": 3629768704
+      },
+      "newToOldElapsedRatio": 0.7778245617775315
+    },
+    {
+      "queryId": "space-phrase",
+      "text": "\"Program Files\"",
+      "field": "Modified",
+      "total": 877733,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 105.393,
+          "min": 100.2366,
+          "max": 109.9249,
+          "samples": [
+            109.9249,
+            105.393,
+            100.2366
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 312.5,
+          "min": 93.75,
+          "max": 406.25,
+          "samples": [
+            406.25,
+            312.5,
+            93.75
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4839840,
+          "min": 4836976,
+          "max": 4862088,
+          "samples": [
+            4862088,
+            4836976,
+            4839840
+          ]
+        },
+        "maxPrivateBytes": 3757875200,
+        "maxWorkingSetBytes": 3736035328
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 92.562,
+          "min": 81.6917,
+          "max": 95.3045,
+          "samples": [
+            95.3045,
+            92.562,
+            81.6917
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 328.125,
+          "min": 296.875,
+          "max": 328.125,
+          "samples": [
+            328.125,
+            296.875,
+            328.125
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4870344,
+          "min": 4820680,
+          "max": 4872352,
+          "samples": [
+            4870344,
+            4820680,
+            4872352
+          ]
+        },
+        "maxPrivateBytes": 3653586944,
+        "maxWorkingSetBytes": 3644682240
+      },
+      "newToOldElapsedRatio": 0.8782556716290455
+    },
+    {
+      "queryId": "path",
+      "text": "C:\\Windows\\System32",
+      "field": "Name",
+      "total": 29870,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 204.7444,
+          "min": 200.5383,
+          "max": 218.1116,
+          "samples": [
+            218.1116,
+            200.5383,
+            204.7444
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 515.625,
+          "min": 234.375,
+          "max": 609.375,
+          "samples": [
+            234.375,
+            515.625,
+            609.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229703456,
+          "min": 229701200,
+          "max": 229718920,
+          "samples": [
+            229718920,
+            229703456,
+            229701200
+          ]
+        },
+        "maxPrivateBytes": 3739299840,
+        "maxWorkingSetBytes": 3729952768
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 201.451,
+          "min": 183.2961,
+          "max": 204.857,
+          "samples": [
+            204.857,
+            183.2961,
+            201.451
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 437.5,
+          "min": 406.25,
+          "max": 578.125,
+          "samples": [
+            437.5,
+            578.125,
+            406.25
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229693392,
+          "min": 229690160,
+          "max": 229711368,
+          "samples": [
+            229690160,
+            229711368,
+            229693392
+          ]
+        },
+        "maxPrivateBytes": 3569897472,
+        "maxWorkingSetBytes": 3568926720
+      },
+      "newToOldElapsedRatio": 0.9839145783718626
+    },
+    {
+      "queryId": "path",
+      "text": "C:\\Windows\\System32",
+      "field": "Path",
+      "total": 29870,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 223.3761,
+          "min": 219.7898,
+          "max": 245.6926,
+          "samples": [
+            219.7898,
+            245.6926,
+            223.3761
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 390.625,
+          "min": 375,
+          "max": 468.75,
+          "samples": [
+            375,
+            468.75,
+            390.625
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229675688,
+          "min": 229674576,
+          "max": 229676688,
+          "samples": [
+            229676688,
+            229674576,
+            229675688
+          ]
+        },
+        "maxPrivateBytes": 3753639936,
+        "maxWorkingSetBytes": 3744387072
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 221.229,
+          "min": 199.4998,
+          "max": 229.8905,
+          "samples": [
+            221.229,
+            199.4998,
+            229.8905
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 453.125,
+          "min": 437.5,
+          "max": 625,
+          "samples": [
+            625,
+            437.5,
+            453.125
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229683648,
+          "min": 229677144,
+          "max": 229685088,
+          "samples": [
+            229685088,
+            229677144,
+            229683648
+          ]
+        },
+        "maxPrivateBytes": 3584241664,
+        "maxWorkingSetBytes": 3583295488
+      },
+      "newToOldElapsedRatio": 0.9903879600369064
+    },
+    {
+      "queryId": "path",
+      "text": "C:\\Windows\\System32",
+      "field": "Size",
+      "total": 29870,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 184.8456,
+          "min": 184.2603,
+          "max": 220.7866,
+          "samples": [
+            184.2603,
+            184.8456,
+            220.7866
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 234.375,
+          "min": 187.5,
+          "max": 359.375,
+          "samples": [
+            187.5,
+            359.375,
+            234.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229683784,
+          "min": 229682048,
+          "max": 229691432,
+          "samples": [
+            229683784,
+            229691432,
+            229682048
+          ]
+        },
+        "maxPrivateBytes": 3763429376,
+        "maxWorkingSetBytes": 3753906176
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 195.2037,
+          "min": 184.8688,
+          "max": 240.7766,
+          "samples": [
+            184.8688,
+            195.2037,
+            240.7766
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 421.875,
+          "min": 421.875,
+          "max": 437.5,
+          "samples": [
+            421.875,
+            421.875,
+            437.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229683808,
+          "min": 229681400,
+          "max": 229699224,
+          "samples": [
+            229683808,
+            229699224,
+            229681400
+          ]
+        },
+        "maxPrivateBytes": 3598860288,
+        "maxWorkingSetBytes": 3597631488
+      },
+      "newToOldElapsedRatio": 1.056036497487633
+    },
+    {
+      "queryId": "path",
+      "text": "C:\\Windows\\System32",
+      "field": "Modified",
+      "total": 29870,
+      "rows": 200,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 235.668,
+          "min": 234.8984,
+          "max": 240.6698,
+          "samples": [
+            235.668,
+            234.8984,
+            240.6698
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 562.5,
+          "min": 296.875,
+          "max": 703.125,
+          "samples": [
+            703.125,
+            562.5,
+            296.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229677168,
+          "min": 229652640,
+          "max": 229703680,
+          "samples": [
+            229703680,
+            229652640,
+            229677168
+          ]
+        },
+        "maxPrivateBytes": 3777126400,
+        "maxWorkingSetBytes": 3767197696
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 190.826,
+          "min": 183.9354,
+          "max": 195.7773,
+          "samples": [
+            183.9354,
+            190.826,
+            195.7773
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 343.75,
+          "min": 312.5,
+          "max": 656.25,
+          "samples": [
+            656.25,
+            343.75,
+            312.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 229688312,
+          "min": 229668096,
+          "max": 229695888,
+          "samples": [
+            229688312,
+            229668096,
+            229695888
+          ]
+        },
+        "maxPrivateBytes": 3609681920,
+        "maxWorkingSetBytes": 3608436736
+      },
+      "newToOldElapsedRatio": 0.80972384880425
+    },
+    {
+      "queryId": "no-hit",
+      "text": "__ntfs_search_benchmark_no_such_name_8a2f9c__",
+      "field": "Name",
+      "total": 0,
+      "rows": 0,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 100.3434,
+          "min": 85.2409,
+          "max": 122.8285,
+          "samples": [
+            122.8285,
+            100.3434,
+            85.2409
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 265.625,
+          "min": 234.375,
+          "max": 859.375,
+          "samples": [
+            859.375,
+            234.375,
+            265.625
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4727544,
+          "min": 4727424,
+          "max": 4842040,
+          "samples": [
+            4727544,
+            4842040,
+            4727424
+          ]
+        },
+        "maxPrivateBytes": 3794329600,
+        "maxWorkingSetBytes": 3783921664
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 89.0689,
+          "min": 85.9352,
+          "max": 177.6082,
+          "samples": [
+            177.6082,
+            89.0689,
+            85.9352
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 265.625,
+          "min": 93.75,
+          "max": 984.375,
+          "samples": [
+            984.375,
+            265.625,
+            93.75
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4727480,
+          "min": 4719344,
+          "max": 4833776,
+          "samples": [
+            4719344,
+            4833776,
+            4727480
+          ]
+        },
+        "maxPrivateBytes": 3626975232,
+        "maxWorkingSetBytes": 3625160704
+      },
+      "newToOldElapsedRatio": 0.8876408413508013
+    },
+    {
+      "queryId": "no-hit",
+      "text": "__ntfs_search_benchmark_no_such_name_8a2f9c__",
+      "field": "Path",
+      "total": 0,
+      "rows": 0,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 83.043,
+          "min": 79.7803,
+          "max": 90.0644,
+          "samples": [
+            79.7803,
+            90.0644,
+            83.043
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 312.5,
+          "min": 312.5,
+          "max": 562.5,
+          "samples": [
+            562.5,
+            312.5,
+            312.5
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4833904,
+          "min": 4727512,
+          "max": 4840792,
+          "samples": [
+            4840792,
+            4727512,
+            4833904
+          ]
+        },
+        "maxPrivateBytes": 3808419840,
+        "maxWorkingSetBytes": 3797983232
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 89.258,
+          "min": 85.9759,
+          "max": 110.3876,
+          "samples": [
+            89.258,
+            85.9759,
+            110.3876
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 296.875,
+          "min": 296.875,
+          "max": 296.875,
+          "samples": [
+            296.875,
+            296.875,
+            296.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4841872,
+          "min": 4719344,
+          "max": 4842160,
+          "samples": [
+            4842160,
+            4719344,
+            4841872
+          ]
+        },
+        "maxPrivateBytes": 3641065472,
+        "maxWorkingSetBytes": 3639230464
+      },
+      "newToOldElapsedRatio": 1.0748407451561237
+    },
+    {
+      "queryId": "no-hit",
+      "text": "__ntfs_search_benchmark_no_such_name_8a2f9c__",
+      "field": "Size",
+      "total": 0,
+      "rows": 0,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 92.0198,
+          "min": 86.4037,
+          "max": 101.093,
+          "samples": [
+            86.4037,
+            101.093,
+            92.0198
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 484.375,
+          "min": 468.75,
+          "max": 562.5,
+          "samples": [
+            468.75,
+            562.5,
+            484.375
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4727536,
+          "min": 4719344,
+          "max": 4841872,
+          "samples": [
+            4727536,
+            4841872,
+            4719344
+          ]
+        },
+        "maxPrivateBytes": 3822776320,
+        "maxWorkingSetBytes": 3812048896
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 81.6444,
+          "min": 81.6062,
+          "max": 95.5364,
+          "samples": [
+            95.5364,
+            81.6444,
+            81.6062
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 312.5,
+          "min": 93.75,
+          "max": 953.125,
+          "samples": [
+            953.125,
+            312.5,
+            93.75
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4719344,
+          "min": 4719344,
+          "max": 4841656,
+          "samples": [
+            4719344,
+            4841656,
+            4719344
+          ]
+        },
+        "maxPrivateBytes": 3655417856,
+        "maxWorkingSetBytes": 3653300224
+      },
+      "newToOldElapsedRatio": 0.8872481791962165
+    },
+    {
+      "queryId": "no-hit",
+      "text": "__ntfs_search_benchmark_no_such_name_8a2f9c__",
+      "field": "Modified",
+      "total": 0,
+      "rows": 0,
+      "old": {
+        "elapsedMilliseconds": {
+          "median": 91.8839,
+          "min": 78.7733,
+          "max": 99.3569,
+          "samples": [
+            91.8839,
+            99.3569,
+            78.7733
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 234.375,
+          "min": 171.875,
+          "max": 531.25,
+          "samples": [
+            234.375,
+            531.25,
+            171.875
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4841960,
+          "min": 4719344,
+          "max": 4842032,
+          "samples": [
+            4842032,
+            4719344,
+            4841960
+          ]
+        },
+        "maxPrivateBytes": 3836866560,
+        "maxWorkingSetBytes": 3826110464
+      },
+      "new": {
+        "elapsedMilliseconds": {
+          "median": 79.4419,
+          "min": 77.032,
+          "max": 80.9283,
+          "samples": [
+            77.032,
+            80.9283,
+            79.4419
+          ]
+        },
+        "cpuMilliseconds": {
+          "median": 78.125,
+          "min": 78.125,
+          "max": 515.625,
+          "samples": [
+            515.625,
+            78.125,
+            78.125
+          ]
+        },
+        "allocatedBytes": {
+          "median": 4841648,
+          "min": 4719344,
+          "max": 4841840,
+          "samples": [
+            4841840,
+            4719344,
+            4841648
+          ]
+        },
+        "maxPrivateBytes": 3669508096,
+        "maxWorkingSetBytes": 3667361792
+      },
+      "newToOldElapsedRatio": 0.8645899880174873
+    }
+  ],
+  "memoryDifference": {
+    "actualSortBytes": 137635732,
+    "managedLiveBytes": 137647880,
+    "privateBytes": 65802240,
+    "workingSetBytes": 53841920
+  },
+  "aggregate": {
+    "medianNonemptyNewToOldElapsedRatio": 0.90039037418703,
+    "sumCaseMedianElapsedMilliseconds": {
+      "old": 3053.2862,
+      "new": 2830.1393
+    },
+    "sumCaseMedianCpuMilliseconds": {
+      "old": 8500.0,
+      "new": 8531.25
+    }
+  }
+}

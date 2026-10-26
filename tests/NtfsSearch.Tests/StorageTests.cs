@@ -17,8 +17,8 @@ public class StorageTests
             foreach (string name in new[] { "z", "b", "a" }) builder.Add(@"C:\", name);
             var index = builder.Build(); SnapshotStore.Save(index, path);
             byte[] bytes = File.ReadAllBytes(path);
-            int order = checked(24 + index.Directories.Sum(d => 4 + d.Length * 2)
-                + index.Names.Chunks.Sum(c => 4 + c.Length * 2) + index.Count * 32 + 8);
+            int order = checked(40 + index.Directories.Sum(d => 4 + d.Length * 2) + index.Names.Count * 8
+                + index.Names.Chunks.Sum(c => 4 + c.Length * 2) + index.Names.AsciiChunks.Sum(c => 4 + c.Length) + index.BigSizes.Length * 8 + index.Count * 20 + 8);
             int first = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(order));
             int last = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(order + 8));
             BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(order), last);
