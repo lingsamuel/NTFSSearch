@@ -52,6 +52,10 @@ def check_backend(command):
             assert exact["total"] == 100 and query("目录009", match_path=False)["total"] == 0
             row = exact["rows"][0]
             assert base64.b64decode(row["key"]).decode("utf-16-le", "surrogatepass") == row["fullPath"]
+            largest = query("", sort=2, descending=True)["rows"][0]
+            assert largest["sizeText"] == "999 KB", largest["sizeText"]
+            assert largest["sizeBytesText"] == "1,022,976 B"
+            assert query("000000")["rows"][0]["sizeText"] == "0 B"
             tail = query("", offset=1200)
             assert tail["total"] == 1000 and tail["offset"] == 800 and len(tail["rows"]) == 200
         finally:

@@ -241,7 +241,8 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
             {
                 Key = DesktopFileActions.EncodePath(row.FullPath),
                 row.Name, row.FullPath, row.IsDirectory,
-                SizeText = row.Size is long size ? $"{size:N0} B" : "—",
+                SizeText = FileSizeDisplay.Format(row.Size),
+                SizeBytesText = row.Size is long size ? $"{size:N0} B" : null,
                 ModifiedText = row.ModifiedUtcTicks is long ticks && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks
                     ? new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "—"
             }).ToArray()

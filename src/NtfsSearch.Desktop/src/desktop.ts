@@ -10,6 +10,7 @@ export interface SearchRow {
   fullPath: string
   isDirectory: boolean
   sizeText: string
+  sizeBytesText: string | null
   modifiedText: string
 }
 

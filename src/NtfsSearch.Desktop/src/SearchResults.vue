@@ -30,6 +30,30 @@ const scroller = ref<HTMLElement>()
 const grid = ref<HTMLTableElement>()
 const menuElement = ref<HTMLDivElement>()
 const menu = shallowRef<{ key: string; left: number; top: number }>()
+const columnWidths = shallowRef<number[]>()
+const columnDrag = shallowRef<{ field: SortField; pointer: number; startX: number; widths: number[] }>()
+
+function startColumnResize(event: PointerEvent, field: SortField) {
+  if (event.button !== 0 || !event.isPrimary || !grid.value?.tHead) return
+  const widths = Array.from(grid.value.tHead.rows[0].cells, cell => cell.offsetWidth)
+  columnDrag.value = { field, pointer: event.pointerId, startX: event.clientX, widths }
+  const handle = event.currentTarget as HTMLElement
+  handle.setPointerCapture(event.pointerId)
+}
+
+function resizeColumn(event: PointerEvent) {
+  const drag = columnDrag.value
+  if (!drag || event.pointerId !== drag.pointer) return
+  // 第一拖以实际列宽为起点，锁住其余列，避免表格重新分配列宽。
+  const widths = drag.widths.slice()
+  widths[drag.field] = Math.max(64, Math.round(widths[drag.field] + event.clientX - drag.startX))
+  columnWidths.value = widths
+}
+
+function finishColumnResize(event: PointerEvent) {
+  if (columnDrag.value?.pointer === event.pointerId) columnDrag.value = undefined
+}
+
 
 function scrollToStart() {
   scroller.value?.scrollTo({ top: 0 })
@@ -131,18 +155,25 @@ defineExpose({ focusSelection, scrollToStart })
 <template>
   <section class="results-panel" aria-label="搜索结果">
     <div ref="scroller" class="results-scroll" @scroll="closeMenu">
-      <table ref="grid" class="results-table" role="grid" aria-label="搜索结果" :aria-busy="pending" tabindex="0"
+      <table ref="grid" class="results-table" :class="{ resizing: !!columnDrag }"
+        :style="columnWidths ? { width: columnWidths.reduce((total, width) => total + width, 0) + 'px' } : undefined"
+        role="grid" aria-label="搜索结果" :aria-busy="pending" tabindex="0"
         :aria-activedescendant="selected ? 'result-' + rows.findIndex(row => row.key === selected) : undefined"
         @keydown="handleGridKey">
-        <colgroup><col v-for="column in columns" :key="column.field" :class="'column-' + column.css"></colgroup>
+        <colgroup>
+          <col v-for="column in columns" :key="column.field" :class="'column-' + column.css"
+            :style="columnWidths ? { width: columnWidths[column.field] + 'px' } : undefined">
+        </colgroup>
         <thead>
           <tr>
             <th v-for="column in columns" :key="column.field" scope="col" :class="{ sorted: sort === column.field }"
               :aria-sort="sort === column.field ? (descending ? 'descending' : 'ascending') : undefined">
               <button type="button" @click="emit('sort', column.field)">
-                {{ column.name }}
+                <span class="column-label">{{ column.name }}</span>
                 <span v-if="sort === column.field" class="sort-caret" :class="{ descending }" aria-hidden="true"></span>
               </button>
+              <span class="column-resizer" aria-hidden="true" @pointerdown.prevent="startColumnResize($event, column.field)"
+                @pointermove="resizeColumn" @lostpointercapture="finishColumnResize"></span>
             </th>
           </tr>
         </thead>
@@ -152,7 +183,7 @@ defineExpose({ focusSelection, scrollToStart })
             @contextmenu.prevent="openMenu(row, $event.clientX, $event.clientY)">
             <td class="entry-name" :title="row.name"><span class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>{{ row.name }}</td>
             <td class="entry-path" :title="row.fullPath">{{ row.fullPath }}</td>
-            <td class="entry-size">{{ row.sizeText }}</td>
+            <td class="entry-size" :title="row.sizeBytesText ?? undefined">{{ row.sizeText }}</td>
             <td class="entry-date">{{ row.modifiedText }}</td>
           </tr>
         </tbody>

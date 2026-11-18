@@ -147,6 +147,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 }
 
 .results-table th {
+  position: relative;
   height: 35px;
   padding: 0;
   border-bottom: 1px solid var(--border);
@@ -174,7 +175,25 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .results-table th button:focus-visible { outline-offset: -2px; }
 .results-table th:first-child button, .results-table td:first-child { padding-left: 16px; }
 
+.column-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.column-resizer {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.column-resizer:hover, .column-resizer:active { box-shadow: inset -2px 0 var(--accent); }
+.results-table.resizing { cursor: col-resize; user-select: none; }
+
 .sort-caret {
+  flex: none;
   width: 0;
   height: 0;
   border-right: 4px solid transparent;

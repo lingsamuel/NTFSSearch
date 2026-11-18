@@ -1,6 +1,6 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.6.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
+Windows NTFS 文件搜索工具，版本 0.6.1。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
 
 ## 使用
 

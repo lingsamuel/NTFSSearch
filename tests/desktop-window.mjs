@@ -147,7 +147,7 @@ try {
     await evaluate("document.querySelector('th:nth-child(3) button').click()")
     await until(() => evaluate("document.querySelector('.page-number').textContent.trim() === '1 / 5'"), '排序重置到第一页')
     await evaluate("document.querySelector('th:nth-child(3) button').click()")
-    await until(() => evaluate("document.querySelector('th:nth-child(3)').getAttribute('aria-sort') === 'descending' && document.querySelector('tbody tr td:nth-child(3)').textContent === '1,022,976 B'"), '大小降序')
+    await until(() => evaluate("document.querySelector('th:nth-child(3)').getAttribute('aria-sort') === 'descending' && document.querySelector('tbody tr td:nth-child(3)').textContent === '999 KB' && document.querySelector('tbody tr td:nth-child(3)').title === '1,022,976 B'"), '大小降序及精确字节数')
 
     await query('目录009', 100)
     await evaluate("const scope = document.querySelector('select'); scope.value = 'name'; scope.dispatchEvent(new Event('change'));")
@@ -174,6 +174,33 @@ try {
     assert.equal(await evaluate("document.querySelector('.results-scroll').scrollWidth === document.querySelector('.results-scroll').clientWidth"), true)
     assert.equal(await evaluate("document.querySelector('#index-panel').getBoundingClientRect().bottom < window.innerHeight"), true)
     await screenshot('desktop-compact.png')
+    await evaluate("document.querySelector('button[aria-label=关闭索引状态]').click()")
+    const columnWidths = () => evaluate("Array.from(document.querySelectorAll('th'), header => header.offsetWidth)")
+    const initialWidths = await columnWidths()
+    for (let column = 0; column < initialWidths.length; column++) {
+      for (const delta of [-20, 20]) {
+        const handle = await evaluate(`(() => {
+          const resizer = document.querySelectorAll('th')[${column}].querySelector('.column-resizer');
+          if (!resizer) return null;
+          const rect = resizer.getBoundingClientRect();
+          return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+        })()`)
+        assert.ok(handle, `缺少第 ${column + 1} 列的拖动手柄`)
+        const before = await columnWidths()
+        await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...handle, button: 'left', buttons: 1, clickCount: 1 })
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...handle, x: handle.x + delta, button: 'left', buttons: 1 })
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...handle, x: handle.x + delta, button: 'left', clickCount: 1 })
+        const after = await until(async () => {
+          const widths = await columnWidths()
+          return Math.abs(widths[column] - before[column] - delta) <= 1 ? widths : undefined
+        }, `第 ${column + 1} 列调整宽度`)
+        for (let index = 0; index < after.length; index++) {
+          if (index !== column) assert.ok(Math.abs(after[index] - before[index]) <= 1, `第 ${index + 1} 列跟随拖动改变`)
+        }
+      }
+    }
+    assert.equal(await evaluate("document.querySelector('th:nth-child(3)').getAttribute('aria-sort')"), 'descending')
+
   }
 
   const processIds = await powerShell(`
@@ -186,7 +213,7 @@ try {
   assert.equal(code, 0)
   const leftover = await powerShell(`if (Get-Process -Id ${backend} -ErrorAction SilentlyContinue) { 'running' }`)
   assert.equal(leftover.stdout.trim(), '')
-  console.log(benchmark ? 'Windows 桌面性能采样与进程退出通过。' : 'Windows 桌面启动、搜索、排序、分页、键盘、右键、窄窗口和退出通过。')
+  console.log(benchmark ? 'Windows 桌面性能采样与进程退出通过。' : 'Windows 桌面启动、搜索、排序、分页、键盘、右键、窄窗口、四列拖动、大小单位和退出通过。')
 } finally {
   socket?.close()
   if (application.exitCode == null) {
