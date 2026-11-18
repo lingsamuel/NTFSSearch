@@ -1,0 +1,66 @@
+{
+  "Success": true,
+  "Total": 34838511,
+  "LiveVolumes": 9,
+  "Volumes": [
+    {
+      "Root": "C:\\",
+      "Count": 8122296
+    },
+    {
+      "Root": "D:\\",
+      "Count": 6194597
+    },
+    {
+      "Root": "E:\\",
+      "Count": 1625075
+    },
+    {
+      "Root": "F:\\",
+      "Count": 3427517
+    },
+    {
+      "Root": "G:\\",
+      "Count": 6531640
+    },
+    {
+      "Root": "H:\\",
+      "Count": 4713892
+    },
+    {
+      "Root": "I:\\",
+      "Count": 1385805
+    },
+    {
+      "Root": "J:\\",
+      "Count": 1806224
+    },
+    {
+      "Root": "K:\\",
+      "Count": 1031465
+    }
+  ],
+  "ScansStarted": [
+    "C:\\",
+    "D:\\",
+    "F:\\",
+    "E:\\",
+    "G:\\",
+    "H:\\",
+    "I:\\",
+    "J:\\",
+    "K:\\"
+  ],
+  "LiveVerification": {
+    "Create": true,
+    "Rename": true,
+    "Delete": true,
+    "OfflineRecovered": null
+  },
+  "Memory": {
+    "WorkingSetBytes": 5905936384,
+    "PrivateBytes": 6186168320,
+    "ManagedBytes": 3344551192,
+    "AllocatedBytes": 16978155336
+  }
+}
