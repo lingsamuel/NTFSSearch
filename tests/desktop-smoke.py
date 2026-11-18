@@ -1,0 +1,69 @@
+"""Exercise the desktop backend through its Windows process and JSON pipes."""
+
+import base64
+import json
+import queue
+import subprocess
+import sys
+import threading
+import time
+
+
+def check_backend(command):
+    events = queue.Queue()
+    with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          encoding="utf-8") as backend:
+        def read_events():
+            for line in backend.stdout:
+                events.put(json.loads(line))
+            events.put(None)
+
+        threading.Thread(target=read_events, daemon=True).start()
+
+        def result(predicate):
+            deadline = time.monotonic() + 15
+            while True:
+                event = events.get(timeout=max(0, deadline - time.monotonic()))
+                assert event is not None, "后端退出前未发送桌面查询结果"
+                assert event["type"] != "error", event
+                if event["type"] == "result" and predicate(event):
+                    return event
+
+        request_id = 0
+
+        def query(text, sort=0, descending=False, match_path=True, offset=0):
+            nonlocal request_id
+            request_id += 1
+            request = dict(type="query", requestId=request_id, text=text, sort=sort,
+                           descending=descending, matchPath=match_path, offset=offset)
+            backend.stdin.write(json.dumps(request) + "\n")
+            backend.stdin.flush()
+            return result(lambda event: event["requestId"] == request_id)
+
+        try:
+            first = result(lambda event: event["total"] == 1000)
+            assert len(first["rows"]) == 200
+            for sort in range(4):
+                ordered = query('"hello world"', sort)
+                reversed_order = query('"hello world"', sort, descending=True)
+                assert ordered["total"] == reversed_order["total"] == 59
+                assert ordered["rows"] == reversed_order["rows"][::-1]
+            exact = query("目录009")
+            assert exact["total"] == 100 and query("目录009", match_path=False)["total"] == 0
+            row = exact["rows"][0]
+            assert base64.b64decode(row["key"]).decode("utf-16-le", "surrogatepass") == row["fullPath"]
+            tail = query("", offset=1200)
+            assert tail["total"] == 1000 and tail["offset"] == 800 and len(tail["rows"]) == 200
+        finally:
+            backend.stdin.close()
+            try:
+                backend.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                backend.kill()
+                raise
+        assert backend.returncode == 0, backend.returncode
+
+
+if __name__ == "__main__":
+    check_backend(sys.argv[1:])
+    print("桌面进程通信、查询语义、精确计数、排序、分页和退出通过。")

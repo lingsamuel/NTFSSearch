@@ -56,7 +56,7 @@ internal static class CollectorHost
                 try { await ScanInChildAsync(root, work.Volume, cancellation, policy.WorkerProcessors, metrics); }
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
                 {
-                    try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(work.Volume) + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow)); }
+                    try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(work.Volume) + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow) { Details = error.ToString() }); }
                     catch (IOException) { }
                     catch (UnauthorizedAccessException) { }
                 }
@@ -112,7 +112,7 @@ internal static class CollectorHost
                         }
                         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
                         {
-                            try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(volume) + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow)); }
+                            try { AtomicJson.Write(Path.Combine(root, VolumeCache.Key(volume) + ".progress.json"), new CollectorProgress(error.Message, DateTime.UtcNow) { Details = error.ToString() }); }
                             catch (IOException) { }
                             catch (UnauthorizedAccessException) { }
                         }

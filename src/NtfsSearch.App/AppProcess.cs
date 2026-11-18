@@ -15,7 +15,7 @@ internal static class AppProcess
             WindowStyle = ProcessWindowStyle.Hidden
         };
         if (Path.GetFileNameWithoutExtension(host).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
-            start.ArgumentList.Add(typeof(App).Assembly.Location);
+            start.ArgumentList.Add(typeof(AppProcess).Assembly.Location);
         foreach (string argument in arguments) start.ArgumentList.Add(argument);
         if (elevate) start.Verb = "runas";
         if (processorLimit is not null)

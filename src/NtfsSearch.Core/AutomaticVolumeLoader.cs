@@ -10,9 +10,13 @@ public interface IAutomaticVolumeBackend
     Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token);
     Task EnsureCollectorAsync(CancellationToken token);
     string ReadStatus(NtfsVolume volume);
+    VolumeStatus ReadVolumeStatus(NtfsVolume volume) => new(volume.Root, ReadStatus(volume));
 }
 
-public sealed record VolumeStatus(string Root, string Message);
+public sealed record VolumeStatus(string Root, string Message)
+{
+    public bool HasError { get; init; }
+}
 
 public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, SearchCatalog catalog, int maxConcurrentLoads = 2)
 {
@@ -41,7 +45,7 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
                 var volume = volumes[position];
                 token.ThrowIfCancellationRequested();
                 string key = VolumeCache.Key(volume), revision = backend.CacheRevision(volume);
-                string message = backend.ReadStatus(volume);
+                var status = backend.ReadVolumeStatus(volume);
                 visible[position] = catalog.Contains(key);
                 if (!attempted.TryGetValue(key, out string? previous) || previous != revision)
                 {
@@ -49,17 +53,17 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
                     attempted[key] = revision;
                     pending.Add((volume, position));
                 }
-                else if (oldStatuses.TryGetValue(volume.Root, out var old) && message == "等待后台采集") message = old.Message;
-                next[position] = new(volume.Root, message);
+                else if (oldStatuses.TryGetValue(volume.Root, out var old) && status.Message == "等待后台采集") status = old;
+                next[position] = status;
             }
             Volatile.Write(ref statuses, next.ToArray()); StatusChanged?.Invoke();
             var statusGate = new object();
-            void UpdateStatus(int position, string message, bool loaded = false)
+            void UpdateStatus(int position, string message, bool loaded = false, bool hasError = false)
             {
                 lock (statusGate)
                 {
                     visible[position] |= loaded;
-                    next[position] = new(volumes[position].Root, message);
+                    next[position] = new(volumes[position].Root, message) { HasError = hasError };
                     Volatile.Write(ref statuses, next.ToArray());
                 }
                 StatusChanged?.Invoke();
@@ -73,7 +77,8 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
                 {
                     lock (statusGate)
                     {
-                        for (int i = 0; i < next.Length; i++) if (!visible[i]) next[i] = new(volumes[i].Root, e.Message);
+                        for (int i = 0; i < next.Length; i++)
+                            if (!visible[i]) next[i] = new(volumes[i].Root, e.Message) { HasError = true };
                         Volatile.Write(ref statuses, next.ToArray());
                     }
                     StatusChanged?.Invoke();
@@ -97,12 +102,12 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
                         backend.OnPublished(work.Volume, loaded.Manifest?.SnapshotFile);
                         string repairError = loaded.UsedBackup ? RequestRebuild(work.Volume) : "";
                         UpdateStatus(work.Position, loaded.UsedBackup ? "缓存损坏，已自动回退上一代，等待重建" + repairError
-                            : $"已加载 {(loaded.Layers ?? [loaded.Index]).Sum(i => (long)i.VisibleCount):N0} 个对象", loaded: true);
+                            : $"已加载 {(loaded.Layers ?? [loaded.Index]).Sum(i => (long)i.VisibleCount):N0} 个对象", loaded: true, hasError: loaded.UsedBackup);
                     }
                     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
                     {
                         string repairError = e is InvalidDataException ? RequestRebuild(work.Volume) : "";
-                        UpdateStatus(work.Position, e.Message + repairError);
+                        UpdateStatus(work.Position, e.Message + repairError, hasError: true);
                     }
                 });
             await Task.WhenAll(collector, loading);

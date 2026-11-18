@@ -1,16 +1,10 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.5.0。
+Windows NTFS 文件搜索工具，版本 0.6.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
 
 ## 使用
 
-解压 Windows 发布包，双击“启动搜索.cmd”。程序自动发现并读取所有已就绪的本地 NTFS 磁盘，搜索窗口直接显示真实磁盘的进度与结果。
-
-首次本次采集需要 Windows UAC 授权。普通权限搜索窗口会自动启动独立管理员采集进程，一次授权处理所有卷；不用选择索引文件、输入盘符或打开管理员终端。采集进程跟随搜索窗口退出，不安装系统服务或修改 Everything。
-
-数据库、增量日志和检查点统一保存在 **`NtfsSearch.App.exe` 同目录的 `Data` 文件夹**。后续启动加载已有索引，并从持久化 USN 位置续读停机期间的变化，正常启动不再全盘重扫。插入与移除 NTFS 磁盘会自动发现，完成一个卷就可以查询该卷。单卷失败会显示原因，其余卷继续处理。可用“重新扫描磁盘”重试，或“取消任务”停止本次采集。
-
-发布包需要 .NET 10 Desktop Runtime x64；当前开发主机已验证具备运行环境。
+Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索引状态和升级步骤见[使用说明](manual/README.md)。
 
 ## 搜索
 
@@ -71,9 +65,11 @@ dotnet run --project src/NtfsSearch.Cli -c Release -- drives
 dotnet run --project src/NtfsSearch.Cli -c Release -- bench 1000000 report.json shuffled 5
 ```
 
-PowerShell 执行 `scripts/build-windows.ps1` 构建发布目录。WPF 只能在 Windows 运行，核心测试也可在 Linux 运行。
+在 Windows 安装 Node.js、Rust MSVC、Microsoft C++ Build Tools 和 .NET 10 SDK，使用 PowerShell 执行 `scripts/build-windows.ps1` 构建便携发布目录。Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
-诊断入口：`app/NtfsSearch.App.exe --smoke-test report.txt` 执行不显示窗口的自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离 `Data` 等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
+诊断参数可传给 `app/NtfsSearch.App.exe` 或 `app/NtfsSearch.Backend.exe`。`--smoke-test report.txt` 执行后端自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离 `Data` 等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
+
+便携版构建后，可运行 `node tests/desktop-window.mjs artifacts/windows/app/NtfsSearch.App.exe artifacts/desktop-window`，在 Windows 窗口中验证搜索交互和退出。该自检使用独立的演示索引。
 
 命令行保留 EFU 导入、快照查询和显式扫描作为开发诊断能力，不属于桌面正常使用步骤。0.1.0容量数据和当前验证记录见 `docs/benchmarks`。
 

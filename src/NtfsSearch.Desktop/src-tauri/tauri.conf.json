@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NTFS Search",
+  "version": "0.6.0",
+  "identifier": "net.ntfssearch.desktop",
+  "build": { "frontendDist": "../dist" },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NTFS Search",
+        "width": 1060,
+        "height": 680,
+        "minWidth": 660,
+        "minHeight": 420,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; script-src 'self'; style-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico"]
+  }
+}

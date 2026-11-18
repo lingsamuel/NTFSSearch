@@ -1,0 +1,174 @@
+<script setup lang="ts">
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import type { FileAction, SearchRow, SortField } from './desktop'
+
+const props = defineProps<{
+  rows: SearchRow[]
+  sort: SortField
+  descending: boolean
+  pending: boolean
+  emptyMessage: string
+}>()
+const selected = defineModel<string | null>('selectedKey', { required: true })
+const emit = defineEmits<{
+  sort: [field: SortField]
+  action: [type: FileAction, row: SearchRow]
+}>()
+
+const columns = [
+  { field: 0, name: '名称', css: 'name' },
+  { field: 1, name: '完整路径', css: 'path' },
+  { field: 2, name: '大小', css: 'size' },
+  { field: 3, name: '修改时间', css: 'modified' },
+] as const
+const actions = [
+  { type: 'open', label: '打开', shortcut: 'Enter' },
+  { type: 'reveal', label: '打开所在目录' },
+  { type: 'copy', label: '复制完整路径', shortcut: 'Ctrl+C' },
+] as const
+const scroller = ref<HTMLElement>()
+const grid = ref<HTMLTableElement>()
+const menuElement = ref<HTMLDivElement>()
+const menu = shallowRef<{ key: string; left: number; top: number }>()
+
+function scrollToStart() {
+  scroller.value?.scrollTo({ top: 0 })
+  closeMenu()
+}
+
+function focusSelection() {
+  grid.value?.focus({ preventScroll: true })
+  if (!selected.value && props.rows.length) choose(0)
+}
+
+function choose(index: number) {
+  const row = props.rows[index]
+  if (!row) return
+  selected.value = row.key
+  grid.value?.tBodies[0]?.rows[index]?.scrollIntoView({ block: 'nearest' })
+}
+
+function clickRow(row: SearchRow) {
+  selected.value = row.key
+  grid.value?.focus({ preventScroll: true })
+}
+
+function runAction(type: FileAction, key: string | null) {
+  const row = props.rows.find(row => row.key === key)
+  if (row && !props.pending) emit('action', type, row)
+  if (menu.value) {
+    closeMenu()
+    grid.value?.focus({ preventScroll: true })
+  }
+}
+
+async function openMenu(row: SearchRow, x: number, y: number) {
+  if (props.pending) return
+  selected.value = row.key
+  menu.value = { key: row.key, left: x, top: y }
+  await nextTick()
+  const element = menuElement.value
+  if (!element || !menu.value) return
+  menu.value = {
+    key: row.key,
+    left: Math.max(4, Math.min(x, window.innerWidth - element.offsetWidth - 4)),
+    top: Math.max(4, Math.min(y, window.innerHeight - element.offsetHeight - 4)),
+  }
+  element.querySelector('button')?.focus({ preventScroll: true })
+}
+
+function closeMenu() {
+  menu.value = undefined
+}
+
+function handleMenuKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    closeMenu()
+    grid.value?.focus()
+    event.preventDefault()
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    const buttons = Array.from(menuElement.value?.querySelectorAll('button') ?? [])
+    const index = buttons.findIndex(button => button === document.activeElement)
+    if (buttons.length) buttons[(index + buttons.length + (event.key === 'ArrowDown' ? 1 : -1)) % buttons.length].focus()
+    event.preventDefault()
+  }
+}
+
+function handleGridKey(event: KeyboardEvent) {
+  if (event.target !== grid.value) return
+  const count = props.rows.length
+  if (count === 0) return
+  const index = props.rows.findIndex(row => row.key === selected.value)
+  switch (event.key) {
+    case 'ArrowDown': choose(Math.min(count - 1, index + 1)); break
+    case 'ArrowUp': choose(Math.max(0, index - 1)); break
+    case 'Home': choose(0); break
+    case 'End': choose(count - 1); break
+    case 'Enter': runAction('open', selected.value); break
+    case 'c':
+    case 'C':
+      if (!event.ctrlKey) return
+      runAction('copy', selected.value)
+      break
+    case 'F10':
+    case 'ContextMenu': {
+      if (event.key === 'F10' && !event.shiftKey) return
+      const rect = grid.value?.tBodies[0]?.rows[index]?.getBoundingClientRect()
+      if (rect) void openMenu(props.rows[index], rect.left + 24, rect.bottom)
+      break
+    }
+    default: return
+  }
+  event.preventDefault()
+}
+
+onMounted(() => window.addEventListener('pointerdown', closeMenu))
+onBeforeUnmount(() => window.removeEventListener('pointerdown', closeMenu))
+defineExpose({ focusSelection, scrollToStart })
+</script>
+
+<template>
+  <section class="results-panel" aria-label="搜索结果">
+    <div ref="scroller" class="results-scroll" @scroll="closeMenu">
+      <table ref="grid" class="results-table" role="grid" aria-label="搜索结果" :aria-busy="pending" tabindex="0"
+        :aria-activedescendant="selected ? 'result-' + rows.findIndex(row => row.key === selected) : undefined"
+        @keydown="handleGridKey">
+        <colgroup><col v-for="column in columns" :key="column.field" :class="'column-' + column.css"></colgroup>
+        <thead>
+          <tr>
+            <th v-for="column in columns" :key="column.field" scope="col" :class="{ sorted: sort === column.field }"
+              :aria-sort="sort === column.field ? (descending ? 'descending' : 'ascending') : undefined">
+              <button type="button" @click="emit('sort', column.field)">
+                {{ column.name }}
+                <span v-if="sort === column.field" class="sort-caret" :class="{ descending }" aria-hidden="true"></span>
+              </button>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="(row, index) in rows" :id="'result-' + index" :key="row.key" :aria-selected="selected === row.key"
+            @click="clickRow(row)" @dblclick="runAction('open', row.key)"
+            @contextmenu.prevent="openMenu(row, $event.clientX, $event.clientY)">
+            <td class="entry-name" :title="row.name"><span class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>{{ row.name }}</td>
+            <td class="entry-path" :title="row.fullPath">{{ row.fullPath }}</td>
+            <td class="entry-size">{{ row.sizeText }}</td>
+            <td class="entry-date">{{ row.modifiedText }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!rows.length" class="empty-results">
+      <slot />
+      <p v-if="emptyMessage" role="status">{{ emptyMessage }}</p>
+    </div>
+    <div v-if="menu" ref="menuElement" class="file-menu" role="menu" aria-label="文件操作"
+      :style="{ left: menu.left + 'px', top: menu.top + 'px' }" @pointerdown.stop @keydown="handleMenuKey"
+      @focusout="(event) => { if (!menuElement?.contains(event.relatedTarget as Node)) closeMenu() }">
+      <button v-for="action in actions" :key="action.type" type="button" role="menuitem" @click="runAction(action.type, menu.key)">
+        {{ action.label }}
+        <kbd v-if="'shortcut' in action">{{ action.shortcut }}</kbd>
+      </button>
+    </div>
+  </section>
+</template>

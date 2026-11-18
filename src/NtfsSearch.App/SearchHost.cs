@@ -1,113 +1,71 @@
-using System.ComponentModel;
 using System.Diagnostics;
-using System.Windows;
-using System.Windows.Controls;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-public partial class MainWindow : Window
+internal sealed class SearchHost
 {
     private readonly SearchCatalog catalog = new();
     private readonly AutomaticVolumeLoader loader;
     private readonly WindowsVolumeBackend? windowsBackend;
-    private readonly CancellationTokenSource lifetime = new();
-    private CancellationTokenSource? queryCancellation;
-    private readonly bool smokeTest;
-    private int offset;
-    private long total;
-    private bool ready, closing;
-    private const int PageSize = 200;
 
-    public MainWindow(bool smokeTest = false, string? cacheDirectory = null)
+    internal SearchCatalog Catalog => catalog;
+    internal AutomaticVolumeLoader Loader => loader;
+    internal CollectorMetrics? Metrics => windowsBackend?.Metrics;
+    internal event Action<string, bool>? Progress;
+
+    internal SearchHost(int? demoCount = null, string? cacheDirectory = null)
     {
-        InitializeComponent();
-        InitializeSearch();
-        this.smokeTest = smokeTest;
         IAutomaticVolumeBackend backend;
-        if (smokeTest) backend = new SmokeBackend();
+        if (demoCount is int count) backend = new SmokeBackend(count);
         else
         {
-            windowsBackend = new WindowsVolumeBackend(Dispatcher, cacheDirectory);
-            windowsBackend.Progress += text => OnUi(() => { if (!closing) TaskStatus.Text = text; });
+            windowsBackend = new WindowsVolumeBackend(cacheDirectory);
+            windowsBackend.Progress += (text, failure) => Progress?.Invoke(text, failure);
             windowsBackend.LiveUpdated += update => catalog.PublishLiveLayers(update.VolumeKey, update.Generation, update.Layers);
             backend = windowsBackend;
         }
         var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
         loader = new(backend, catalog, policy.CacheLoadLimit);
-        catalog.Changed += () => OnUi(RequestCatalogRefresh);
-        loader.StatusChanged += () => OnUi(() =>
+    }
+
+    internal async Task RunAutomaticAsync(CancellationToken token)
+    {
+        if (windowsBackend is null)
         {
-            if (closing) return;
-            DriveStatus.Text = string.Join("\n", loader.Statuses.Select(s => s.Root + "  " + s.Message));
-            var metrics = windowsBackend?.Metrics;
-            TaskStatus.Text = $"已发现 {loader.Statuses.Count} 个 NTFS 卷；已读取 {catalog.Count:N0} 个对象。"
-                + (metrics is null ? "" : $" 后台并行 {metrics.ActiveRoots.Length}/{metrics.ScanLimit} 个卷。");
-        });
-        ready = true;
-        TaskStatus.Text = "正在发现本机 NTFS 磁盘。已完成的磁盘会自动加入搜索。";
-        Loaded += OnLoaded;
-    }
-
-    private void OnUi(Action action)
-    {
-        if (Dispatcher.CheckAccess()) action();
-        else _ = Dispatcher.InvokeAsync(action);
-    }
-
-    private async void OnLoaded(object sender, RoutedEventArgs e)
-    {
-        if (smokeTest) return;
-        try { await RunAutomaticAsync(lifetime.Token); }
-        catch (OperationCanceledException) { }
-        catch (Exception error) { if (!closing) TaskStatus.Text = error.Message; }
-    }
-
-    private Task RunAutomaticAsync(CancellationToken token) => Task.WhenAll(
-        Task.Run(() => loader.RunAsync(token), token), windowsBackend is null ? Task.CompletedTask : Task.Run(() => windowsBackend.RunLiveAsync(token), token));
-
-    private async void RefreshDisks(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            windowsBackend?.RequestRefresh();
-            await Task.Run(() => loader.RefreshAsync(lifetime.Token, retryCollector: true), lifetime.Token);
+            await loader.RunAsync(token);
+            return;
         }
-        catch (OperationCanceledException) { }
-        catch (Exception error) { if (!closing) TaskStatus.Text = error.Message; }
+
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(token);
+        Task loading = Task.Run(() => loader.RunAsync(stopping.Token), stopping.Token);
+        Task monitoring = Task.Run(() => windowsBackend.RunLiveAsync(stopping.Token), stopping.Token);
+        // 任一循环失败时，停止另一项并报告原始错误，否则窗口会一直显示正在加载。
+        await Task.WhenAny(loading, monitoring);
+        await stopping.CancelAsync();
+        await Task.WhenAll(loading, monitoring);
     }
 
-    private void QueryChanged(object sender, RoutedEventArgs e) { if (!ready) return; offset = 0; _ = SearchAsync(); }
-    private void SortChanged(object sender, SelectionChangedEventArgs e) => QueryChanged(sender, e);
-    private void CancelTasks(object sender, RoutedEventArgs e)
+    internal async Task RefreshAsync(CancellationToken token)
     {
-        CancelSearch();
-        TryAction(() => windowsBackend?.CancelCollection());
+        windowsBackend?.RequestRefresh();
+        await loader.RefreshAsync(token, retryCollector: true);
     }
-    private void PreviousPage(object sender, RoutedEventArgs e) { offset = Math.Max(0, offset - PageSize); _ = SearchAsync(); }
-    private void NextPage(object sender, RoutedEventArgs e) { if ((long)offset + PageSize < total) { offset += PageSize; _ = SearchAsync(); } }
-    private void OpenSelected(object sender, RoutedEventArgs e)
+
+    internal void CancelCollection() => windowsBackend?.CancelCollection();
+
+    internal async Task SmokeTestAsync()
     {
-        if (ResultsGrid.SelectedItem is ResultView row) TryAction(() => Process.Start(new ProcessStartInfo(row.FullPath) { UseShellExecute = true }));
+        await loader.RefreshAsync();
+        var result = catalog.Search("\"hello world\"", SortField.Size, descending: true, limit: 200);
+        if (catalog.Count != 1000 || result.TotalCount != 59 || result.Rows.Count != 59 ||
+            result.Rows[0].Size < result.Rows[^1].Size)
+            throw new InvalidOperationException("自动采集后的搜索与排序自检失败。");
     }
-    private void RevealSelected(object sender, RoutedEventArgs e)
-    {
-        if (ResultsGrid.SelectedItem is not ResultView row) return;
-        TryAction(() =>
-        {
-            var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
-            start.ArgumentList.Add("/select," + row.FullPath); Process.Start(start);
-        });
-    }
-    private void CopySelected(object sender, RoutedEventArgs e)
-    { if (ResultsGrid.SelectedItem is ResultView row) TryAction(() => Clipboard.SetText(row.FullPath)); }
-    private void TryAction(Action action) { try { action(); } catch (Exception error) { TaskStatus.Text = error.Message; } }
-    private void OnClosing(object? sender, CancelEventArgs e)
-    { closing = true; queryState.Close(); refreshTimer.Stop(); lifetime.Cancel(); queryCancellation?.Cancel(); }
 
     internal async Task<object> AutomaticReadTestAsync(bool requireParallel = false)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        using var deadline = new CancellationTokenSource();
         deadline.CancelAfter(TimeSpan.FromMinutes(5));
         Task running = RunAutomaticAsync(deadline.Token);
         try
@@ -139,7 +97,7 @@ public partial class MainWindow : Window
 
     internal async Task<object> FullAuditAsync(string diagnosticDirectory)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        using var deadline = new CancellationTokenSource();
         deadline.CancelAfter(TimeSpan.FromMinutes(45));
         Task running = RunAutomaticAsync(deadline.Token);
         try
@@ -197,11 +155,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private sealed class SmokeBackend : IAutomaticVolumeBackend
+    private sealed class SmokeBackend(int count) : IAutomaticVolumeBackend
     {
         public IReadOnlyList<NtfsVolume> Discover() => [new("smoke-volume", @"C:\", 100, "测试")];
         public string CacheRevision(NtfsVolume volume) => "v1";
-        public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.FromResult<CachedVolume?>(new(DemoData.Create(), false));
+        public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.FromResult<CachedVolume?>(new(DemoData.Create(count), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;
         public string ReadStatus(NtfsVolume volume) => "测试磁盘已发现";
     }

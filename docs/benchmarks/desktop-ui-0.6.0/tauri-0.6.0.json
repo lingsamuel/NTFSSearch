@@ -1,0 +1,112 @@
+{
+  "rows": 1000000,
+  "processes": [
+    {
+      "ProcessName": "msedgewebview2",
+      "Id": 27340,
+      "WorkingSet64": 43900928,
+      "PrivateMemorySize64": 67284992
+    },
+    {
+      "ProcessName": "msedgewebview2",
+      "Id": 65624,
+      "WorkingSet64": 83128320,
+      "PrivateMemorySize64": 116916224
+    },
+    {
+      "ProcessName": "msedgewebview2",
+      "Id": 66496,
+      "WorkingSet64": 85594112,
+      "PrivateMemorySize64": 44609536
+    },
+    {
+      "ProcessName": "msedgewebview2",
+      "Id": 73916,
+      "WorkingSet64": 21917696,
+      "PrivateMemorySize64": 7929856
+    },
+    {
+      "ProcessName": "msedgewebview2",
+      "Id": 90100,
+      "WorkingSet64": 161718272,
+      "PrivateMemorySize64": 120741888
+    },
+    {
+      "ProcessName": "NtfsSearch.App",
+      "Id": 94152,
+      "WorkingSet64": 29519872,
+      "PrivateMemorySize64": 61014016
+    },
+    {
+      "ProcessName": "NtfsSearch.Backend",
+      "Id": 89116,
+      "WorkingSet64": 256311296,
+      "PrivateMemorySize64": 237518848
+    }
+  ],
+  "samples": [
+    {
+      "text": "\"hello world\"",
+      "count": 58824,
+      "run": 0,
+      "wallMilliseconds": 44.59999990463257,
+      "queryMilliseconds": 20.08
+    },
+    {
+      "text": "目录009",
+      "count": 100,
+      "run": 0,
+      "wallMilliseconds": 34.39999985694885,
+      "queryMilliseconds": 10.04
+    },
+    {
+      "text": "ntfs-absent-fixture",
+      "count": 0,
+      "run": 0,
+      "wallMilliseconds": 11.5,
+      "queryMilliseconds": 2.1
+    },
+    {
+      "text": "\"hello world\"",
+      "count": 58824,
+      "run": 1,
+      "wallMilliseconds": 24.59999990463257,
+      "queryMilliseconds": 2.05
+    },
+    {
+      "text": "目录009",
+      "count": 100,
+      "run": 1,
+      "wallMilliseconds": 25.200000047683716,
+      "queryMilliseconds": 8.78
+    },
+    {
+      "text": "ntfs-absent-fixture",
+      "count": 0,
+      "run": 1,
+      "wallMilliseconds": 9.599999904632568,
+      "queryMilliseconds": 2.31
+    },
+    {
+      "text": "\"hello world\"",
+      "count": 58824,
+      "run": 2,
+      "wallMilliseconds": 28.399999856948853,
+      "queryMilliseconds": 2.03
+    },
+    {
+      "text": "目录009",
+      "count": 100,
+      "run": 2,
+      "wallMilliseconds": 26.700000047683716,
+      "queryMilliseconds": 7.78
+    },
+    {
+      "text": "ntfs-absent-fixture",
+      "count": 0,
+      "run": 2,
+      "wallMilliseconds": 9.200000047683716,
+      "queryMilliseconds": 2.22
+    }
+  ]
+}

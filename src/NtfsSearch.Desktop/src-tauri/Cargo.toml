@@ -1,0 +1,12 @@
+[package]
+name = "ntfs-search"
+version = "0.6.0"
+description = "NTFS 文件搜索"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+serde_json = "1"
+tauri = { version = "2", features = ["custom-protocol"] }

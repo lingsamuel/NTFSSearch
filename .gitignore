@@ -6,3 +6,8 @@ artifacts/
 *.tmp
 TestResults/
 **/Data/
+
+/src/NtfsSearch.Desktop/node_modules/
+/src/NtfsSearch.Desktop/dist/
+/src/NtfsSearch.Desktop/src-tauri/target/
+/src/NtfsSearch.Desktop/src-tauri/gen/

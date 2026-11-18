@@ -3,22 +3,20 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
-using System.Windows.Threading;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
 internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
 {
-    private readonly Dispatcher dispatcher;
     private readonly string? cacheDirectory;
     private readonly VolumeCache cache;
     private readonly LiveIndexFeed liveFeed;
     private readonly SnapshotFormatMaintenance snapshotFormats;
 
-    public WindowsVolumeBackend(Dispatcher dispatcher, string? cacheDirectory = null)
+    public WindowsVolumeBackend(string? cacheDirectory = null)
     {
-        this.dispatcher = dispatcher; this.cacheDirectory = cacheDirectory;
+        this.cacheDirectory = cacheDirectory;
         cache = new(cacheDirectory ?? PortableDataDirectory.Resolve());
         liveFeed = new(cache.DirectoryPath); snapshotFormats = new(cache);
     }
@@ -27,6 +25,7 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
     private Task<CacheMigrationResult>? migration;
     public event Action<LiveIndexUpdate>? LiveUpdated;
     private readonly ConcurrentDictionary<string, string> publishedGenerations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> liveErrors = new(StringComparer.Ordinal);
     private NtfsVolume[] lastDiscoveredVolumes = [];
     private CollectorMetrics? metrics;
     public CollectorMetrics? Metrics => Volatile.Read(ref metrics);
@@ -56,13 +55,15 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
 
     private readonly string session = Guid.NewGuid().ToString("N");
     private Process? launchedCollector;
-    private bool expectingCollector, suspended, permissionRefused;
+    private bool expectingCollector, permissionRefused;
+    private readonly object collectorGate = new();
+    private volatile bool suspended;
     private int launchAttempts;
     private DateTime nextLaunchUtc;
     public bool CollectorNeedsRestart => expectingCollector && !suspended && !permissionRefused
         && launchAttempts < 3 && DateTime.UtcNow >= nextLaunchUtc
         && (launchedCollector is null || launchedCollector.HasExited) && !CollectorHost.IsRunning(cache.DirectoryPath);
-    public event Action<string>? Progress;
+    public event Action<string, bool>? Progress;
     public void RequestRebuild(NtfsVolume volume) => RequestRebuild(volume, "缓存缺失、校验失败或旧格式需要升级。");
     private void RequestRebuild(NtfsVolume volume, string reason) => AtomicJson.Write(Path.Combine(cache.DirectoryPath,
         VolumeCache.Key(volume) + ".rebuild.json"), new { Id = Guid.NewGuid().ToString("N"), Reason = reason, RequestedUtc = DateTime.UtcNow });
@@ -84,6 +85,8 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
         var keys = volumes.Select(VolumeCache.Key).ToHashSet(StringComparer.Ordinal);
         foreach (string key in publishedGenerations.Keys)
             if (!keys.Contains(key)) publishedGenerations.TryRemove(key, out _);
+        foreach (string key in liveErrors.Keys)
+            if (!keys.Contains(key)) liveErrors.TryRemove(key, out _);
         return volumes;
     }
     public string CacheRevision(NtfsVolume volume) => cache.Revision(volume);
@@ -100,7 +103,7 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
             await pending;
         }
         var loaded = await Task.Run(() => cache.Load(volume, token,
-            new Progress<string>(message => Progress?.Invoke(volume.Root + " " + message))), token);
+            new Progress<string>(message => Progress?.Invoke(volume.Root + " " + message, false))), token);
         if (loaded is null) return null;
         var layers = await liveFeed.AttachAsync(volume, loaded, token);
         snapshotFormats.Enqueue(volume, loaded);
@@ -122,7 +125,7 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
         liveFeed.Updated += update => LiveUpdated?.Invoke(update);
         liveFeed.Failed += (volume, message) =>
         {
-            Progress?.Invoke(volume.Root + " " + message);
+            liveErrors[VolumeCache.Key(volume)] = message;
             try { RequestRebuild(volume, message); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         };
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -138,7 +141,11 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
     public void OnPublished(NtfsVolume volume, string? generation)
     {
         if (generation is not null && liveFeed.Activate(volume, generation))
-            publishedGenerations[VolumeCache.Key(volume)] = generation;
+        {
+            string key = VolumeCache.Key(volume);
+            publishedGenerations[key] = generation;
+            liveErrors.TryRemove(key, out _);
+        }
     }
 
     public async Task EnsureCollectorAsync(CancellationToken token)
@@ -146,12 +153,17 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
         token.ThrowIfCancellationRequested();
         if (CollectorHost.IsRunning(cache.DirectoryPath)) { expectingCollector = true; return; }
         if (launchedCollector is not null && !launchedCollector.HasExited) return;
-        await dispatcher.InvokeAsync(() =>
+        await Task.Run(() =>
         {
             token.ThrowIfCancellationRequested();
+            lock (collectorGate)
+            {
+                if (suspended) return;
+                File.Delete(Path.Combine(cache.DirectoryPath, session + ".stop"));
+            }
+            // ShellExecute 等待 UAC 时，卷缓存加载与查询仍可独立推进。
             try
             {
-                File.Delete(Path.Combine(cache.DirectoryPath, session + ".stop"));
                 permissionRefused = false;
                 using var parent = Process.GetCurrentProcess();
                 launchedCollector?.Dispose();
@@ -160,25 +172,43 @@ internal sealed class WindowsVolumeBackend : IAutomaticVolumeBackend
                 launchAttempts++;
                 nextLaunchUtc = DateTime.UtcNow.AddSeconds(5 * launchAttempts);
                 expectingCollector = true;
-                Progress?.Invoke("已启动后台采集，完成的磁盘会自动加入搜索。");
+                Progress?.Invoke("已启动后台采集，完成的磁盘会自动加入搜索。", false);
             }
             catch (Win32Exception e) when (e.NativeErrorCode == 1223)
-            { permissionRefused = true; throw new UnauthorizedAccessException("Windows 授权已取消。点击“重新扫描磁盘”可重试，已有缓存仍可搜索。"); }
-        });
+            {
+                permissionRefused = true;
+                const string message = "Windows 授权已取消。点击“重新扫描磁盘”可重试，已有缓存仍可搜索。";
+                Progress?.Invoke(message, true);
+                throw new UnauthorizedAccessException(message, e);
+            }
+        }, token);
     }
 
-    public string ReadStatus(NtfsVolume volume)
+    public string ReadStatus(NtfsVolume volume) => ReadVolumeStatus(volume).Message;
+
+    public VolumeStatus ReadVolumeStatus(NtfsVolume volume)
     {
-        if (suspended) return "已暂停采集；已有索引仍可查询";
-        string path = Path.Combine(cache.DirectoryPath, VolumeCache.Key(volume) + ".progress.json");
+        if (suspended) return new(volume.Root, "已暂停采集；已有索引仍可查询");
+        string key = VolumeCache.Key(volume);
+        if (liveErrors.TryGetValue(key, out string? message))
+            return new(volume.Root, message) { HasError = true };
+        string path = Path.Combine(cache.DirectoryPath, key + ".progress.json");
         try
         {
-            if (File.Exists(path)) return JsonSerializer.Deserialize<CollectorProgress>(AtomicJson.ReadText(path))?.Message ?? "等待后台采集";
+            if (File.Exists(path) && JsonSerializer.Deserialize<CollectorProgress>(AtomicJson.ReadText(path)) is { } progress)
+                return new(volume.Root, progress.Message) { HasError = progress.Details is not null };
         }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { }
-        return "等待后台采集";
+        return new(volume.Root, "等待后台采集");
     }
 
     public void RequestRefresh() { suspended = false; launchAttempts = 0; AtomicJson.Write(Path.Combine(cache.DirectoryPath, "refresh.request.json"), new { Id = Guid.NewGuid().ToString("N") }); }
-    public void CancelCollection() { suspended = true; File.WriteAllText(Path.Combine(cache.DirectoryPath, session + ".stop"), "stop"); }
+    public void CancelCollection()
+    {
+        lock (collectorGate)
+        {
+            suspended = true;
+            File.WriteAllText(Path.Combine(cache.DirectoryPath, session + ".stop"), "stop");
+        }
+    }
 }
