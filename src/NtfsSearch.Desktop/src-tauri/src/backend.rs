@@ -59,6 +59,7 @@ struct Process {
     input: ChildStdin,
     stopping: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
+    quitting: Arc<AtomicBool>,
 }
 
 impl Backend {
@@ -101,6 +102,8 @@ impl Backend {
         });
         let stopping = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
+        let quitting = Arc::new(AtomicBool::new(false));
+        let reader_quitting = quitting.clone();
         let reader_stopping = stopping.clone();
         let reader_failed = failed.clone();
         thread::spawn(move || {
@@ -113,6 +116,15 @@ impl Backend {
                     serde_json::from_str::<Value>(&line).map_err(|error| error.to_string())
                 }) {
                     Ok(message) => {
+                        if message["type"] == "quit-complete" {
+                            reader_failed.store(true, Ordering::Release);
+                            let succeeded = message["error"].is_null();
+                            let _ = window.emit(EVENT, &message);
+                            if succeeded {
+                                let _ = window.destroy();
+                            }
+                            return;
+                        }
                         if message["scope"] == "fatal" {
                             reported_fatal = true;
                             reader_failed.store(true, Ordering::Release);
@@ -138,15 +150,19 @@ impl Backend {
                     return;
                 }
                 reader_failed.store(true, Ordering::Release);
-                let message = if reason.is_empty() {
+                let message = if reader_quitting.load(Ordering::Acquire) {
+                    "搜索后端在完成退出保存前已停止".to_owned()
+                } else if reason.is_empty() {
                     "搜索后端已退出。".to_owned()
                 } else {
                     format!("无法运行搜索后端。\n{reason}")
                 };
-                let _ = window.emit(
-                    EVENT,
-                    json!({ "type": "error", "scope": "fatal", "message": message }),
-                );
+                let event = if reader_quitting.load(Ordering::Acquire) {
+                    json!({ "type": "quit-complete", "error": message })
+                } else {
+                    json!({ "type": "error", "scope": "fatal", "message": message })
+                };
+                let _ = window.emit(EVENT, event);
             }
         });
         *process = Some(Process {
@@ -154,6 +170,7 @@ impl Backend {
             input,
             stopping,
             failed,
+            quitting,
         });
         Ok(())
     }
@@ -167,6 +184,30 @@ impl Backend {
             .input
             .write_all(&message)
             .map_err(|error| error.to_string())
+    }
+
+    /// 向仍在运行的后端请求正常关闭。收到确认前保持窗口与通信管道打开。
+    pub fn request_quit(&self) -> Result<bool, String> {
+        let mut process = self.0.lock().map_err(|error| error.to_string())?;
+        let Some(process) = process.as_mut() else {
+            return Ok(false);
+        };
+        if process.failed.load(Ordering::Acquire)
+            || process
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_some()
+        {
+            return Ok(false);
+        }
+        if !process.quitting.swap(true, Ordering::AcqRel) {
+            if let Err(error) = process.input.write_all(b"{\"type\":\"quit\"}\n") {
+                process.failed.store(true, Ordering::Release);
+                return Err(error.to_string());
+            }
+        }
+        Ok(true)
     }
 
     pub fn stop(&self) {

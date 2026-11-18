@@ -11,6 +11,7 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
 
     private readonly Channel<Action> messages = Channel.CreateUnbounded<Action>(new() { SingleReader = true });
     private readonly QueryRefreshState queryState = new();
+    private readonly FileTypeIcons fileTypeIcons = new();
     private CancellationTokenSource? search;
     private Task? searchTask;
     private long refreshGeneration;
@@ -18,14 +19,14 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
     private SearchOptions options = new(0, "", SortField.Name, false, true, 0);
     private string? progress = "正在发现本机 NTFS 磁盘…";
     private string? indexError;
-    private bool refreshing, discoveryComplete, collectionCancelled;
+    private bool refreshing, discoveryComplete, collectionCancelled, saveOnExit;
     private int catalogNoticeQueued;
 
     internal async Task RunAsync(TextReader input)
     {
         using var lifetime = new CancellationTokenSource();
         host.Catalog.Changed += QueueCatalogRefresh;
-        host.Loader.StatusChanged += () => Post(() =>
+        host.StatusChanged += () => Post(() =>
         {
             discoveryComplete = true;
             PublishStatus();
@@ -40,11 +41,14 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
         PublishStatus();
         RunQuery();
         _ = ReadInputAsync(input, lifetime.Token);
-        Task automatic = ObserveAutomaticAsync(lifetime.Token);
+        Task automatic = Task.Run(() => ObserveAutomaticAsync(lifetime.Token));
         try
         {
             await foreach (var action in messages.Reader.ReadAllAsync())
+            {
                 action();
+                if (saveOnExit) break;
+            }
         }
         finally
         {
@@ -54,6 +58,20 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
             await lifetime.CancelAsync();
             await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask);
             activeSearch?.Dispose();
+        }
+
+        if (saveOnExit)
+        {
+            string? error = null;
+            try
+            {
+                host.SaveExitSnapshot((written, total) => publish(new { Type = "saving", Written = written, Total = total }));
+            }
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                error = "无法保存退出快照：" + failure.Message;
+            }
+            publish(new { Type = "quit-complete", Error = error });
         }
     }
 
@@ -105,6 +123,15 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
                         request.Descending, request.MatchPath, request.Offset);
                     RunQuery();
                     break;
+                case "quit":
+                    saveOnExit = true;
+                    publish(new { Type = "saving", Written = 0, Total = host.Catalog.VolumeCount });
+                    messages.Writer.TryComplete();
+                    break;
+                case "fileTypeIcons":
+                    if (request.Extensions is { Length: > 0 } extensions)
+                        _ = PublishFileTypeIconsAsync(extensions, token);
+                    break;
                 case "rescan":
                     if (refreshing) break;
                     indexError = null;
@@ -132,6 +159,16 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
             }
         }
         catch (Exception error) { PublishError("action", error.Message); }
+    }
+
+    private async Task PublishFileTypeIconsAsync(string[] extensions, CancellationToken token)
+    {
+        try
+        {
+            var icons = await fileTypeIcons.GetAsync(extensions, token);
+            Post(() => publish(new { Type = "fileTypeIcons", Icons = icons }));
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
 
     private async Task RescanAsync(CancellationToken token)
@@ -254,7 +291,7 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
         var metrics = host.Metrics;
         publish(new
         {
-            Type = "status", Volumes = host.Loader.Statuses,
+            Type = "status", Volumes = host.Statuses,
             Indexed = host.Catalog.Count, VolumesReady = host.Catalog.VolumeCount,
             Active = metrics?.ActiveRoots.Length ?? 0,
             ScanLimit = metrics?.ScanLimit,
@@ -269,5 +306,5 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
     private sealed record SearchOptions(long RequestId, string Text, SortField Sort, bool Descending, bool MatchPath, int Offset);
 
     private sealed record DesktopRequest(string Type, long RequestId, string Text = "", SortField Sort = SortField.Name,
-        bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0);
+        bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null);
 }

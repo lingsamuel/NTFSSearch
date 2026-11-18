@@ -9,6 +9,9 @@ namespace NtfsSearch.Core;
 
 public sealed record NtfsScanResult(SearchIndex Index, JournalPosition Position, JournalCapture Capture);
 
+internal delegate void NtfsRowVisitor(string parentPath, ReadOnlySpan<char> name,
+    long? size, long? modifiedUtcTicks, bool directory, ulong reference, ulong parentReference);
+
 public static class NtfsEnumerator
 {
     public static SearchIndex Scan(char drive, CancellationToken cancellationToken = default,
@@ -38,8 +41,12 @@ public static class NtfsEnumerator
     [SupportedOSPlatform("windows")]
     private static SearchIndex ScanWindows(char drive, CancellationToken token, IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory)
     {
-        using var handle = OpenVolume(drive);
-        return ScanOpenedVolume(drive, handle, token, progress, unreachableRecords, excludeDirectory);
+        IndexBuilder builder = null!;
+        ReadRows(drive, count => builder = new(count),
+            (parent, name, size, modified, directory, file, directoryId) => builder.Add(parent, name, size, modified, directory, file, directoryId),
+            token, progress, unreachableRecords, excludeDirectory);
+        progress?.Report("建立排序索引…");
+        return builder.Build(token, progress);
     }
 
     [SupportedOSPlatform("windows")]
@@ -62,8 +69,10 @@ public static class NtfsEnumerator
     }
 
     [SupportedOSPlatform("windows")]
-    private static SearchIndex ScanOpenedVolume(char drive, SafeFileHandle handle, CancellationToken token, IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory)
+    internal static void ReadRows(char drive, Action<int> initialize, NtfsRowVisitor add, CancellationToken token,
+        IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory)
     {
+        using var handle = OpenVolume(drive);
         var directories = new Dictionary<ulong, (ulong Parent, string Name)>();
         long recordCount = 0;
         progress?.Report("枚举目录关系（第 1 遍）…");
@@ -76,7 +85,7 @@ public static class NtfsEnumerator
         if (recordCount > int.MaxValue) throw new NotSupportedException("原型单索引上限为 21 亿目录项。");
         var resolver = new DirectoryPathResolver(drive, directories, id => DirectoryById(handle, id, drive));
         progress?.Report("建立名称索引（第 2 遍）…");
-        var builder = new IndexBuilder((int)recordCount);
+        initialize((int)recordCount);
         long added = 0, skipped = 0;
         progress?.Report("读取MFT元数据并补全硬链接…");
         using var metadata = new MftMetadataReader(drive);
@@ -91,7 +100,7 @@ public static class NtfsEnumerator
                 foreach (var link in state.Links)
                 {
                     if (NativePathExclusion.Contains(excludeDirectory, link.ParentPath, link.Name)) continue;
-                    builder.Add(link.ParentPath, link.Name, state.Size, state.ModifiedUtcTicks, false,
+                    add(link.ParentPath, link.Name, state.Size, state.ModifiedUtcTicks, false,
                         frn, link.ParentReference);
                 }
             }
@@ -100,14 +109,12 @@ public static class NtfsEnumerator
                 string? parentPath = resolver.Resolve(parent);
                 if (parentPath is null) { skipped++; return; }
                 if (NativePathExclusion.Contains(excludeDirectory, parentPath, name)) return;
-                builder.Add(parentPath, name, directory ? null : information?.Size,
+                add(parentPath, name, directory ? null : information?.Size,
                 information?.ModifiedUtcTicks, directory, frn, parent);
             }
             if ((++added & 262143) == 0) progress?.Report($"已索引 {added:N0} 条记录…");
         });
         unreachableRecords?.Invoke(skipped);
-        progress?.Report("建立排序索引…");
-        return builder.Build(token, progress);
     }
 
     private static bool IsRoot(ulong frn) => DirectoryPathResolver.IsRoot(frn);

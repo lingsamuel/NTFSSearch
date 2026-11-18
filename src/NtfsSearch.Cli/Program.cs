@@ -33,10 +33,13 @@ try
             Console.WriteLine($"精确匹配 {result.TotalCount:N0}；查询 {result.Elapsed.TotalMilliseconds:F3} ms（不含载入）");
             foreach (var row in result.Rows) Console.WriteLine(row.FullPath);
             break;
+        case "bench-exit" when args.Length == 3:
+            Console.WriteLine(JsonSerializer.Serialize(ExitSnapshotBenchmark.Run(args[1], args[2], cancellation.Token)));
+            break;
         case "bench":
             Benchmark.Run(args.Skip(1).ToArray(), cancellation.Token); break;
         default:
-            Console.WriteLine("NtfsSearch 0.6.1\n\n桌面程序自动发现并读取 NTFS 磁盘，无需输入索引。\n高级命令：\n  drives\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]");
+            Console.WriteLine("NtfsSearch 0.7.0\n\n桌面程序自动发现并读取 NTFS 磁盘，无需输入索引。\n高级命令：\n  drives\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]\n  bench-exit <旧版 Data 目录> <测试退出快照>");
             break;
     }
 }

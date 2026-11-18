@@ -142,6 +142,19 @@ try {
     }
     await writeFile(join(output, 'benchmark.json'), JSON.stringify({ rows: total, processes: JSON.parse(memory.stdout), samples }, null, 2))
   } else {
+    const fileIcon = extension => `document.querySelector('td.entry-name[title$="${extension}"] img.entry-file-type-icon')`
+    const textIcon = await until(() => evaluate(`(() => {
+      const icon = ${fileIcon('.txt')};
+      return icon?.naturalWidth > 0 && icon.src;
+    })()`), '文本文件类型图标')
+    assert.equal(await evaluate(`Boolean(${fileIcon('.png')})`), false, '屏外文件类型尚未加载')
+    await evaluate("document.querySelector('td.entry-name[title$=\".png\"]').scrollIntoView({ block: 'center' })")
+    const imageIcon = await until(() => evaluate(`(() => {
+      const icon = ${fileIcon('.png')};
+      return icon?.naturalWidth > 0 && icon.src;
+    })()`), '滚动后加载图片文件类型图标')
+    assert.notEqual(textIcon, imageIcon)
+
     await evaluate("document.querySelector('button[aria-label=\"下一页\"]').click()")
     await until(() => evaluate("document.querySelector('.page-number').textContent.trim() === '2 / 5'"), '第二页')
     await evaluate("document.querySelector('th:nth-child(3) button').click()")
@@ -213,7 +226,7 @@ try {
   assert.equal(code, 0)
   const leftover = await powerShell(`if (Get-Process -Id ${backend} -ErrorAction SilentlyContinue) { 'running' }`)
   assert.equal(leftover.stdout.trim(), '')
-  console.log(benchmark ? 'Windows 桌面性能采样与进程退出通过。' : 'Windows 桌面启动、搜索、排序、分页、键盘、右键、窄窗口、四列拖动、大小单位和退出通过。')
+  console.log(benchmark ? 'Windows 桌面性能采样与进程退出通过。' : 'Windows 桌面启动、搜索、排序、分页、文件图标、键盘、右键、窄窗口、四列拖动、大小单位和退出通过。')
 } finally {
   socket?.close()
   if (application.exitCode == null) {

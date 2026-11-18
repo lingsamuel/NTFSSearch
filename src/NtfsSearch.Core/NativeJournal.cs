@@ -140,6 +140,16 @@ public static class NativeJournal
         return NativeFileState.FinalPath(handle) ?? throw new Win32Exception(Marshal.GetLastWin32Error());
     }
 
+    internal static string CanonicalPathForMissingPath(string path)
+    {
+        try { return CanonicalPathForPath(path); }
+        catch (Win32Exception error) when (error.NativeErrorCode is 2 or 3 && Path.GetDirectoryName(path) is { } parent)
+        {
+            // 首次启动可以没有Data目录，解析最近存在的父目录即可保留junction等路径规则。
+            return Path.Combine(CanonicalPathForMissingPath(parent), Path.GetFileName(path));
+        }
+    }
+
     public static IEnumerable<IndexedFileState> EnumerateSubtree(char drive, ulong directoryReference,
         CancellationToken token = default) => NativeSubtree.Enumerate(drive, directoryReference, token);
 

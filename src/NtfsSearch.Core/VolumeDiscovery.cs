@@ -18,15 +18,21 @@ public static class VolumeDiscovery
             {
                 if (drive.DriveType is not (DriveType.Fixed or DriveType.Removable) || !drive.IsReady
                     || !drive.DriveFormat.Equals("NTFS", StringComparison.OrdinalIgnoreCase)) continue;
-                var id = new StringBuilder(64);
-                if (!GetVolumeNameForVolumeMountPointW(drive.RootDirectory.FullName, id, id.Capacity))
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                volumes.Add(new(id.ToString(), drive.RootDirectory.FullName, drive.TotalSize, drive.VolumeLabel, VolumeResources.PhysicalDisks(drive.Name[0])));
+                string root = drive.RootDirectory.FullName;
+                volumes.Add(new(IdentityAtRoot(root), root, drive.TotalSize, drive.VolumeLabel, VolumeResources.PhysicalDisks(drive.Name[0])));
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or Win32Exception)
             { /* 离线或锁定卷不应阻止发现其他磁盘；下一轮重新探测。 */ }
         }
         return volumes.OrderBy(v => v.Root, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    internal static string IdentityAtRoot(string root)
+    {
+        var id = new StringBuilder(64);
+        if (!GetVolumeNameForVolumeMountPointW(root, id, id.Capacity))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        return id.ToString();
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

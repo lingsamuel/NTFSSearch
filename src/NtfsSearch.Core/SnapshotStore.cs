@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
@@ -33,8 +34,7 @@ public static class SnapshotStore
             foreach (string directory in index.Directories)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                writer.Write(directory.Length);
-                crypto.Write(MemoryMarshal.AsBytes(directory.AsSpan()));
+                WriteUtf16(writer, directory);
             }
             WriteArray<ulong>(crypto, index.Names.Descriptors, cancellationToken);
             foreach (char[] chunk in index.Names.Chunks)
@@ -145,7 +145,7 @@ public static class SnapshotStore
             if (chars > 32768) throw new InvalidDataException("快照目录路径过长。");
             if (chars == 0) throw new InvalidDataException("快照目录格式错误。");
             directories[i] = string.Create(chars, stream,
-                static (span, source) => source.ReadExactly(MemoryMarshal.AsBytes(span)));
+                static (span, source) => ReadUtf16(source, span));
             if (directories[i][^1] != '\\') throw new InvalidDataException("快照目录格式错误。");
         }
         var arena = new NameArena { LastUsed = lastUsed, AsciiLastUsed = asciiLastUsed };
@@ -305,22 +305,41 @@ public static class SnapshotStore
     {
         long payload = stream.Length - 32;
         if (payload < 24) throw new InvalidDataException("快照不完整。");
-        using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
-        {
-            var buffer = new byte[1 << 20];
-            while (stream.Position < payload)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, payload - stream.Position));
-                if (read == 0) throw new InvalidDataException("快照提前结束。");
-                hash.AppendData(buffer, 0, read);
-            }
-            Span<byte> expected = stackalloc byte[32]; stream.ReadExactly(expected);
-            if (!CryptographicOperations.FixedTimeEquals(expected, hash.GetHashAndReset()))
-                throw new InvalidDataException("快照校验失败。可尝试加载上一代 .bak；原文件未修改。");
-        }
+        Span<byte> actual = stackalloc byte[32], expected = stackalloc byte[32];
+        CalculateChecksum(stream, payload, actual, cancellationToken);
+        stream.ReadExactly(expected);
+        if (!CryptographicOperations.FixedTimeEquals(expected, actual))
+            throw new InvalidDataException("快照校验失败。可尝试加载上一代 .bak；原文件未修改。");
         return payload;
     }
+
+    internal static void CalculateChecksum(Stream stream, long end, Span<byte> digest, CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(1 << 20);
+        try
+        {
+            long remaining = end - stream.Position;
+            while (remaining > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                if (read == 0) throw new InvalidDataException("快照提前结束。");
+                hash.AppendData(buffer, 0, read);
+                remaining -= read;
+            }
+            hash.GetHashAndReset(digest);
+        }
+        finally { ArrayPool<byte>.Shared.Return(buffer); }
+    }
+
+    internal static void WriteUtf16(BinaryWriter writer, ReadOnlySpan<char> text)
+    {
+        writer.Write(text.Length);
+        writer.Write(MemoryMarshal.AsBytes(text));
+    }
+
+    internal static void ReadUtf16(Stream stream, Span<char> text) => stream.ReadExactly(MemoryMarshal.AsBytes(text));
 
     private static void WriteArray<T>(Stream stream, ReadOnlySpan<T> values, CancellationToken token) where T : unmanaged
     {

@@ -32,15 +32,16 @@ internal static class Program
             }
         }
 
-        if (args.FirstOrDefault() is "--collect" or "--scan-volume")
+        if (args is ["--memory-collector" or "--memory-scan", string pipeName, string parent]
+            && int.TryParse(parent, out int parentPid))
         {
-            try { return args[0] == "--collect" ? await CollectorHost.RunAsync(args) : await CollectorHost.ScanVolumeAsync(args); }
-            catch (Exception error)
+            try
             {
-                if (args.Length > 1 && Directory.Exists(args[1]))
-                    File.WriteAllText(Path.Combine(args[1], "collector-error.txt"), error.Message);
-                return 1;
+                return args[0] == "--memory-collector"
+                    ? await MemoryCollector.RunAsync(pipeName, parentPid)
+                    : await MemoryCollector.RunScanAsync(pipeName, parentPid);
             }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         }
 
         if (args.Length != 2) return 2;

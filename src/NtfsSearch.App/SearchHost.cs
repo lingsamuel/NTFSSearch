@@ -6,57 +6,83 @@ namespace NtfsSearch.App;
 internal sealed class SearchHost
 {
     private readonly SearchCatalog catalog = new();
-    private readonly AutomaticVolumeLoader loader;
-    private readonly WindowsVolumeBackend? windowsBackend;
+    private readonly AutomaticVolumeLoader? demo;
+    private readonly string cacheDirectory;
+    private readonly string snapshotPath;
+    private volatile MemoryVolumeBackend? windowsBackend;
 
     internal SearchCatalog Catalog => catalog;
-    internal AutomaticVolumeLoader Loader => loader;
+    internal IReadOnlyList<VolumeStatus> Statuses => windowsBackend?.Statuses ?? demo?.Statuses ?? [];
     internal CollectorMetrics? Metrics => windowsBackend?.Metrics;
+    internal event Action? StatusChanged;
     internal event Action<string, bool>? Progress;
 
     internal SearchHost(int? demoCount = null, string? cacheDirectory = null)
     {
-        IAutomaticVolumeBackend backend;
-        if (demoCount is int count) backend = new SmokeBackend(count);
-        else
+        this.cacheDirectory = cacheDirectory ?? PortableDataDirectory.Resolve();
+        snapshotPath = Path.Combine(this.cacheDirectory, ExitSnapshotStore.FileName);
+        if (demoCount is int count)
         {
-            windowsBackend = new WindowsVolumeBackend(cacheDirectory);
-            windowsBackend.Progress += (text, failure) => Progress?.Invoke(text, failure);
-            windowsBackend.LiveUpdated += update => catalog.PublishLiveLayers(update.VolumeKey, update.Generation, update.Layers);
-            backend = windowsBackend;
+            demo = new(new SmokeBackend(count), catalog);
+            demo.StatusChanged += () => StatusChanged?.Invoke();
         }
-        var policy = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount, VolumeResources.AvailableMemoryBytes());
-        loader = new(backend, catalog, policy.CacheLoadLimit);
     }
 
     internal async Task RunAutomaticAsync(CancellationToken token)
     {
-        if (windowsBackend is null)
+        if (demo is not null)
         {
-            await loader.RunAsync(token);
+            await demo.RunAsync(token);
             return;
         }
 
-        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(token);
-        Task loading = Task.Run(() => loader.RunAsync(stopping.Token), stopping.Token);
-        Task monitoring = Task.Run(() => windowsBackend.RunLiveAsync(stopping.Token), stopping.Token);
-        // 任一循环失败时，停止另一项并报告原始错误，否则窗口会一直显示正在加载。
-        await Task.WhenAny(loading, monitoring);
-        await stopping.CancelAsync();
-        await Task.WhenAll(loading, monitoring);
+        var backend = new MemoryVolumeBackend(catalog, ReadStartup(token), cacheDirectory);
+        backend.StatusChanged += () => StatusChanged?.Invoke();
+        backend.Progress += (message, failure) => Progress?.Invoke(message, failure);
+        windowsBackend = backend;
+        await backend.RunAsync(token);
     }
 
-    internal async Task RefreshAsync(CancellationToken token)
+    private IEnumerable<ExitSnapshotVolume> ReadStartup(CancellationToken token)
     {
-        windowsBackend?.RequestRefresh();
-        await loader.RefreshAsync(token, retryCollector: true);
+        if (!File.Exists(snapshotPath)) yield break;
+        Progress?.Invoke("正在加载上次退出保存的索引…", false);
+        int parallelism = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount,
+            VolumeResources.AvailableMemoryBytes()).CacheLoadLimit;
+        using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, maxConcurrency: parallelism).GetEnumerator();
+        while (true)
+        {
+            ExitSnapshotVolume current;
+            try
+            {
+                if (!entries.MoveNext()) yield break;
+                current = entries.Current;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                Progress?.Invoke("退出快照无法读取，将从磁盘恢复索引：" + error.Message, true);
+                yield break;
+            }
+            yield return current;
+        }
     }
+
+    internal Task RefreshAsync(CancellationToken token)
+        => windowsBackend?.RefreshAsync(token) ?? demo?.RefreshAsync(token) ?? Task.CompletedTask;
 
     internal void CancelCollection() => windowsBackend?.CancelCollection();
 
+    /// <summary>正常关闭且采集循环退出后保存，冻结每个卷的已发布视图与水位。</summary>
+    internal void SaveExitSnapshot(Action<int, int> progress)
+    {
+        if (windowsBackend is not { ReadyToSave: true } backend) return;
+        var volumes = backend.CaptureForExit();
+        if (volumes.Count > 0) ExitSnapshotStore.Save(snapshotPath, volumes, progress: progress);
+    }
+
     internal async Task SmokeTestAsync()
     {
-        await loader.RefreshAsync();
+        await demo!.RefreshAsync();
         var result = catalog.Search("\"hello world\"", SortField.Size, descending: true, limit: 200);
         if (catalog.Count != 1000 || result.TotalCount != 59 || result.Rows.Count != 59 ||
             result.Rows[0].Size < result.Rows[^1].Size)
@@ -78,13 +104,13 @@ internal sealed class SearchHost
             var result = await Task.Run(() => catalog.Search("", limit: 1, cancellationToken: deadline.Token), deadline.Token);
             return new
             {
-                DiscoveredRoots = loader.Statuses.Select(s => s.Root).ToArray(),
+                DiscoveredRoots = Statuses.Select(s => s.Root).ToArray(),
                 IndexedVolumes = catalog.VolumeCount,
                 IndexedObjects = result.TotalCount,
                 SearchHasResults = result.Rows.Count > 0,
                 FirstIndexedRoot = result.Rows.FirstOrDefault()?.FullPath[..3],
                 Parallel = windowsBackend?.Metrics,
-                Mode = "正常自动发现、提权采集、缓存发布与自动加载路径；无手工索引、无主窗口、首卷就绪后停止测试。"
+                Mode = "正常自动发现、提权采集、内存发布路径；无手工索引、无主窗口、首卷就绪后停止测试。"
             };
         }
         finally
@@ -100,6 +126,7 @@ internal sealed class SearchHost
         using var deadline = new CancellationTokenSource();
         deadline.CancelAfter(TimeSpan.FromMinutes(45));
         Task running = RunAutomaticAsync(deadline.Token);
+        bool finished = false;
         try
         {
             while (true)
@@ -107,7 +134,7 @@ internal sealed class SearchHost
                 await WaitForFullAuditReadinessAsync(running, deadline.Token);
                 var liveVerification = await AutomaticLiveVerification.RunAsync(catalog, diagnosticDirectory, deadline.Token);
                 var rows = new List<object>();
-                foreach (var status in loader.Statuses)
+                foreach (var status in Statuses)
                 {
                     var result = await Task.Run(() => catalog.Search(status.Root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
                     rows.Add(new { status.Root, Count = result.TotalCount });
@@ -122,6 +149,7 @@ internal sealed class SearchHost
                     ManagedBytes = GC.GetTotalMemory(false),
                     AllocatedBytes = GC.GetTotalAllocatedBytes(false)
                 };
+                finished = true;
                 return new
                 {
                     Success = true,
@@ -138,6 +166,7 @@ internal sealed class SearchHost
         {
             windowsBackend?.CancelCollection(); await deadline.CancelAsync();
             try { await running; } catch (OperationCanceledException) { }
+            if (finished) SaveExitSnapshot((_, _) => { });
         }
     }
 
@@ -145,7 +174,7 @@ internal sealed class SearchHost
     {
         while (true)
         {
-            while (loader.Statuses.Count == 0 || !windowsBackend!.AuditCanFinish)
+            while (Statuses.Count == 0 || !windowsBackend!.AuditCanFinish)
             {
                 if (running.IsCompleted) await running;
                 await Task.Delay(500, token);

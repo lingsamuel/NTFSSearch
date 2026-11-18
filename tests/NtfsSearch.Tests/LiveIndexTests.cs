@@ -60,6 +60,29 @@ public class LiveIndexTests
         Assert.Equal(new[] { @"C:\z.txt" }, Catalog(live).Search("").Rows.Select(r => r.FullPath));
     }
     [Fact]
+    public void CompactionReleasesObsoleteRowsAndPreservesFutureDirectoryMoves()
+    {
+        var live = new LiveVolumeIndex(Baseline(), new(1, 0));
+        live.Apply(new CommittedChange(9, Tx(0, File(12,
+            new IndexedLink(11, @"C:\old\nested\", "updated.txt"),
+            new IndexedLink(5, @"C:\", "updated-link.txt")))));
+        var before = Catalog(live);
+        var expected = before.Search("", SortField.Path).Rows.Select(row => row.FullPath).ToArray();
+
+        Assert.True(live.CompactIfNeeded());
+        var current = Assert.Single(live.Layers);
+        Assert.Equal(4, current.Count);
+        Assert.Equal(9, live.AppliedSequence);
+        Assert.Equal(new JournalPosition(1, 1), live.Position);
+        Assert.Equal(expected, Catalog(live).Search("", SortField.Path).Rows.Select(row => row.FullPath));
+
+        live.Apply(new CommittedChange(10, Tx(1, new IndexedFileState(10, true, [new(5, @"C:\", "moved")]))));
+        Assert.Single(Catalog(live).Search(@"moved\nested\updated.txt").Rows);
+        Assert.Single(Catalog(live).Search(@"C:\updated-link.txt").Rows);
+        Assert.Equal(expected, before.Search("", SortField.Path).Rows.Select(row => row.FullPath));
+    }
+
+    [Fact]
     public void CheckpointRestoresWithoutRewritingBaseAndPreservesUtf16()
     {
         string dir = Path.Combine(Path.GetTempPath(), "live-" + Guid.NewGuid().ToString("N"));

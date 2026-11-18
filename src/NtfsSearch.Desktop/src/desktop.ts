@@ -43,12 +43,16 @@ export interface IndexStatus {
 export type DesktopMessage =
   | SearchResult
   | IndexStatus
+  | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
+  | { type: 'saving'; written: number; total: number }
+  | { type: 'quit-complete'; error?: string }
   | { type: 'error'; scope: 'fatal' | 'query' | 'refresh' | 'action'; message: string; requestId?: number }
   | { type: 'notice'; message: string }
 
 export type DesktopRequest =
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
   | { type: 'rescan' | 'cancel' }
+  | { type: 'fileTypeIcons'; extensions: string[] }
   | { type: FileAction; key: string }
 
 export function listenToBackend(callback: (message: DesktopMessage) => void) {

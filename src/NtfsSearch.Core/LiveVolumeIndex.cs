@@ -155,7 +155,7 @@ public sealed class LiveVolumeIndex
             // 按规模级联合并只读增量段，基线从不参与复制或重建。
             while (next.Count > 1 && next[^1].Count <= (long)segment.Count * 2)
             {
-                segment = Merge(next[^1], segment, token); next.RemoveAt(next.Count - 1);
+                segment = Merge([next[^1], segment], token); next.RemoveAt(next.Count - 1);
             }
             next.Add(segment);
         }
@@ -215,19 +215,52 @@ public sealed class LiveVolumeIndex
         resolved[reference] = path; return path;
     }
 
-    private static SearchIndex Merge(SearchIndex left, SearchIndex right, CancellationToken token)
+    /// <summary>单卷写者在提交边界调用。只有失效记录积累到一定比例才合并，已发布的查询视图仍然有效。</summary>
+    public bool CompactIfNeeded(CancellationToken token = default)
     {
-        var builder = new IndexBuilder(checked(left.VisibleCount + right.VisibleCount));
+        var current = layers;
+        long rows = current.Sum(index => (long)index.Count);
+        long visible = current.Sum(index => (long)index.VisibleCount);
+        if (rows == 0 || (rows - visible) * 4 < rows) return false;
+
+        var compacted = Merge(current, token);
+        // 目录图从新的有效基线重新取得父引用，释放旧基线和已经删除的目录覆盖。
+        var graph = DirectoryGraph.Create(compacted, token);
+        token.ThrowIfCancellationRequested();
+        DirectoryGraph = graph;
+        Volatile.Write(ref layers, [compacted]);
+        return true;
+    }
+
+    private static SearchIndex Merge(IReadOnlyList<SearchIndex> indexes, CancellationToken token)
+    {
+        var builder = new IndexBuilder(indexes.Sum(index => index.VisibleCount), fixedSize: true);
+        var directories = new Dictionary<(string Path, ulong Identity), int>();
         Span<char> scratch = stackalloc char[255];
-        foreach (var index in new[] { left, right })
+        foreach (var index in indexes)
+        {
+            var mapped = new int[index.Directories.Length];
+            Array.Fill(mapped, -1);
             for (int id = 0; id < index.Count; id++)
             {
                 if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
                 if (!index.IsVisible(id)) continue;
-                ref readonly var r = ref index.Records[id];
-                builder.Add(index.Directories[r.Directory], index.Name(id, scratch), r.HasSize ? index.Size(id) : null,
-                    r.HasModified ? r.Modified : null, r.IsDirectory, index.FileReferences![id], index.DirectoryReferences![r.Directory]);
+                ref readonly var row = ref index.Records[id];
+                int directory = mapped[row.Directory];
+                if (directory < 0)
+                {
+                    var key = (index.Directories[row.Directory], index.DirectoryReferences![row.Directory]);
+                    if (!directories.TryGetValue(key, out directory))
+                    {
+                        directory = builder.AddDirectory(key.Item1, key.Item2);
+                        directories.Add(key, directory);
+                    }
+                    mapped[row.Directory] = directory;
+                }
+                builder.AddRecord(directory, index.Name(id, scratch), row.HasSize ? index.Size(id) : null,
+                    row.HasModified ? row.Modified : null, row.IsDirectory, index.FileReferences![id]);
             }
+        }
         return builder.Build(token);
     }
 

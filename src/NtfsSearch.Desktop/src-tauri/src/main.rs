@@ -3,8 +3,8 @@
 mod backend;
 
 use backend::Backend;
-use serde_json::Value;
-use tauri::{Manager, State, WebviewWindow};
+use serde_json::{json, Value};
+use tauri::{Emitter, Manager, State, WebviewWindow, WindowEvent};
 
 #[tauri::command]
 fn start_backend(window: WebviewWindow, backend: State<'_, Backend>) -> Result<(), String> {
@@ -30,6 +30,24 @@ fn main() {
     }
     let application = tauri::Builder::default()
         .manage(Backend::default())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                match window.state::<Backend>().request_quit() {
+                    Ok(true) => api.prevent_close(),
+                    Ok(false) => {}
+                    Err(error) => {
+                        api.prevent_close();
+                        let _ = window.emit(
+                            "backend-message",
+                            json!({
+                                "type": "quit-complete",
+                                "error": format!("无法请求退出保存：{error}")
+                            }),
+                        );
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![start_backend, send_request])
         .build(tauri::generate_context!())
         .expect("无法启动 NTFS Search 桌面窗口");

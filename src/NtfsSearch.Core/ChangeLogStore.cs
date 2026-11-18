@@ -9,7 +9,7 @@ public sealed record ChangeLogCheckpoint(string LogId, long Sequence, JournalPos
 // 事务数据和提交标记先落盘，再发布游标。读者只消费持久游标以内的完整事务。
 public sealed class ChangeLogStore : IDisposable
 {
-    private const int MaximumFrame = 64 << 20;
+    internal const int MaximumFrame = 64 << 20;
     private const uint CommitTag = 0x54494d43;
     private readonly string baseId, headPath;
     private readonly JournalPosition initial;
@@ -284,7 +284,7 @@ public sealed class ChangeLogStore : IDisposable
         if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), digest)) throw new InvalidDataException("变化事务校验失败。");
         return Decode(payload);
     }
-    private static byte[] Encode(CommittedChange change)
+    internal static byte[] Encode(CommittedChange change)
     {
         using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
         var transaction = change.Transaction;
@@ -300,7 +300,7 @@ public sealed class ChangeLogStore : IDisposable
         }
         writer.Flush(); return stream.ToArray();
     }
-    private static CommittedChange Decode(byte[] payload)
+    internal static CommittedChange Decode(byte[] payload)
     {
         using var stream = new MemoryStream(payload); using var reader = new BinaryReader(stream);
         long sequence = reader.ReadInt64(); ulong id = reader.ReadUInt64(); long from = reader.ReadInt64(), to = reader.ReadInt64();

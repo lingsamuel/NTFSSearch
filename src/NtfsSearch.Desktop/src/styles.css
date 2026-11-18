@@ -222,6 +222,14 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .entry-size { text-align: right; }
 .entry-date, .entry-size, .page-number, .query-time { font-variant-numeric: tabular-nums; }
 
+.entry-file-type-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 5px;
+  object-fit: contain;
+  vertical-align: -3px;
+}
+
 .entry-icon {
   position: relative;
   display: inline-block;

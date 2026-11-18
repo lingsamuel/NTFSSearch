@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import IndexStatusPanel from './IndexStatus.vue'
 import SearchResults from './SearchResults.vue'
+import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
   formatCount, listenToBackend, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
@@ -22,6 +23,7 @@ const fatal = ref('')
 const queryError = ref('')
 const notice = ref('')
 const actionError = ref('')
+const saving = shallowRef<{ written: number; total: number }>()
 let requestId = Date.now()
 let unlisten: (() => void) | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
@@ -68,6 +70,8 @@ function receive(message: DesktopMessage) {
       break
     case 'error':
       if (message.scope === 'fatal') {
+        resetFileTypeIconRequest()
+        saving.value = undefined
         connected.value = false
         pending.value = false
         fatal.value = message.message
@@ -81,6 +85,19 @@ function receive(message: DesktopMessage) {
       break
     case 'notice':
       showFeedback(message.message)
+      break
+    case 'fileTypeIcons':
+      applyFileTypeIcons(message.icons)
+      break
+    case 'saving':
+      saving.value = message
+      break
+    case 'quit-complete':
+      if (message.error) {
+        saving.value = undefined
+        connected.value = false
+        showFeedback(message.error + '。可再次关闭窗口退出。', true)
+      }
       break
   }
 }
@@ -101,7 +118,7 @@ async function connect() {
 }
 
 function query(offset = 0) {
-  if (!connected.value) return
+  if (!connected.value || saving.value) return
   pending.value = true
   queryError.value = ''
   selectedKey.value = null
@@ -154,7 +171,7 @@ function handleShortcut(event: KeyboardEvent) {
 }
 
 function sendAction(request: DesktopRequest) {
-  if (!connected.value) return
+  if (!connected.value || saving.value) return
   showFeedback('')
   void sendRequest(request).catch(error => showFeedback(String(error), true))
 }
@@ -228,5 +245,33 @@ onBeforeUnmount(() => {
       <span>{{ actionError || notice }}</span>
       <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>
     </div>
+    <div v-if="saving" class="save-overlay" role="status" aria-live="polite">
+      <div>
+        <strong>正在保存退出快照</strong>
+        <progress v-if="saving.total" :value="saving.written" :max="saving.total"
+          :aria-label="'已保存 ' + saving.written + ' 个卷，共 ' + saving.total + ' 个卷'"></progress>
+      </div>
+    </div>
   </main>
 </template>
+
+<style scoped>
+.save-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  background: #19253830;
+}
+.save-overlay > div {
+  display: grid;
+  gap: 12px;
+  min-width: 250px;
+  padding: 18px 22px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.save-overlay progress { width: 100%; accent-color: var(--accent); }
+</style>

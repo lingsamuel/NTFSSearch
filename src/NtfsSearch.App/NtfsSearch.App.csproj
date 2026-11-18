@@ -5,5 +5,8 @@
     <AssemblyName>NtfsSearch.Backend</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
-  <ItemGroup><ProjectReference Include="../NtfsSearch.Core/NtfsSearch.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../NtfsSearch.Core/NtfsSearch.Core.csproj" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.15" />
+  </ItemGroup>
 </Project>

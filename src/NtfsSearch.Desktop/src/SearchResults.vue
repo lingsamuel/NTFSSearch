@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { FileAction, SearchRow, SortField } from './desktop'
+import { fileExtension, fileTypeIcon, setVisibleFileTypes } from './file-type-icons'
 
 const props = defineProps<{
   rows: SearchRow[]
@@ -32,6 +33,34 @@ const menuElement = ref<HTMLDivElement>()
 const menu = shallowRef<{ key: string; left: number; top: number }>()
 const columnWidths = shallowRef<number[]>()
 const columnDrag = shallowRef<{ field: SortField; pointer: number; startX: number; widths: number[] }>()
+const rowExtensions = computed(() => props.rows.map(fileExtension))
+const visibleRows = new Set<HTMLTableRowElement>()
+let iconObserver: IntersectionObserver | undefined
+
+function observeFileTypes() {
+  if (!iconObserver) return
+  iconObserver.takeRecords()
+  iconObserver.disconnect()
+  visibleRows.clear()
+  setVisibleFileTypes(new Set())
+  for (const row of grid.value?.tBodies[0]?.rows ?? []) {
+    if (row.dataset.fileExtension) iconObserver.observe(row)
+  }
+}
+
+function requestVisibleFileTypes(entries: IntersectionObserverEntry[]) {
+  for (const entry of entries) {
+    const row = entry.target as HTMLTableRowElement
+    if (entry.isIntersecting) visibleRows.add(row)
+    else visibleRows.delete(row)
+  }
+  const extensions = new Set<string>()
+  for (const row of visibleRows) {
+    const extension = row.dataset.fileExtension
+    if (extension) extensions.add(extension)
+  }
+  setVisibleFileTypes(extensions)
+}
 
 function startColumnResize(event: PointerEvent, field: SortField) {
   if (event.button !== 0 || !event.isPrimary || !grid.value?.tHead) return
@@ -147,8 +176,17 @@ function handleGridKey(event: KeyboardEvent) {
   event.preventDefault()
 }
 
-onMounted(() => window.addEventListener('pointerdown', closeMenu))
-onBeforeUnmount(() => window.removeEventListener('pointerdown', closeMenu))
+watch(rowExtensions, observeFileTypes, { flush: 'post' })
+onMounted(() => {
+  window.addEventListener('pointerdown', closeMenu)
+  iconObserver = new IntersectionObserver(requestVisibleFileTypes, { root: scroller.value, rootMargin: '58px 0px' })
+  observeFileTypes()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', closeMenu)
+  iconObserver?.disconnect()
+  setVisibleFileTypes(new Set())
+})
 defineExpose({ focusSelection, scrollToStart })
 </script>
 
@@ -179,9 +217,14 @@ defineExpose({ focusSelection, scrollToStart })
         </thead>
         <tbody>
           <tr v-for="(row, index) in rows" :id="'result-' + index" :key="row.key" :aria-selected="selected === row.key"
+            :data-file-extension="rowExtensions[index]"
             @click="clickRow(row)" @dblclick="runAction('open', row.key)"
             @contextmenu.prevent="openMenu(row, $event.clientX, $event.clientY)">
-            <td class="entry-name" :title="row.name"><span class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>{{ row.name }}</td>
+            <td class="entry-name" :title="row.name">
+              <img v-if="fileTypeIcon(rowExtensions[index])" :src="fileTypeIcon(rowExtensions[index]) ?? undefined"
+                class="entry-file-type-icon" alt="">
+              <span v-else class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>{{ row.name }}
+            </td>
             <td class="entry-path" :title="row.fullPath">{{ row.fullPath }}</td>
             <td class="entry-size" :title="row.sizeBytesText ?? undefined">{{ row.sizeText }}</td>
             <td class="entry-date">{{ row.modifiedText }}</td>
