@@ -72,11 +72,20 @@ internal sealed class SearchHost
 
     internal void CancelCollection() => windowsBackend?.CancelCollection();
 
+    internal (NtfsVolume Volume, IReadOnlyList<SearchIndex> Layers)[] CaptureAnalysisVolumes()
+    {
+        if (windowsBackend is { } backend)
+            return backend.CapturePublishedViews().Select(view => (view.Volume, view.Layers)).ToArray();
+        if (demo is not null && catalog.PublishedLayers(VolumeCache.Key(SmokeBackend.Volume)) is { } layers)
+            return [(SmokeBackend.Volume, layers)];
+        return [];
+    }
+
     /// <summary>正常关闭且采集循环退出后保存，冻结每个卷的已发布视图与水位。</summary>
     internal void SaveExitSnapshot(Action<int, int> progress)
     {
         if (windowsBackend is not { ReadyToSave: true } backend) return;
-        var volumes = backend.CaptureForExit();
+        var volumes = backend.CapturePublishedViews();
         if (volumes.Count > 0) ExitSnapshotStore.Save(snapshotPath, volumes, progress: progress);
     }
 
@@ -186,7 +195,8 @@ internal sealed class SearchHost
 
     private sealed class SmokeBackend(int count) : IAutomaticVolumeBackend
     {
-        public IReadOnlyList<NtfsVolume> Discover() => [new("smoke-volume", @"C:\", 100, "测试")];
+        internal static readonly NtfsVolume Volume = new("smoke-volume", @"C:\", 100, "测试");
+        public IReadOnlyList<NtfsVolume> Discover() => [Volume];
         public string CacheRevision(NtfsVolume volume) => "v1";
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.FromResult<CachedVolume?>(new(DemoData.Create(count), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;

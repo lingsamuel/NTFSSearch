@@ -167,6 +167,30 @@ try {
     await until(() => evaluate("document.querySelector('.empty-results')?.textContent.includes('没有匹配')"), '仅名称过滤')
     await evaluate("document.querySelector('.clear-search').click()")
     await until(() => evaluate(`(${resultCount})() === ${JSON.stringify(expected(total))}`), '清空搜索')
+    if (mode === '--desktop-test') {
+      assert.equal(await evaluate("Boolean(document.querySelector('button[aria-label=空间分析]'))"), true)
+      const scrollBeforeAnalysis = await evaluate(`(() => {
+        const results = document.querySelector('.results-scroll');
+        results.scrollTop = 124;
+        return results.scrollTop;
+      })()`)
+      await evaluate("document.querySelector('button[aria-label=空间分析]').click()")
+      await until(() => evaluate("document.querySelector('.space-total')?.title === '511,488,000 B'"), '卷根逻辑大小')
+      await evaluate("Array.from(document.querySelectorAll('.space-tile')).find(tile => tile.textContent.includes('目录009')).click()")
+      await until(() => evaluate("document.querySelector('.space-total')?.title === '97,228,800 B'"), '下钻目录逻辑大小')
+      await until(() => evaluate("document.querySelectorAll('.space-tile').length === 100"), '下钻文件矩形')
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll('.space-tile')).every(tile => {
+        const rect = tile.getBoundingClientRect();
+        return Math.abs(rect.width - parseFloat(tile.style.width)) < 0.1 &&
+          Math.abs(rect.height - parseFloat(tile.style.height)) < 0.1;
+      })`), true)
+      await screenshot('space-analysis.png')
+      await evaluate("document.querySelector('.space-breadcrumb button').click()")
+      await until(() => evaluate("document.querySelector('.space-total')?.title === '511,488,000 B'"), '面包屑返回卷根')
+      await evaluate("document.querySelector('button[aria-label=返回搜索]').click()")
+      assert.equal(await evaluate(`(${resultCount})() === ${JSON.stringify(expected(total))}`), true)
+      assert.equal(await evaluate("document.querySelector('.results-scroll').scrollTop"), scrollBeforeAnalysis)
+    }
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))")
     assert.equal(await evaluate("document.querySelector('tbody tr[aria-selected=true]')?.id"), 'result-0')
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))")

@@ -11,7 +11,9 @@ public sealed class SearchCatalog
     private long version;
     public long Count => Volatile.Read(ref published).Sum(p => p.Value.Sum(i => (long)i.VisibleCount));
     public int VolumeCount => Volatile.Read(ref published).Length;
-    internal bool Contains(string key) => Volatile.Read(ref published).Any(p => p.Key == key);
+    internal bool Contains(string key) => PublishedLayers(key) is not null;
+    internal IReadOnlyList<SearchIndex>? PublishedLayers(string key)
+        => Volatile.Read(ref published).FirstOrDefault(p => p.Key == key).Value;
     public long Version => Interlocked.Read(ref version);
     public event Action? Changed;
 

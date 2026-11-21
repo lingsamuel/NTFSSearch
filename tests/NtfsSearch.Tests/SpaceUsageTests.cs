@@ -1,0 +1,127 @@
+using NtfsSearch.Core;
+using Xunit;
+
+namespace NtfsSearch.Tests;
+
+public sealed class SpaceUsageTests
+{
+    private const string Root = @"C:\";
+
+    [Fact]
+    public void DirectoryTotalsUseLogicalBytesPerVisiblePath()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "left", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "right", isDirectory: true, fileReference: 20, parentReference: 5);
+        builder.Add(Root, "empty", isDirectory: true, fileReference: 30, parentReference: 5);
+        builder.Add(@"C:\left\", "big", long.MaxValue, fileReference: 40, parentReference: 10);
+        builder.Add(@"C:\right\", "link", long.MaxValue, fileReference: 40, parentReference: 20);
+        builder.Add(@"C:\right\", "unknown", fileReference: 41, parentReference: 20);
+        builder.Add(@"C:\right\", "zero", 0, fileReference: 42, parentReference: 20);
+
+        var usage = SpaceUsageIndex.Create(Root, [builder.Build()]);
+        var root = usage.Read(0, 200);
+        Assert.Equal((Int128)long.MaxValue * 2, root.Bytes);
+        Assert.Equal(1, root.UnknownFiles);
+        Assert.Equal(new[] { "left", "right" }, root.Children.Select(item => item.Name).Order());
+        var right = usage.Read(20, 200);
+        Assert.Equal(long.MaxValue, right.Bytes);
+        Assert.Equal(1, right.UnknownFiles);
+        Assert.Equal(@"C:\right\link", Assert.Single(right.Children).Path);
+        Assert.True(usage.Read(30, 200).IsEmpty);
+    }
+
+    [Fact]
+    public void MovesDeletesAndCompactionFollowThePublishedView()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "left", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "right", isDirectory: true, fileReference: 20, parentReference: 5);
+        builder.Add(@"C:\left\", "nested", isDirectory: true, fileReference: 30, parentReference: 10);
+        builder.Add(@"C:\left\nested\", "item", 11, fileReference: 40, parentReference: 30);
+        builder.Add(@"C:\left\nested\", "other", 7, fileReference: 41, parentReference: 30);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+
+        live.Apply(Change(0, new(30, true, [new(20, @"C:\right\", "renamed")]),
+            new(40, false, [new(30, @"C:\right\renamed\", "item")], 20)));
+        usage = usage.Update(live.Layers);
+        Assert.Equal(0, usage.Read(10, 200).Bytes);
+        Assert.Equal(27, usage.Read(20, 200).Bytes);
+        var nested = usage.Read(30, 200);
+        Assert.Equal(new[] { Root, "right", "renamed" }, nested.Breadcrumbs.Select(crumb => crumb.Name));
+        Assert.Equal(20, nested.Children[0].Bytes);
+        Assert.Equal(@"C:\right\renamed\other", nested.Children[1].Path);
+
+        Assert.True(live.CompactIfNeeded());
+        usage = usage.Update(live.Layers);
+        Assert.Equal(27, usage.Read(0, 200).Bytes);
+        live.Apply(Change(1, new IndexedFileState(30, true, [])));
+        usage = usage.Update(live.Layers);
+        Assert.False(usage.Contains(30));
+        Assert.True(usage.Read(20, 200).IsEmpty);
+        Assert.Equal(0, usage.Read(0, 200).Bytes);
+    }
+
+    [Fact]
+    public void RemainderRetainsTheExactSizeOfSmallerItems()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "largest", 10, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "smaller", 7, fileReference: 11, parentReference: 5);
+        builder.Add(Root, "smallest", 2, fileReference: 12, parentReference: 5);
+
+        var root = SpaceUsageIndex.Create(Root, [builder.Build()]).Read(0, 1);
+        Assert.Equal(19, root.Bytes);
+        Assert.Equal("largest", root.Children[0].Name);
+        Assert.Equal(9, root.Children[1].Bytes);
+        Assert.Equal(2, root.Children[1].Count);
+        Assert.Null(root.Children[1].Path);
+    }
+
+    [Fact]
+    public void MissingDirectoryRowsRetainTheNearestIndexedAncestor()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "left", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "right", isDirectory: true, fileReference: 20, parentReference: 5);
+        builder.Add(@"C:\left\missing\", "existing", 7, fileReference: 12, parentReference: 11);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+        Assert.Equal(7, usage.Read(10, 200).Bytes);
+        Assert.Equal("missing", Assert.Single(usage.Read(10, 200).Children).Name);
+
+        live.Apply(Change(0, new IndexedFileState(22, false, [new(21, @"C:\right\missing\", "new")], 9)));
+        usage = usage.Update(live.Layers);
+        Assert.Equal(9, usage.Read(20, 200).Bytes);
+        Assert.Equal(new[] { Root, "right", "missing" }, usage.Read(21, 200).Breadcrumbs.Select(crumb => crumb.Name));
+
+        live.Apply(Change(1, new IndexedFileState(22, false, [])));
+        usage = usage.Update(live.Layers);
+        Assert.True(usage.Read(20, 200).IsEmpty);
+        Assert.False(usage.Contains(21));
+    }
+
+    [Fact]
+    public void UnindexedAncestorsCanAppearAndDisappearThroughFileChanges()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\outer\inner\", "existing", 7, fileReference: 12, parentReference: 11);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+        Assert.Equal(@"outer\inner", Assert.Single(usage.Read(0, 200).Children).Name);
+
+        live.Apply(Change(0, new IndexedFileState(13, false, [new(10, @"C:\outer\", "new")], 9)));
+        usage = usage.Update(live.Layers);
+        Assert.Equal("outer", Assert.Single(usage.Read(0, 200).Children).Name);
+        Assert.Equal(16, usage.Read(10, 200).Bytes);
+
+        live.Apply(Change(1, new IndexedFileState(13, false, [])));
+        usage = usage.Update(live.Layers);
+        Assert.False(usage.Contains(10));
+        Assert.Equal(@"outer\inner", Assert.Single(usage.Read(0, 200).Children).Name);
+    }
+
+    private static LiveTransaction Change(long from, params IndexedFileState[] files) =>
+        new(new(1, from), new(1, from + 1), files);
+}

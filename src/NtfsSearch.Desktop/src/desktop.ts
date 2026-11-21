@@ -40,9 +40,37 @@ export interface IndexStatus {
   error: string | null
 }
 
+export interface SpaceEntry {
+  directoryId: string | null
+  name: string
+  count: number
+  key: string | null
+  bytes: string
+  sizeText: string
+  sizeBytesText: string
+}
+
+export interface SpaceAnalysisResult {
+  type: 'spaceAnalysis'
+  requestId: number
+  roots: string[]
+  root: string | null
+  error: string | null
+  folder: {
+    breadcrumbs: { id: string; name: string }[]
+    bytes: string
+    sizeText: string
+    sizeBytesText: string
+    unknownFiles: number
+    isEmpty: boolean
+    children: SpaceEntry[]
+  } | null
+}
+
 export type DesktopMessage =
   | SearchResult
   | IndexStatus
+  | SpaceAnalysisResult
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
   | { type: 'saving'; written: number; total: number }
   | { type: 'quit-complete'; error?: string }
@@ -51,6 +79,8 @@ export type DesktopMessage =
 
 export type DesktopRequest =
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
+  | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
+  | { type: 'closeSpaceAnalysis'; requestId: number }
   | { type: 'rescan' | 'cancel' }
   | { type: 'fileTypeIcons'; extensions: string[] }
   | { type: FileAction; key: string }

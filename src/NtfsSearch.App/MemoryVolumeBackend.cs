@@ -67,7 +67,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
         }
     }
 
-    internal IReadOnlyList<ExitSnapshotVolume> CaptureForExit()
+    internal IReadOnlyList<ExitSnapshotVolume> CapturePublishedViews()
     {
         lock (gate) return volumes.Values.Select(v => v.View).OfType<ExitSnapshotVolume>().ToArray();
     }

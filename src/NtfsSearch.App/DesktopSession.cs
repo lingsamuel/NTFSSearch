@@ -4,12 +4,15 @@ using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-internal sealed class DesktopSession(SearchHost host, Action<object> publish)
+internal sealed class DesktopSession
 {
     private const int PageSize = 200;
     private static readonly TimeSpan RefreshWindow = TimeSpan.FromMilliseconds(200);
 
     private readonly Channel<Action> messages = Channel.CreateUnbounded<Action>(new() { SingleReader = true });
+    private readonly SearchHost host;
+    private readonly Action<object> publish;
+    private readonly SpaceAnalysisSession spaceAnalysis;
     private readonly QueryRefreshState queryState = new();
     private readonly FileTypeIcons fileTypeIcons = new();
     private CancellationTokenSource? search;
@@ -21,6 +24,13 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
     private string? indexError;
     private bool refreshing, discoveryComplete, collectionCancelled, saveOnExit;
     private int catalogNoticeQueued;
+
+    internal DesktopSession(SearchHost host, Action<object> publish)
+    {
+        this.host = host;
+        this.publish = publish;
+        spaceAnalysis = new(host, publish, Post);
+    }
 
     internal async Task RunAsync(TextReader input)
     {
@@ -56,7 +66,7 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
             var activeSearch = search;
             activeSearch?.Cancel();
             await lifetime.CancelAsync();
-            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask);
+            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask, spaceAnalysis.StopAsync());
             activeSearch?.Dispose();
         }
 
@@ -131,6 +141,12 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
                 case "fileTypeIcons":
                     if (request.Extensions is { Length: > 0 } extensions)
                         _ = PublishFileTypeIconsAsync(extensions, token);
+                    break;
+                case "spaceAnalysis":
+                    spaceAnalysis.View(request.RequestId, request.Root, request.DirectoryId);
+                    break;
+                case "closeSpaceAnalysis":
+                    spaceAnalysis.Close(request.RequestId);
                     break;
                 case "rescan":
                     if (refreshing) break;
@@ -214,6 +230,7 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
         await Task.Delay(RefreshWindow);
         Post(() =>
         {
+            spaceAnalysis.Refresh();
             if (generation != refreshGeneration) return;
             refreshPending = false;
             queryState.RefreshWindowElapsed();
@@ -306,5 +323,6 @@ internal sealed class DesktopSession(SearchHost host, Action<object> publish)
     private sealed record SearchOptions(long RequestId, string Text, SortField Sort, bool Descending, bool MatchPath, int Offset);
 
     private sealed record DesktopRequest(string Type, long RequestId, string Text = "", SortField Sort = SortField.Name,
-        bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null);
+        bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null,
+        string Root = "", string DirectoryId = "");
 }

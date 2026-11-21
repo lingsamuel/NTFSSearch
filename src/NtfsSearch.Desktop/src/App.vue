@@ -2,10 +2,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import IndexStatusPanel from './IndexStatus.vue'
 import SearchResults from './SearchResults.vue'
+import SpaceAnalysis from './SpaceAnalysis.vue'
 import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
   formatCount, listenToBackend, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
+  type SpaceAnalysisResult,
 } from './desktop'
 
 const queryInput = ref<HTMLInputElement>()
@@ -24,7 +26,13 @@ const queryError = ref('')
 const notice = ref('')
 const actionError = ref('')
 const saving = shallowRef<{ written: number; total: number }>()
+const showingSpace = ref(false)
+const space = shallowRef<SpaceAnalysisResult>()
+const spaceRoot = ref('')
+const spacePending = ref(false)
+const spaceError = ref('')
 let requestId = Date.now()
+let spaceRequestId = requestId
 let unlisten: (() => void) | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -67,6 +75,13 @@ function receive(message: DesktopMessage) {
       break
     case 'status':
       indexStatus.value = message
+      break
+    case 'spaceAnalysis':
+      if (!showingSpace.value || message.requestId !== spaceRequestId) return
+      space.value = message
+      spaceRoot.value = message.root ?? ''
+      spaceError.value = message.error ?? ''
+      spacePending.value = false
       break
     case 'error':
       if (message.scope === 'fatal') {
@@ -166,8 +181,30 @@ function clearQuery() {
 function handleShortcut(event: KeyboardEvent) {
   if (event.ctrlKey && event.key.toLowerCase() === 'f') {
     event.preventDefault()
-    focusQuery()
+    if (showingSpace.value) closeSpace()
+    else focusQuery()
   }
+}
+
+function viewSpace(root = '', directoryId = '') {
+  if (!connected.value || saving.value) return
+  showingSpace.value = true
+  spaceRoot.value = root
+  spacePending.value = true
+  spaceError.value = ''
+  const id = ++spaceRequestId
+  void sendRequest({ type: 'spaceAnalysis', requestId: id, root, directoryId }).catch(error => {
+    if (id !== spaceRequestId) return
+    spacePending.value = false
+    spaceError.value = String(error)
+  })
+}
+
+function closeSpace() {
+  showingSpace.value = false
+  space.value = undefined
+  if (connected.value) sendAction({ type: 'closeSpaceAnalysis', requestId: ++spaceRequestId })
+  void nextTick(focusQuery)
 }
 
 function sendAction(request: DesktopRequest) {
@@ -199,7 +236,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="workspace" @keydown="handleShortcut" @contextmenu.prevent>
-    <header class="search-toolbar">
+    <header v-show="!showingSpace" class="search-toolbar">
       <div class="search-field">
         <span class="search-glyph" aria-hidden="true"></span>
         <input ref="queryInput" v-model="text" type="text" aria-label="搜索文件和文件夹" placeholder="搜索文件和文件夹"
@@ -211,9 +248,11 @@ onBeforeUnmount(() => {
         <option value="path">完整路径</option>
         <option value="name">仅名称</option>
       </select>
+      <button type="button" class="outlined-button space-open" aria-label="空间分析"
+        :disabled="!connected || !!saving" @click="viewSpace()">空间分析</button>
     </header>
 
-    <SearchResults ref="resultsTable" v-model:selected-key="selectedKey" :rows="fatal ? [] : result?.rows ?? []"
+    <SearchResults v-show="!showingSpace" ref="resultsTable" v-model:selected-key="selectedKey" :rows="fatal ? [] : result?.rows ?? []"
       :sort="sort" :descending="descending" :pending="pending" :empty-message="emptyMessage"
       @sort="sortBy" @action="fileAction">
       <div v-if="fatal" class="startup-error" role="alert">
@@ -223,7 +262,7 @@ onBeforeUnmount(() => {
       </div>
     </SearchResults>
 
-    <footer class="status-bar">
+    <footer v-show="!showingSpace" class="status-bar">
       <div class="result-summary" aria-live="polite" aria-atomic="true">
         <span class="result-count">{{ resultLabel }}</span>
         <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
@@ -241,6 +280,9 @@ onBeforeUnmount(() => {
       </div>
       <IndexStatusPanel :status="indexStatus" :connected="connected" @action="sendAction({ type: $event })" />
     </footer>
+    <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
+      :error="fatal || spaceError" :index-status="indexStatus" @view="viewSpace" @close="closeSpace"
+      @reveal="sendAction({ type: 'reveal', key: $event })" />
     <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>
       <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>
@@ -256,6 +298,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.space-open { height: 39px; white-space: nowrap; }
+
 .save-overlay {
   position: fixed;
   inset: 0;
