@@ -13,6 +13,10 @@ internal sealed class DesktopSession
     private readonly SearchHost host;
     private readonly Action<object> publish;
     private readonly string? settingsDirectory;
+    private readonly LocalSearchService searchService;
+    private readonly bool enableServiceByDefault;
+    private readonly object settingsGate = new();
+    private readonly Queue<Func<Task>> searchServiceChanges = new();
     private readonly SpaceAnalysisSession spaceAnalysis;
     private readonly QueryRefreshState queryState = new();
     private readonly FileTypeIcons fileTypeIcons = new();
@@ -23,20 +27,27 @@ internal sealed class DesktopSession
     private SearchOptions options = new(0, "", SortField.Name, false, true, 0);
     private string? progress = "正在发现本机 NTFS 磁盘…";
     private string? indexError;
-    private DesktopSettings settings = new();
+    private volatile DesktopSettings settings = new();
+    private SearchServiceStatus searchServiceStatus = null!;
+    private Task? searchServiceChange;
     private bool refreshing, discoveryComplete, collectionCancelled, quitRequested;
     private int catalogNoticeQueued;
     private int catalogRefreshRequested;
 
-    internal DesktopSession(SearchHost host, Action<object> publish, string? settingsDirectory)
+    internal DesktopSession(SearchHost host, Action<object> publish, string? settingsDirectory,
+        string? portOverride, bool enableServiceByDefault)
     {
         this.host = host;
         this.publish = publish;
         this.settingsDirectory = settingsDirectory;
+        this.enableServiceByDefault = enableServiceByDefault;
+        searchService = new(host, portOverride);
         spaceAnalysis = new(host, publish, Post);
     }
 
-    internal async Task RunAsync(TextReader input, string? apiPort)
+    private bool SearchServiceEnabled => settings.SearchServiceEnabled ?? enableServiceByDefault;
+
+    internal async Task RunAsync(TextReader input)
     {
         using var lifetime = new CancellationTokenSource();
         host.Catalog.Changed += QueueCatalogRefresh;
@@ -60,11 +71,14 @@ internal sealed class DesktopSession
             try { settings = DesktopSettings.Load(settingsDirectory); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
             { PublishError("action", "无法读取应用设置：" + error.Message); }
-        LocalSearchApi? api = null;
-        if (apiPort is not null)
-            try { api = await LocalSearchApi.StartAsync(host, apiPort); }
-            catch (Exception error) when (error is ArgumentException or IOException or System.Net.Sockets.SocketException or InvalidOperationException)
-            { PublishError("action", "本机 HTTP 接口启动失败：" + error.Message); }
+        string? serviceError = null;
+        try { await searchService.InitializeAsync(SearchServiceEnabled, settings.SearchServicePort); }
+        catch (ArgumentException error)
+        { serviceError = "本机 HTTP 接口启动失败：" + error.Message; }
+        catch (InvalidOperationException error)
+        { serviceError = error.Message; }
+        if (serviceError is not null) PublishError("action", serviceError);
+        PublishSearchServiceStatus(serviceError);
         PublishStatus();
         RunQuery();
         _ = ReadInputAsync(input, lifetime.Token);
@@ -83,8 +97,7 @@ internal sealed class DesktopSession
             var activeSearch = search;
             activeSearch?.Cancel();
             await lifetime.CancelAsync();
-            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask, spaceAnalysis.StopAsync(),
-                api?.DisposeAsync().AsTask() ?? Task.CompletedTask);
+            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask, spaceAnalysis.StopAsync(), StopSearchServiceAsync());
             activeSearch?.Dispose();
         }
 
@@ -155,6 +168,15 @@ internal sealed class DesktopSession
                     break;
                 case "setSkipExitIndexSave":
                     SaveExitPreference(request.SkipExitIndexSave);
+                    break;
+                case "getSearchServiceSettings":
+                    publish(searchServiceStatus);
+                    break;
+                case "applySearchServiceSettings":
+                    ChangeSearchService(() => ApplySearchServiceSettingsAsync(request.Enabled, request.Port));
+                    break;
+                case "restartSearchService":
+                    ChangeSearchService(() => searchService.RestartAsync(SearchServiceEnabled, settings.SearchServicePort));
                     break;
                 case "fileTypeIcons":
                     if (request.Extensions is { Length: > 0 } extensions)
@@ -364,21 +386,77 @@ internal sealed class DesktopSession
         });
     }
 
+    private void ChangeSearchService(Func<Task> change)
+    {
+        searchServiceChanges.Enqueue(change);
+        RunNextSearchServiceChange();
+    }
+
+    private void RunNextSearchServiceChange()
+    {
+        if (searchServiceChange is not null || !searchServiceChanges.TryDequeue(out var change)) return;
+        searchServiceStatus = searchServiceStatus with { Busy = true, Error = null };
+        publish(searchServiceStatus);
+        // HTTP 停止时可能仍有正在释放的请求，桌面消息队列继续处理索引和查询。
+        searchServiceChange = Task.Run(async () =>
+        {
+            string? error = null;
+            try { await change(); }
+            catch (Exception failure)
+            { error = failure.Message; }
+            Post(() =>
+            {
+                searchServiceChange = null;
+                PublishSearchServiceStatus(error);
+                RunNextSearchServiceChange();
+            });
+        });
+    }
+
+    private Task ApplySearchServiceSettingsAsync(bool? enabled, int port)
+    {
+        if (enabled is not bool enable) throw new ArgumentException("请选择是否启用 HTTP 搜索服务。");
+        return searchService.ApplyAsync(enable, port,
+            () => SaveSettings(previous => previous with { SearchServiceEnabled = enable, SearchServicePort = port }));
+    }
+
+    private void PublishSearchServiceStatus(string? error)
+    {
+        searchServiceStatus = new(SearchServiceEnabled, settings.SearchServicePort,
+            searchService.Address?.GetLeftPart(UriPartial.Authority), searchService.PortOverridden,
+            searchService.Running, Busy: false, error);
+        publish(searchServiceStatus);
+    }
+
+    private async Task StopSearchServiceAsync()
+    {
+        try { if (searchServiceChange is not null) await searchServiceChange; }
+        finally { await searchService.DisposeAsync(); }
+    }
+
     private void SaveExitPreference(bool skip)
     {
         string? error = null;
-        if (settings.SkipExitIndexSave != skip)
+        try { SaveSettings(previous => previous with { SkipExitIndexSave = skip }); }
+        catch (IOException failure) { error = failure.Message; }
+        publish(new { Type = "exitSavePreference", settings.SkipExitIndexSave, Error = error });
+    }
+
+    private void SaveSettings(Func<DesktopSettings, DesktopSettings> update)
+    {
+        // HTTP 设置在后台绑定，退出偏好仍可能由桌面队列保存。合并到最新设置后再原子替换文件。
+        lock (settingsGate)
         {
-            var next = settings with { SkipExitIndexSave = skip };
+            var next = update(settings);
+            if (next == settings) return;
             try
             {
                 if (settingsDirectory is not null) next.Save(settingsDirectory);
                 settings = next;
             }
             catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-            { error = "无法保存应用设置：" + failure.Message; }
+            { throw new IOException("无法保存应用设置：" + failure.Message, failure); }
         }
-        publish(new { Type = "exitSavePreference", settings.SkipExitIndexSave, Error = error });
     }
 
     private void PublishError(string scope, string message, long? requestId = null) =>
@@ -386,9 +464,15 @@ internal sealed class DesktopSession
 
     private sealed record SearchOptions(long RequestId, string Text, SortField Sort, bool Descending, bool MatchPath, int Offset);
 
+    private sealed record SearchServiceStatus(bool Enabled, int Port, string? Address, bool PortOverridden,
+        bool Running, bool Busy, string? Error)
+    {
+        public string Type => "searchServiceStatus";
+    }
+
     private sealed record DesktopRequest(string Type, long RequestId, string Text = "", SortField Sort = SortField.Name,
         bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null,
         string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null,
         long DetailId = 0, string[]? DirectoryIds = null, string[]? ManualDirectoryIds = null, string[]? BranchIds = null,
-        bool SkipExitIndexSave = false, string? FileReference = null);
+        bool SkipExitIndexSave = false, string? FileReference = null, bool? Enabled = null, int Port = 0);
 }

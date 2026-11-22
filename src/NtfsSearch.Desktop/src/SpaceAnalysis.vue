@@ -16,6 +16,7 @@ const emit = defineEmits<{
   view: [root: string, directoryId?: string]
   path: [value: string]
   close: []
+  settings: []
   action: [type: FileAction, key: string]
   exclude: [item: SpaceEntry]
   restore: [item?: SpaceExclusion]
@@ -307,6 +308,7 @@ onBeforeUnmount(() => {
         已排除 {{ formatCount(result.exclusions.length) }} 项
       </button>
       <span v-if="folder && !pending" class="space-total">逻辑大小 <strong>{{ folder.sizeText }}</strong></span>
+      <button type="button" class="outlined-button" @click="emit('settings')">设置</button>
     </header>
     <form class="space-address" @submit.prevent="openAddress">
       <div class="space-address-field">

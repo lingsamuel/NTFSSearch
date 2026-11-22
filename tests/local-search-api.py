@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import socket
 import subprocess
 import sys
@@ -160,6 +161,133 @@ def check_port_collision(process, receive):
     assert len(result["rows"]) == 59
 
 
+def service_status(receive):
+    return receive(lambda event: event["type"] == "searchServiceStatus" and not event["busy"])
+
+
+def change_service(process, receive, action, **values):
+    send(process, dict(type=action, **values))
+    pending = receive(lambda event: event["type"] == "searchServiceStatus")
+    assert pending["busy"], pending
+    return service_status(receive)
+
+
+def assert_unavailable(port):
+    try:
+        request(port, "status")
+    except urllib.error.URLError as error:
+        assert isinstance(error.reason, ConnectionRefusedError), error
+    else:
+        raise AssertionError(f"端口 {port} 仍在提供 HTTP 服务")
+
+
+def check_settings(backend, cli, sandbox):
+    # 便携版 CLI 从自身目录读取 Data，即使从其他目录调用也应如此。
+    portable = Path(sandbox) / "portable"
+    portable.mkdir()
+    cli_entry = Path(cli[-1]).resolve()
+    for entry in cli_entry.parent.iterdir():
+        if entry.is_file() and (entry.suffix in {".dll", ".json", ".exe"} or entry == cli_entry):
+            shutil.copy2(entry, portable)
+    portable_cli = cli[:-1] + [str(portable / cli_entry.name)]
+    data = portable / "Data"
+    data.mkdir()
+    settings = data / "settings.json"
+    settings.write_text(json.dumps(dict(SkipExitIndexSave=True)), encoding="utf-8")
+    env = os.environ.copy()
+    env.pop("NTFS_SEARCH_PORT", None)
+    env["NTFS_SEARCH_TEST_DATA"] = str(data)
+
+    def run_cli(*args, **overrides):
+        return subprocess.run(portable_cli + list(args), env=env | overrides, capture_output=True,
+                              encoding="utf-8", errors="replace", timeout=15, check=True)
+
+    with port_socket() as first, port_socket() as second, port_socket() as occupied:
+        first_port = first.getsockname()[1]
+        second_port = second.getsockname()[1]
+        occupied_port = occupied.getsockname()[1]
+        occupied.listen()
+        first.close()
+        second.close()
+
+        def apply(process, receive, port, enabled=True):
+            return change_service(process, receive, "applySearchServiceSettings", enabled=enabled, port=port)
+
+        def assert_status(status, port, enabled, running, error=False, override=None):
+            assert status == dict(type="searchServiceStatus", enabled=enabled, port=port,
+                                  address=f"http://127.0.0.1:{override or port}", portOverridden=override is not None,
+                                  running=running, busy=False, error=status["error"] if error else None), status
+            assert bool(status["error"]) == error, status
+
+        def configure(process, receive):
+            assert_status(service_status(receive), 18791, False, False)
+            receive(lambda event: event["type"] == "result" and event["total"] == 1000)
+            send(process, dict(type="getSearchServiceSettings"))
+            assert_status(service_status(receive), 18791, False, False)
+            assert_status(apply(process, receive, first_port), first_port, True, True)
+            assert json.loads(run_cli("status").stdout)["indexed"] == 1000
+            stored = settings.read_bytes()
+
+            assert_status(apply(process, receive, 0), first_port, True, True, error=True)
+            assert_status(apply(process, receive, occupied_port), first_port, True, True, error=True)
+            assert settings.read_bytes() == stored and request(first_port, "status")["volumesReady"] == 2
+
+            settings.unlink()
+            settings.mkdir()
+            try:
+                assert_status(apply(process, receive, second_port), first_port, True, True, error=True)
+                assert request(first_port, "status")["indexed"] == 1000
+                assert_unavailable(second_port)
+            finally:
+                settings.rmdir()
+                settings.write_bytes(stored)
+
+            assert_status(apply(process, receive, second_port), second_port, True, True)
+            assert_unavailable(first_port)
+            assert json.loads(run_cli("status").stdout)["indexed"] == 1000
+            with ExitStack() as connections:
+                hold_search_request(connections, second_port)
+                restarted = change_service(process, receive, "restartSearchService")
+            assert_status(restarted, second_port, True, True)
+            assert request(second_port, "search", dict(text='"hello world"'))["total"] == 59
+            send(process, dict(type="query", requestId=1, text='"hello world"'))
+            receive(lambda event: event["type"] == "result" and event["requestId"] == 1 and event["total"] == 59)
+            assert json.loads(settings.read_bytes())["SkipExitIndexSave"], "保存搜索服务设置覆盖了退出偏好"
+
+        def restore(process, receive):
+            assert_status(service_status(receive), second_port, True, True)
+            receive(lambda event: event["type"] == "result" and event["total"] == 1000)
+            assert json.loads(run_cli("status").stdout)["indexed"] == 1000
+            assert_status(apply(process, receive, second_port, enabled=False), second_port, False, False)
+            assert_unavailable(second_port)
+
+        def check_disabled(process, receive):
+            assert_status(service_status(receive), second_port, False, False)
+            assert_unavailable(second_port)
+
+        def check_override(process, receive):
+            assert_status(service_status(receive), second_port, False, False, override=first_port)
+            receive(lambda event: event["type"] == "result" and event["total"] == 1000)
+            assert_status(apply(process, receive, occupied_port), occupied_port, True, True, override=first_port)
+            assert json.loads(run_cli("status", NTFS_SEARCH_PORT=str(first_port)).stdout)["indexed"] == 1000
+            assert_status(apply(process, receive, occupied_port, enabled=False), occupied_port, False, False, override=first_port)
+            assert_unavailable(first_port)
+
+        def check_invalid_override(process, receive):
+            initial = service_status(receive)
+            assert initial["address"] is None and "NTFS_SEARCH_PORT" in initial["error"], initial
+            disabled = apply(process, receive, first_port, enabled=False)
+            assert disabled == dict(type="searchServiceStatus", enabled=False, port=first_port, address=None,
+                                    portOverridden=True, running=False, busy=False, error=None), disabled
+            assert json.loads(settings.read_bytes())["SearchServicePort"] == first_port
+
+        desktop(backend, env, configure)
+        desktop(backend, env, restore)
+        desktop(backend, env, check_disabled)
+        desktop(backend, env | {"NTFS_SEARCH_PORT": str(first_port)}, check_override)
+        desktop(backend, env | {"NTFS_SEARCH_PORT": "invalid"}, check_invalid_override)
+
+
 def main(backend, cli):
     with port_socket() as listener:
         port = listener.getsockname()[1]
@@ -188,5 +316,17 @@ def main(backend, cli):
 
 if __name__ == "__main__":
     # 支持直接传入 Windows EXE，或在其他系统传入 dotnet 和 DLL。
-    separator = sys.argv.index("--")
-    main(sys.argv[1:separator], sys.argv[separator + 1:])
+    args = sys.argv[1:]
+    settings_only = args[0] == "--settings"
+    if settings_only:
+        args = args[1:]
+    separator = args.index("--")
+    backend, cli = args[:separator], args[separator + 1:]
+    if settings_only:
+        artifact_root = Path(__file__).resolve().parents[1] / "artifacts"
+        artifact_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=artifact_root) as sandbox:
+            check_settings(backend, cli, sandbox)
+        print("搜索服务启停、端口切换、重启、失败恢复、配置持久化和 CLI 端口读取验证通过。")
+    else:
+        main(backend, cli)

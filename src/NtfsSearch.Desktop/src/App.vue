@@ -2,12 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import IndexStatusPanel from './IndexStatus.vue'
 import SearchResults from './SearchResults.vue'
+import Settings from './Settings.vue'
 import SpaceAnalysis from './SpaceAnalysis.vue'
 import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
-  formatCount, listenToBackend, sendRequest, startBackend,
+  formatCount, listenToBackend, listenToOpenSettings, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
-  type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
+  type SearchServiceRequest, type SearchServiceStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
 } from './desktop'
 
 const queryInput = ref<HTMLInputElement>()
@@ -34,10 +35,16 @@ const spacePending = ref(false)
 const spaceError = ref('')
 const spacePathPending = ref(false)
 const spacePathError = ref('')
+const showingSettings = ref(false)
+const searchServiceStatus = shallowRef<SearchServiceStatus>()
+const searchServicePending = ref(false)
+const searchServiceError = ref('')
 let requestId = Date.now()
 let spaceRequestId = requestId
 let spaceDetailId = 0
 let unlisten: (() => void) | undefined
+let unlistenOpenSettings: (() => void) | undefined
+let focusBeforeSettings: HTMLElement | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
 const hasAvailableIndex = computed(() => (result.value?.volumesReady ?? 0) > 0)
@@ -80,6 +87,10 @@ function receive(message: DesktopMessage) {
     case 'status':
       indexStatus.value = message
       break
+    case 'searchServiceStatus':
+      searchServiceStatus.value = message
+      searchServicePending.value = message.busy
+      break
     case 'spaceAnalysis':
       if (!showingSpace.value || message.requestId !== spaceRequestId) return
       if (message.detailId < spaceDetailId && space.value?.requestId === message.requestId
@@ -102,6 +113,8 @@ function receive(message: DesktopMessage) {
         resetFileTypeIconRequest()
         saving.value = undefined
         preferencePending.value = false
+        searchServiceStatus.value = undefined
+        searchServicePending.value = false
         connected.value = false
         pending.value = false
         fatal.value = message.message
@@ -145,6 +158,7 @@ async function connect() {
     if (fatal.value) return
     connected.value = true
     query()
+    if (showingSettings.value) requestSearchService({ type: 'getSearchServiceSettings' })
   } catch (error) {
     fatal.value ||= String(error)
     connected.value = false
@@ -199,11 +213,39 @@ function clearQuery() {
 }
 
 function handleShortcut(event: KeyboardEvent) {
+  if (showingSettings.value) return
   if (event.ctrlKey && event.key.toLowerCase() === 'f') {
     event.preventDefault()
     if (showingSpace.value) closeSpace()
     else focusQuery()
   }
+}
+
+function openSettings() {
+  if (showingSettings.value) return
+  if (document.activeElement instanceof HTMLElement) focusBeforeSettings = document.activeElement
+  showingSettings.value = true
+  requestSearchService({ type: 'getSearchServiceSettings' })
+}
+
+function closeSettings() {
+  showingSettings.value = false
+  const previous = focusBeforeSettings
+  focusBeforeSettings = undefined
+  void nextTick(() => {
+    previous?.focus({ preventScroll: true })
+    if (!showingSpace.value && document.activeElement === document.body) focusQuery()
+  })
+}
+
+function requestSearchService(request: SearchServiceRequest) {
+  if (!connected.value || saving.value || searchServicePending.value) return
+  searchServiceError.value = ''
+  searchServicePending.value = true
+  void sendRequest(request).catch(error => {
+    searchServicePending.value = false
+    searchServiceError.value = String(error)
+  })
 }
 
 function viewSpace(root = '', directoryId = '', path?: string) {
@@ -280,6 +322,7 @@ onMounted(async () => {
   await nextTick()
   queryInput.value?.focus()
   try {
+    unlistenOpenSettings = await listenToOpenSettings(openSettings)
     unlisten = await listenToBackend(receive)
     await connect()
   } catch (error) {
@@ -289,62 +332,69 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   unlisten?.()
+  unlistenOpenSettings?.()
   clearTimeout(noticeTimer)
 })
 </script>
 
 <template>
   <main class="workspace" @keydown="handleShortcut" @contextmenu.prevent>
-    <header v-show="!showingSpace" class="search-toolbar">
-      <div class="search-field">
-        <span class="search-glyph" aria-hidden="true"></span>
-        <input ref="queryInput" v-model="text" type="text" aria-label="搜索文件和文件夹" placeholder="搜索文件和文件夹"
-          autocomplete="off" spellcheck="false" title="空格分隔搜索条件，双引号匹配含空格的连续文字"
-          @keydown.down.prevent="resultsTable?.focusSelection()">
-        <button v-if="text" type="button" class="clear-search" title="清空搜索" aria-label="清空搜索" @click="clearQuery">×</button>
-      </div>
-      <select v-model="matchPath" class="scope-select" aria-label="匹配范围" title="匹配范围">
-        <option value="path">完整路径</option>
-        <option value="name">仅名称</option>
-      </select>
-      <button type="button" class="outlined-button space-open" aria-label="空间分析"
-        :disabled="!connected || !!saving" @click="viewSpace()">空间分析</button>
-    </header>
+    <div class="workspace-content" :inert="showingSettings">
+      <header v-show="!showingSpace" class="search-toolbar">
+        <div class="search-field">
+          <span class="search-glyph" aria-hidden="true"></span>
+          <input ref="queryInput" v-model="text" type="text" aria-label="搜索文件和文件夹" placeholder="搜索文件和文件夹"
+            autocomplete="off" spellcheck="false" title="空格分隔搜索条件，双引号匹配含空格的连续文字"
+            @keydown.down.prevent="resultsTable?.focusSelection()">
+          <button v-if="text" type="button" class="clear-search" title="清空搜索" aria-label="清空搜索" @click="clearQuery">×</button>
+        </div>
+        <select v-model="matchPath" class="scope-select" aria-label="匹配范围" title="匹配范围">
+          <option value="path">完整路径</option>
+          <option value="name">仅名称</option>
+        </select>
+        <button type="button" class="outlined-button toolbar-button" aria-label="空间分析"
+          :disabled="!connected || !!saving" @click="viewSpace()">空间分析</button>
+        <button type="button" class="outlined-button toolbar-button" @click="openSettings">设置</button>
+      </header>
 
-    <SearchResults v-show="!showingSpace" ref="resultsTable" v-model:selected-key="selectedKey" :rows="fatal ? [] : result?.rows ?? []"
-      :sort="sort" :descending="descending" :pending="pending" :empty-message="emptyMessage"
-      @sort="sortBy" @action="fileAction">
-      <div v-if="fatal" class="startup-error" role="alert">
-        <strong>搜索服务异常</strong>
-        <span>{{ fatal }}</span>
-        <button type="button" class="outlined-button" @click="connect">重试</button>
-      </div>
-    </SearchResults>
+      <SearchResults v-show="!showingSpace" ref="resultsTable" v-model:selected-key="selectedKey" :rows="fatal ? [] : result?.rows ?? []"
+        :sort="sort" :descending="descending" :pending="pending" :empty-message="emptyMessage"
+        @sort="sortBy" @action="fileAction">
+        <div v-if="fatal" class="startup-error" role="alert">
+          <strong>搜索服务异常</strong>
+          <span>{{ fatal }}</span>
+          <button type="button" class="outlined-button" @click="connect">重试</button>
+        </div>
+      </SearchResults>
 
-    <footer v-show="!showingSpace" class="status-bar">
-      <div class="result-summary" aria-live="polite" aria-atomic="true">
-        <span class="result-count">{{ resultLabel }}</span>
-        <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
-          {{ result.userMilliseconds.toFixed(2) }} ms
-        </span>
-      </div>
-      <div class="page-controls" aria-label="分页">
-        <button type="button" title="上一页" aria-label="上一页" :disabled="!canPage || page <= 1" @click="turnPage(-1)">
-          <span class="chevron left" aria-hidden="true"></span>
-        </button>
-        <span class="page-number" aria-label="当前页和总页数">{{ formatCount(page) }} / {{ formatCount(pages) }}</span>
-        <button type="button" title="下一页" aria-label="下一页" :disabled="!canPage || page >= pages" @click="turnPage(1)">
-          <span class="chevron right" aria-hidden="true"></span>
-        </button>
-      </div>
-      <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending"
-        @save-preference="updateSavePreference" @action="sendAction({ type: $event })" />
-    </footer>
-    <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
-      :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
-      :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
-      @details="requestSpaceDetails"
-      @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
+      <footer v-show="!showingSpace" class="status-bar">
+        <div class="result-summary" aria-live="polite" aria-atomic="true">
+          <span class="result-count">{{ resultLabel }}</span>
+          <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
+            {{ result.userMilliseconds.toFixed(2) }} ms
+          </span>
+        </div>
+        <div class="page-controls" aria-label="分页">
+          <button type="button" title="上一页" aria-label="上一页" :disabled="!canPage || page <= 1" @click="turnPage(-1)">
+            <span class="chevron left" aria-hidden="true"></span>
+          </button>
+          <span class="page-number" aria-label="当前页和总页数">{{ formatCount(page) }} / {{ formatCount(pages) }}</span>
+          <button type="button" title="下一页" aria-label="下一页" :disabled="!canPage || page >= pages" @click="turnPage(1)">
+            <span class="chevron right" aria-hidden="true"></span>
+          </button>
+        </div>
+        <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending"
+          @save-preference="updateSavePreference" @action="sendAction({ type: $event })" />
+      </footer>
+      <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
+        :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
+        :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
+        @settings="openSettings"
+        @details="requestSpaceDetails"
+        @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
+    </div>
+    <Settings v-if="showingSettings" :status="searchServiceStatus" :pending="searchServicePending"
+      :connected="connected" :error="fatal || searchServiceError" @close="closeSettings" @request="requestSearchService" />
     <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>
       <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>
@@ -360,7 +410,10 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.space-open { height: 39px; white-space: nowrap; }
+.workspace { position: relative; }
+.workspace-content { display: contents; }
+.workspace-content[inert] { visibility: hidden; }
+.toolbar-button { height: 39px; white-space: nowrap; }
 
 .save-overlay {
   position: fixed;

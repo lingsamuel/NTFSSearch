@@ -8,13 +8,14 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
 const trayTest = mode === '--tray'
 const searchResultsTest = mode === '--search-results'
-const testData = join(output, trayTest ? 'TrayData' : 'ExitSaveData')
+const searchServiceSettingsTest = mode === '--search-service-settings'
+const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
@@ -27,14 +28,15 @@ const portProbe = createServer().listen(0, '127.0.0.1')
 await once(portProbe, 'listening')
 const port = portProbe.address().port
 let apiPort
-if (trayTest) {
+if (trayTest || searchServiceSettingsTest) {
   const apiProbe = createServer().listen(0, '127.0.0.1')
   await once(apiProbe, 'listening')
   apiPort = apiProbe.address().port
   await new Promise(resolve => apiProbe.close(resolve))
 }
 await new Promise(resolve => portProbe.close(resolve))
-const applicationArgs = mode === '--cached-fixture' ? [] : [trayTest || searchResultsTest ? '--desktop-test' : mode]
+const applicationArgs = mode === '--cached-fixture' ? []
+  : [trayTest || searchResultsTest || searchServiceSettingsTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -195,6 +197,76 @@ async function verifySearchResults() {
   assert.equal((await dimensions()).left, 0)
 }
 
+async function verifySearchServiceSettings() {
+  const visible = selector => evaluate(`(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    return !!element?.getClientRects().length && getComputedStyle(element).visibility === 'visible';
+  })()`)
+  const click = label => evaluate(`(() => {
+    const button = [...document.querySelectorAll('button')].find(button => button.getClientRects().length
+      && (button.getAttribute('aria-label') ?? button.textContent.trim()) === ${JSON.stringify(label)});
+    if (!button || button.disabled) throw new Error('缺少可操作的按钮：' + ${JSON.stringify(label)});
+    button.click();
+  })()`)
+  const enabled = '.settings-workspace input[type=checkbox]'
+  const portInput = '.settings-workspace input[type=number]'
+  const setPort = value => evaluate(`(() => {
+    const field = document.querySelector('${portInput}');
+    field.value = '${value}';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  const status = expected => evaluate(`document.querySelector('.settings-workspace [role=status]')?.textContent.trim() === '${expected}'`)
+  const address = `http://127.0.0.1:${apiPort}`
+  const curl = String.raw`curl -sS --json '{"text":"C:\\Windows\\explorer.exe","limit":1}' ${address}/v1/search`
+
+  await query('HELLO 000901', 1)
+  await click('设置')
+  await until(() => status('运行中'), '设置页显示 HTTP 服务状态')
+  assert.equal(await visible('.search-toolbar'), false)
+  assert.equal(await evaluate(`document.querySelector('${enabled}').checked`), true)
+  assert.equal(await evaluate(`document.querySelector('${portInput}').value`), '18791')
+  assert.match(await evaluate("document.querySelector('.settings-workspace').textContent"), /NTFS_SEARCH_PORT/)
+  assert.equal(await evaluate("document.querySelector('.settings-command code').textContent"), curl)
+
+  await setPort(65536)
+  await click('保存并应用')
+  assert.match(await evaluate("document.querySelector('.settings-workspace [role=alert]').textContent"), /65535/)
+  assert.equal(await status('运行中'), true)
+  await setPort(18791)
+  await evaluate(`document.querySelector('${enabled}').click()`)
+  await click('保存并应用')
+  await until(() => status('已禁用'), '应用后停止 HTTP 服务')
+  await evaluate(`document.querySelector('${enabled}').click()`)
+  await click('保存并应用')
+  await until(() => status('运行中'), '应用后启动 HTTP 服务')
+  await click('重启服务')
+  await until(() => status('运行中'), '重启后恢复 HTTP 服务')
+  assert.equal((await fetch(`${address}/v1/search`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: 'HELLO 000901', limit: 1 }), signal: AbortSignal.timeout(5000),
+  })).status, 200)
+
+  await click('返回')
+  assert.equal(await visible('.settings-workspace'), false)
+  assert.equal(await evaluate("document.querySelector('.search-field input').value"), 'HELLO 000901')
+  assert.equal(await evaluate(`(${resultCount})()`), expected(1))
+  await click('空间分析')
+  await until(() => visible('.space-map'), '进入空间分析')
+  await evaluate("const level = document.querySelector('.space-level'); level.value = '3'; level.dispatchEvent(new Event('change'))")
+  // 用 WebView 的 Tauri 事件派发模拟托盘通知，保持生产的事件权限和窗口状态。
+  await evaluate(`(() => {
+    const event = 'open-settings';
+    const listeners = window.__internal_unstable_listeners_object_id__[event];
+    const ids = Object.getOwnPropertyNames(listeners ?? {}).map(Number);
+    window.__internal_unstable_listeners_function_id__({ event, payload: null }, ids);
+  })()`)
+  await until(() => status('运行中'), '托盘事件打开同一设置页')
+  assert.equal(await visible('.space-map'), false)
+  await click('返回')
+  assert.equal(await visible('.space-map'), true)
+  assert.equal(await evaluate("document.querySelector('.space-level').value"), '3')
+}
+
 try {
   const page = await until(async () => {
     try {
@@ -243,6 +315,8 @@ try {
     await writeFile(join(output, 'benchmark.json'), JSON.stringify({ rows: total, processes: JSON.parse(memory.stdout), samples }, null, 2))
   } else if (searchResultsTest) {
     await verifySearchResults()
+  } else if (searchServiceSettingsTest) {
+    await verifySearchServiceSettings()
   } else if (!trayTest) {
     const fileIcon = extension => `document.querySelector('td.entry-name[title$="${extension}"] img.entry-file-type-icon')`
     const textIcon = await until(() => evaluate(`(() => {
@@ -588,6 +662,7 @@ try {
   }
   if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
+  else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

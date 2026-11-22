@@ -13,7 +13,7 @@ internal static class LocalSearchClient
         bool isSearch = args[0] == "search";
         if (!isSearch && args.Length != 1) throw new ArgumentException("status 不接受参数。");
         var query = isSearch ? ParseQuery(args) : null;
-        Uri baseAddress = LocalSearchEndpoint.Resolve(Environment.GetEnvironmentVariable(LocalSearchEndpoint.PortVariable));
+        Uri baseAddress = ResolveAddress();
         using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
         {
             BaseAddress = baseAddress,
@@ -44,6 +44,21 @@ internal static class LocalSearchClient
         {
             throw new InvalidOperationException($"本机搜索后端 {baseAddress} 返回了无效的 JSON 响应。", error);
         }
+    }
+
+    private static Uri ResolveAddress()
+    {
+        string? portOverride = Environment.GetEnvironmentVariable(LocalSearchEndpoint.PortVariable);
+        if (LocalSearchEndpoint.IsPortOverridden(portOverride)) return LocalSearchEndpoint.Resolve(portOverride);
+
+        DesktopSettings settings;
+        try { settings = DesktopSettings.Load(PortableDataDirectory.Resolve()); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Console.Error.WriteLine("无法读取应用设置：" + error.Message);
+            settings = new();
+        }
+        return LocalSearchEndpoint.Resolve(portOverride, settings.SearchServicePort);
     }
 
     private static string? ReadError(string body)

@@ -1,17 +1,17 @@
 using System.Text.Json;
-using NtfsSearch.Core;
 
-namespace NtfsSearch.App;
+namespace NtfsSearch.Core;
 
-// 设置与退出索引快照分别发布，修改偏好不会触碰已有快照。
-internal sealed record DesktopSettings(bool SkipExitIndexSave = false)
+// 旧设置没有 HTTP 开关，正式桌面与隔离演示可各自决定启动默认值。
+internal sealed record DesktopSettings(bool SkipExitIndexSave = false, bool? SearchServiceEnabled = null,
+    int SearchServicePort = LocalSearchEndpoint.DefaultPort)
 {
     private const string FileName = "settings.json";
 
     internal static DesktopSettings Load(string directory)
     {
         string path = Path.Combine(directory, FileName);
-        if (!File.Exists(path)) return new();
+        if (!AtomicFile.ExistsWithReplaceGrace(path)) return new();
         return JsonSerializer.Deserialize<DesktopSettings>(AtomicJson.ReadText(path))
             ?? throw new JsonException("应用设置为空。");
     }

@@ -1,4 +1,3 @@
-using NtfsSearch.App;
 using NtfsSearch.Core;
 using Xunit;
 

@@ -84,10 +84,26 @@ export interface SpaceAnalysisResult {
   } | null
 }
 
+export interface SearchServiceStatus {
+  type: 'searchServiceStatus'
+  enabled: boolean
+  port: number
+  address: string | null
+  portOverridden: boolean
+  running: boolean
+  busy: boolean
+  error: string | null
+}
+
+export type SearchServiceRequest =
+  | { type: 'getSearchServiceSettings' | 'restartSearchService' }
+  | { type: 'applySearchServiceSettings'; enabled: boolean; port: number }
+
 export type DesktopMessage =
   | SearchResult
   | IndexStatus
   | SpaceAnalysisResult
+  | SearchServiceStatus
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
   | { type: 'saving'; written: number; total: number }
@@ -97,6 +113,7 @@ export type DesktopMessage =
   | { type: 'notice'; message: string }
 
 export type DesktopRequest =
+  | SearchServiceRequest
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }
@@ -111,6 +128,10 @@ export type DesktopRequest =
 
 export function listenToBackend(callback: (message: DesktopMessage) => void) {
   return listen<DesktopMessage>('backend-message', event => callback(event.payload))
+}
+
+export function listenToOpenSettings(callback: () => void) {
+  return listen('open-settings', callback)
 }
 
 export function startBackend() {

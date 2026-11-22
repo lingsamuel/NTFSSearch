@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable></PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/NtfsSearch.App/DesktopSettings.cs" Link="App/DesktopSettings.cs" />
     <Compile Include="../../src/NtfsSearch.App/FileSizeDisplay.cs" Link="App/FileSizeDisplay.cs" />
     <Compile Include="../../src/NtfsSearch.App/VolumeJournalService.cs" Link="App/VolumeJournalService.cs" />
     <Compile Include="../../src/NtfsSearch.App/CollectorProgress.cs" Link="App/CollectorProgress.cs" />

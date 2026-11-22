@@ -17,7 +17,15 @@
 
 ## 通过 HTTP 和 CLI 查询
 
-桌面程序启动后默认在 `http://127.0.0.1:18791` 提供本机 HTTP/JSON 接口。关窗进入托盘期间，接口继续使用实时索引。要改端口，请在启动桌面和 CLI 的环境中设置同一个 `NTFS_SEARCH_PORT`。
+桌面程序默认在 `http://127.0.0.1:18791` 提供本机 HTTP/JSON 接口。关窗进入托盘期间，接口继续使用实时索引。
+
+从主窗口或托盘右键菜单打开「设置」。可以启停 HTTP 搜索服务、修改端口并查看实际访问地址。点击「保存并应用」立即生效，点击「重启服务」只重启 HTTP 监听，索引和桌面搜索继续运行。CLI 自动读取同一便携目录中的端口设置。使用环境变量 `NTFS_SEARCH_PORT` 时，它会覆盖已保存的端口。
+
+设置页可复制一行 Linux 或 WSL 命令，按实际端口查询 Windows 自带的文件。以默认地址为例。
+
+```sh
+curl -sS --json '{"text":"C:\\Windows\\explorer.exe","limit":1}' http://127.0.0.1:18791/v1/search
+```
 
 WSL 2 镜像网络支持通过 `127.0.0.1` 访问这个接口。使用 NAT 网络时，可通过 WSL 互操作运行 Windows 版 CLI。 [Microsoft WSL 网络说明](https://learn.microsoft.com/zh-cn/windows/wsl/networking)
 

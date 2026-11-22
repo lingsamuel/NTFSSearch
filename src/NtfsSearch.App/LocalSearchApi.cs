@@ -20,9 +20,8 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
     private static readonly string[] DateTimeFormats = ["yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK", "yyyy-MM-dd'T'HH:mmK"];
 
     /// <summary>只在桌面后端启动回环监听，所有查询复用同一份已发布索引。</summary>
-    internal static async Task<LocalSearchApi> StartAsync(SearchHost host, string configuredPort)
+    internal static async Task<LocalSearchApi> StartAsync(SearchHost host, Uri address)
     {
-        Uri address = LocalSearchEndpoint.Resolve(configuredPort);
         // 后端标准输出是桌面 JSON 通道。空宿主也可防止通用 Web 环境变量或配置文件增加监听地址。
         var builder = WebApplication.CreateEmptyBuilder(new() { EnvironmentName = Environments.Production });
         builder.WebHost.UseKestrelCore().ConfigureKestrel(options =>
@@ -111,7 +110,7 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
         catch (OperationCanceledException) when (deadline.IsCancellationRequested)
         {
             if (request.HttpContext.RequestAborted.IsCancellationRequested) return Results.Empty;
-            if (stopping.IsCancellationRequested) return Error("本机搜索后端正在退出。", StatusCodes.Status503ServiceUnavailable);
+            if (stopping.IsCancellationRequested) return Error("本机 HTTP 搜索服务正在停止。", StatusCodes.Status503ServiceUnavailable);
             return Error("本机查询超时。", StatusCodes.Status504GatewayTimeout);
         }
     }

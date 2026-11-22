@@ -5,15 +5,35 @@ mod backend;
 use backend::Backend;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{env, fmt::Write, fs, io, os::windows::ffi::OsStrExt};
+use std::{env, fmt::Write, fs, io, os::windows::ffi::OsStrExt, sync::Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, AppHandle, Manager, State, WebviewWindow, WindowEvent,
+    App, AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent,
 };
 
+enum SettingsNavigation {
+    Loading,
+    Pending,
+    Ready,
+}
+
 #[tauri::command]
-fn start_backend(window: WebviewWindow, backend: State<'_, Backend>) -> Result<(), String> {
+fn start_backend(
+    window: WebviewWindow,
+    backend: State<'_, Backend>,
+    navigation: State<'_, Mutex<SettingsNavigation>>,
+) -> Result<(), String> {
+    let pending = {
+        let mut state = navigation.lock().map_err(|error| error.to_string())?;
+        matches!(
+            std::mem::replace(&mut *state, SettingsNavigation::Ready),
+            SettingsNavigation::Pending
+        )
+    };
+    if pending {
+        let _ = window.emit("open-settings", ());
+    }
     backend.start(window)
 }
 
@@ -54,9 +74,26 @@ fn show_window(window: &WebviewWindow) {
     let _ = window.set_focus();
 }
 
-fn open_main_window(app: &AppHandle) {
+fn open_main_window(app: &AppHandle, settings: bool) {
     if let Some(window) = app.get_webview_window("main") {
         show_window(&window);
+        if settings {
+            let navigation = app.state::<Mutex<SettingsNavigation>>();
+            let ready = {
+                let Ok(mut state) = navigation.lock() else {
+                    return;
+                };
+                let ready = matches!(*state, SettingsNavigation::Ready);
+                // 页面先注册事件再启动后端。冷启动时暂存从托盘打开设置的请求。
+                if !ready {
+                    *state = SettingsNavigation::Pending;
+                }
+                ready
+            };
+            if ready {
+                let _ = window.emit("open-settings", ());
+            }
+        }
     }
 }
 
@@ -74,14 +111,16 @@ fn quit_from_tray(app: &AppHandle) {
 
 fn setup_tray(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let open = MenuItem::with_id(app, "open", "打开", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &settings, &quit])?;
     let tray = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("NTFS Search")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "open" => open_main_window(app),
+            "open" => open_main_window(app, false),
+            "settings" => open_main_window(app, true),
             "quit" => quit_from_tray(app),
             _ => {}
         })
@@ -92,7 +131,7 @@ fn setup_tray(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 ..
             } = event
             {
-                open_main_window(tray.app_handle());
+                open_main_window(tray.app_handle(), false);
             }
         });
     let icon = app.default_window_icon().expect("桌面程序缺少图标").clone();
@@ -109,9 +148,10 @@ fn main() {
         portable_instance_id(&context.config().identifier).expect("无法确定便携版所在目录");
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            open_main_window(app)
+            open_main_window(app, false)
         }))
         .manage(Backend::default())
+        .manage(Mutex::new(SettingsNavigation::Loading))
         .setup(setup_tray)
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
