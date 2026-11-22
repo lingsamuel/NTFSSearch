@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
 using NtfsSearch.Core;
-using NtfsSearch.Cli;
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
@@ -28,7 +27,11 @@ try
             Console.WriteLine($"已保存 {scanned.Count:N0} 条目录项，含硬链接与可用大小/修改时间；静态诊断命令不启动实时监控。");
             break;
         case "search" or "status":
-            await LocalSearchClient.RunAsync(args, cancellation.Token); break;
+#if HTTP_SEARCH_SERVICE
+            await NtfsSearch.Cli.LocalSearchClient.RunAsync(args, cancellation.Token); break;
+#else
+            throw new NotSupportedException("实时查询需使用带查询服务的版本。");
+#endif
         case "search-snapshot" when args.Length >= 3:
             var loaded = SnapshotStore.Load(args[1], cancellation.Token);
             var sort = args.Length > 3 ? Enum.Parse<SortField>(args[3], true) : SortField.Name;
@@ -48,11 +51,19 @@ try
                 NtfsSearch {version?.ToString(3)}
 
                 实时索引查询，需先启动桌面程序
+                """);
+#if HTTP_SEARCH_SERVICE
+            Console.WriteLine("""
                   search [query] [--name-only|--match-path] [--sort name|path|size|modified] [--descending]
                          [--offset N] [--limit N] [--min-size-bytes N] [--max-size-bytes N]
                          [--created-from ISO8601] [--created-before ISO8601]
                          [--modified-from ISO8601] [--modified-before ISO8601]
                   status
+                """);
+#else
+            Console.WriteLine("  请使用带查询服务的版本。");
+#endif
+            Console.WriteLine("""
 
                 诊断命令
                   drives

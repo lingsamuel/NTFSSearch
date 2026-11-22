@@ -58,12 +58,13 @@ watch(curl, () => { copyFeedback.value = '' })
 
 function save() {
   const value = Number(port.value)
-  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+  if (props.status?.searchServiceAvailable && (!Number.isInteger(value) || value < 1 || value > 65535)) {
     portError.value = '端口必须是 1 到 65535 之间的整数。'
     return
   }
   portError.value = ''
-  emit('request', { type: 'applySettings', enabled: enabled.value, port: value,
+  const service = props.status?.searchServiceAvailable ? { enabled: enabled.value, port: value } : {}
+  emit('request', { type: 'applySettings', ...service,
     searchDirectorySizes: searchDirectorySizes.value, skipExitIndexSave: !saveExitIndex.value, ...indexSettings })
 }
 
@@ -123,7 +124,7 @@ onMounted(() => back.value?.focus())
               关闭文件大小索引会停用大小列、按大小排序和筛选、文件夹大小统计及空间分析。
             </p>
           </section>
-          <section class="settings-service" aria-labelledby="service-settings-title">
+          <section v-if="status?.searchServiceAvailable" class="settings-service" aria-labelledby="service-settings-title">
             <h2 id="service-settings-title">搜索服务</h2>
             <label class="settings-toggle"><input v-model="enabled" name="search-service-enabled" type="checkbox">启用 HTTP 搜索服务</label>
             <label class="settings-port">

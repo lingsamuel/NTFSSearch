@@ -1,9 +1,10 @@
-﻿param([string]$OutputDirectory = "", [switch]$SelfContained)
+﻿param([string]$OutputDirectory = "", [switch]$SelfContained, [switch]$WithoutHttp, [switch]$PackageAll)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root 'artifacts/windows' }
+if (-not $OutputDirectory) {
+    $OutputDirectory = Join-Path $root $(if ($PackageAll) { 'artifacts/windows/packages' } else { 'artifacts/windows' })
+}
 $OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
-$self = $SelfContained.IsPresent.ToString().ToLowerInvariant()
 $desktop = Join-Path $root 'src/NtfsSearch.Desktop'
 $target = 'x86_64-pc-windows-msvc'
 $rustBuild = Join-Path $desktop 'src-tauri/target'
@@ -21,27 +22,106 @@ try {
 }
 finally { Pop-Location }
 
-# 先独立产出完整包，避免增量发布混入旧 WPF 文件或自包含运行时。
-if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
-foreach ($projectName in @('NtfsSearch.App', 'NtfsSearch.Cli')) {
-    $project = Join-Path $root ('src/' + $projectName)
-    & dotnet publish $project -c Release --artifacts-path $dotnetBuild -r win-x64 --self-contained $self -o $staging
-    if ($LASTEXITCODE -ne 0) { throw "构建失败：$projectName" }
+function Publish-Portable([bool]$IncludeRuntime, [bool]$IncludeHttp) {
+    # 先独立产出完整包，避免增量发布混入其他版本的框架和文件。
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    $self = $IncludeRuntime.ToString().ToLowerInvariant()
+    $http = $IncludeHttp.ToString().ToLowerInvariant()
+    $build = Join-Path $dotnetBuild "runtime-$self-http-$http"
+    foreach ($projectName in @('NtfsSearch.App', 'NtfsSearch.Cli')) {
+        $project = Join-Path $root ('src/' + $projectName)
+        & dotnet publish $project -c Release --artifacts-path $build -r win-x64 --self-contained $self `
+            "-p:IncludeHttpSearchService=$http" -p:DebugType=None -p:DebugSymbols=false -o $staging | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "构建失败：$projectName" }
+    }
+    Copy-Item (Join-Path $rustBuild "$target/release/ntfs-search.exe") (Join-Path $staging 'NtfsSearch.App.exe') -Force
+    Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $staging -Force
+    Copy-Item (Join-Path $PSScriptRoot '启动搜索.cmd') $staging -Force
+    Copy-Item (Join-Path $root 'manual') $staging -Recurse -Force
+    $debugFiles = @(Get-ChildItem -LiteralPath $staging -Recurse -Force | Where-Object {
+        $_.Extension -in @('.pdb', '.dbg', '.dwarf', '.dSYM', '.map')
+    })
+    if ($debugFiles.Count) { throw "便携包包含调试文件：$($debugFiles.Name -join ', ')" }
+
+    # 记录发布文件，切换打包模式时清理上一版的依赖。
+    $manifestName = '.portable-files'
+    $files = @(Get-ChildItem -LiteralPath $staging -Force -Name) + $manifestName
+    Set-Content -LiteralPath (Join-Path $staging $manifestName) -Value $files -Encoding UTF8
+    return $files
 }
-Copy-Item (Join-Path $rustBuild "$target/release/ntfs-search.exe") (Join-Path $staging 'NtfsSearch.App.exe') -Force
-Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $staging -Force
-Copy-Item (Join-Path $PSScriptRoot '启动搜索.cmd') $staging -Force
-Copy-Item (Join-Path $root 'manual') $staging -Recurse -Force
-# 记录发布文件，切换自包含模式时也能清理上一版的运行时文件。
+
+function Install-Files([string]$Source, [string[]]$Published, [string[]]$Replaced) {
+    New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    $previous = Join-Path $OutputDirectory ('.previous-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $previous | Out-Null
+    $moved = @()
+    $installed = @()
+    try {
+        foreach ($item in ($Replaced | Sort-Object -Unique)) {
+            $path = Join-Path $OutputDirectory $item
+            if (Test-Path -LiteralPath $path) {
+                $backup = Join-Path $previous $item
+                New-Item -ItemType Directory -Path (Split-Path $backup -Parent) -Force | Out-Null
+                Move-Item -LiteralPath $path -Destination $backup
+                $moved += $item
+            }
+        }
+        foreach ($item in $Published) {
+            $installed += $item
+            Copy-Item -LiteralPath (Join-Path $Source $item) -Destination $OutputDirectory -Force -Recurse
+        }
+    }
+    catch {
+        foreach ($item in $installed) {
+            $path = Join-Path $OutputDirectory $item
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -Recurse }
+        }
+        foreach ($item in $moved) {
+            Move-Item -LiteralPath (Join-Path $previous $item) -Destination (Join-Path $OutputDirectory $item)
+        }
+        Remove-Item -LiteralPath $previous
+        throw
+    }
+    Remove-Item -LiteralPath $previous -Force -Recurse
+}
+
+if ($PackageAll) {
+    $archives = Join-Path $dotnetBuild 'archives'
+    if (Test-Path -LiteralPath $archives) { Remove-Item -LiteralPath $archives -Recurse -Force }
+    New-Item -ItemType Directory -Path $archives -Force | Out-Null
+    $packages = @(
+        @{ Name = 'framework-dependent'; IncludeRuntime = $false; IncludeHttp = $true }
+        @{ Name = 'self-contained'; IncludeRuntime = $true; IncludeHttp = $true }
+        @{ Name = 'self-contained-no-http'; IncludeRuntime = $true; IncludeHttp = $false }
+    )
+    try {
+        $names = foreach ($package in $packages) {
+            Publish-Portable $package.IncludeRuntime $package.IncludeHttp | Out-Null
+            $name = "NTFS-Search-win-x64-$($package.Name).zip"
+            [IO.Compression.ZipFile]::CreateFromDirectory($staging, (Join-Path $archives $name),
+                [IO.Compression.CompressionLevel]::Optimal, $false)
+            $name
+        }
+        Install-Files $archives $names $names
+    }
+    finally {
+        foreach ($directory in @($staging, $archives)) {
+            if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
+        }
+    }
+    Write-Output "三种 Windows 便携 ZIP 已构建：$OutputDirectory"
+    return
+}
+
 $manifestName = '.portable-files'
-$published = @(Get-ChildItem -LiteralPath $staging -Force -Name | Where-Object { $_ -ne 'Data' }) + $manifestName
-Set-Content -LiteralPath (Join-Path $staging $manifestName) -Value $published -Encoding UTF8
+$published = @(Publish-Portable $SelfContained.IsPresent (!$WithoutHttp.IsPresent))
 $replaced = $published
 $previousManifest = Join-Path $OutputDirectory $manifestName
 $legacyPaths = @()
 if (Test-Path -LiteralPath $previousManifest -PathType Leaf) {
     $replaced += @(Get-Content -LiteralPath $previousManifest | Where-Object {
-        $_ -and $_ -eq $_.TrimEnd([char[]]' .') -and $_ -notin @('Data', 'app', 'cli') -and [IO.Path]::GetFileName($_) -eq $_
+        $_ -and $_ -eq $_.TrimEnd([char[]]' .') -and $_ -notin @('Data', 'app', 'cli', 'index.ntsnap', 'settings.json') `
+            -and [IO.Path]::GetFileName($_) -eq $_
     })
 }
 else {
@@ -59,38 +139,7 @@ else {
         $replaced += @('docs', 'README.md')
     }
 }
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-$previous = Join-Path $OutputDirectory ('.previous-' + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $previous | Out-Null
-$moved = @()
-$installed = @()
-try {
-    foreach ($item in ($replaced | Sort-Object -Unique)) {
-        $path = Join-Path $OutputDirectory $item
-        if (Test-Path -LiteralPath $path) {
-            $backup = Join-Path $previous $item
-            New-Item -ItemType Directory -Path (Split-Path $backup -Parent) -Force | Out-Null
-            Move-Item -LiteralPath $path -Destination $backup
-            $moved += $item
-        }
-    }
-    foreach ($item in $published) {
-        $installed += $item
-        Copy-Item -LiteralPath (Join-Path $staging $item) -Destination $OutputDirectory -Force -Recurse
-    }
-}
-catch {
-    foreach ($item in $installed) {
-        $path = Join-Path $OutputDirectory $item
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -Recurse }
-    }
-    foreach ($item in $moved) {
-        Move-Item -LiteralPath (Join-Path $previous $item) -Destination (Join-Path $OutputDirectory $item)
-    }
-    Remove-Item -LiteralPath $previous
-    throw
-}
-Remove-Item -LiteralPath $previous -Force -Recurse
+Install-Files $staging $published $replaced
 Remove-Item -LiteralPath $staging -Force -Recurse
 foreach ($legacyPath in $legacyPaths) {
     if (Get-ChildItem -LiteralPath $legacyPath -Force -ErrorAction SilentlyContinue) { continue }

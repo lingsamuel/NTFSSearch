@@ -15,8 +15,8 @@ public sealed class PortableDataTests : IDisposable
     [Fact]
     public void DefaultDataIsBesideExecutable()
     {
-        Assert.Equal(Path.Combine(Path.GetFullPath(root), "Data"), PortableDataDirectory.Resolve(root));
-        Assert.Equal(Path.Combine(AppContext.BaseDirectory, "Data"), PortableDataDirectory.Resolve());
+        Assert.Equal(Path.GetFullPath(root), PortableDataDirectory.Resolve(root));
+        Assert.Equal(AppContext.BaseDirectory, PortableDataDirectory.Resolve());
     }
 
     [Fact]

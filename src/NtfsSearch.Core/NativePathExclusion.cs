@@ -14,4 +14,21 @@ internal static class NativePathExclusion
             && directory[..parentPath.Length].Equals(parentPath, StringComparison.OrdinalIgnoreCase)
             && directory[parentPath.Length..].Equals(name, StringComparison.OrdinalIgnoreCase);
     }
+
+    internal static bool ContainsPortableData(string directory, string parent, ReadOnlySpan<char> name) =>
+        parent.AsSpan().TrimEnd('\\').Equals(directory.AsSpan().TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)
+        && IsPortableDataName(name);
+
+    internal static bool IsPortableDataName(ReadOnlySpan<char> name) =>
+        MatchesAtomicFile(name, ExitSnapshotStore.FileName) || MatchesAtomicFile(name, DesktopSettings.FileName);
+
+    private static bool MatchesAtomicFile(ReadOnlySpan<char> name, string file)
+    {
+        if (!name.StartsWith(file, StringComparison.OrdinalIgnoreCase)) return false;
+        var suffix = name[file.Length..];
+        // 原子写入使用 .<32 位 GUID>.tmp。相近的普通文件名仍参与索引。
+        return suffix.IsEmpty || (suffix.Length == 37 && suffix[0] == '.'
+            && suffix.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParseExact(suffix.Slice(1, 32), "N", out _));
+    }
 }

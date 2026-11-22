@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../NtfsSearch.Core/NtfsSearch.Core.csproj" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../NtfsSearch.Core/NtfsSearch.Core.csproj" />
+    <Compile Remove="LocalSearchClient.cs" Condition="'$(IncludeHttpSearchService)' != 'true'" />
+  </ItemGroup>
 </Project>

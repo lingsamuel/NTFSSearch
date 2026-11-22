@@ -3,7 +3,16 @@ namespace NtfsSearch.Core;
 public sealed class JournalChangeResolver(string dataDirectory, Func<ulong, IndexedFileState> readState)
 {
     private const uint Relevant = 0x0001b33f;
-    private readonly string dataRoot = Path.GetFullPath(dataDirectory).Replace('/', '\\').TrimEnd('\\') + '\\';
+    private readonly string dataRoot = Path.GetFullPath(dataDirectory).Replace('/', '\\');
+    private readonly bool portableDataOnly;
+    private readonly ulong? portableDirectory;
+
+    internal JournalChangeResolver(string dataDirectory, Func<ulong, IndexedFileState> readState, ulong? portableDirectory)
+        : this(dataDirectory, readState)
+    {
+        portableDataOnly = true;
+        this.portableDirectory = portableDirectory;
+    }
     private readonly HashSet<ulong> internalFiles = [];
     // 仅跟踪排除边界相关的混合硬链接及尚未完成的改名，不为全卷普通对象建身份集合。
     private readonly HashSet<ulong> externallyLinkedInternalFiles = [];
@@ -27,12 +36,12 @@ public sealed class JournalChangeResolver(string dataDirectory, Func<ulong, Inde
                 catch (IOException) when (attempt < 2) { token.ThrowIfCancellationRequested(); Thread.Sleep(25); }
             }
             if (current is null) throw new IOException("无法读取变化对象的当前状态。");
-            bool hasInternal = current.Links.Any(IsInternal);
+            bool hasInternal = current.Links.Any(link => IsInternal(link, current.IsDirectory));
             bool wasInternal = internalFiles.Contains(group.Key);
             bool hadExternal = externallyLinkedInternalFiles.Contains(group.Key) || pendingExternalRenames.Contains(group.Key);
-            var links = current.Links.Where(link => !IsInternal(link)).ToArray();
+            var links = FilterLinks(current);
             bool renamedFromExternal = group.Where(r => (r.Reason & 0x00001000) != 0)
-                .Any(record => !IsInternalParent(record.ParentReference));
+                .Any(record => !IsInternalRecord(record));
             if (hasInternal) internalFiles.Add(group.Key);
             if (hasInternal && links.Length > 0) externallyLinkedInternalFiles.Add(group.Key);
             else externallyLinkedInternalFiles.Remove(group.Key);
@@ -40,13 +49,13 @@ public sealed class JournalChangeResolver(string dataDirectory, Func<ulong, Inde
                 pendingExternalRenames.Add(group.Key);
             if ((reason & 0x00002200) != 0) pendingExternalRenames.Remove(group.Key);
 
-            // 原来公开的名称移入Data或移除最后一个公开硬链接时必须发布删除。
+            // 原来公开的名称移入排除范围或移除最后一个公开硬链接时必须发布删除。
             // 纯内部创建、写入和临时文件原子改名继续只推进水位，避免自身WAL反馈。
             bool removedExternal = hadExternal || renamedFromExternal
                 || (reason & 0x00010000) != 0 && !wasInternal && (reason & 0x00000100) == 0;
             if (hasInternal && links.Length == 0 && !removedExternal) continue;
-            if (links.Length == 0 && !removedExternal && group.All(r => IsInternalParent(r.ParentReference))) continue;
-            if (current.IsDirectory && links.Length > 0 && (reason & 0x00003000) != 0)
+            if (links.Length == 0 && !removedExternal && group.All(IsInternalRecord)) continue;
+            if (!portableDataOnly && current.IsDirectory && links.Length > 0 && (reason & 0x00003000) != 0)
             {
                 foreach (var old in group.Where(r => (r.Reason & 0x00001000) != 0))
                 {
@@ -55,7 +64,7 @@ public sealed class JournalChangeResolver(string dataDirectory, Func<ulong, Inde
                     try
                     {
                         var parent = readState(old.ParentReference);
-                        if (parent.Links.Count == 0 || parent.Links.Any(IsInternal)) { wasInternal = true; break; }
+                        if (parent.Links.Count == 0 || parent.Links.Any(link => IsInternal(link, parent.IsDirectory))) { wasInternal = true; break; }
                     }
                     catch (IOException) { wasInternal = true; break; }
                 }
@@ -68,7 +77,15 @@ public sealed class JournalChangeResolver(string dataDirectory, Func<ulong, Inde
     }
 
     public void MarkInternal(ulong reference) => internalFiles.Add(reference);
-    public IndexedFileState FilterState(IndexedFileState state) => state with { Links = state.Links.Where(link => !IsInternal(link)).ToArray() };
+    public IndexedFileState FilterState(IndexedFileState state) => state with { Links = FilterLinks(state) };
+
+    private IndexedLink[] FilterLinks(IndexedFileState state) =>
+        state.Links.Where(link => !IsInternal(link, state.IsDirectory)).ToArray();
+
+    private bool IsInternalRecord(JournalRecord record) => portableDataOnly
+        ? record.ParentReference == portableDirectory && (record.Attributes & 16) == 0 && NativePathExclusion.IsPortableDataName(record.Name)
+        : IsInternalParent(record.ParentReference);
+
     private bool IsInternalParent(ulong reference)
     {
         if (DirectoryPathResolver.IsRoot(reference)) return false;
@@ -76,19 +93,14 @@ public sealed class JournalChangeResolver(string dataDirectory, Func<ulong, Inde
         try
         {
             var parent = readState(reference);
-            if (parent.Links.Count > 0 && parent.Links.All(IsInternal))
+            if (parent.Links.Count > 0 && parent.Links.All(link => IsInternal(link, parent.IsDirectory)))
             { internalFiles.Add(reference); return true; }
         }
         catch (IOException) { }
         // 无法确认父目录在排除区时保守发布空状态，防止既有公开行残留。
         return false;
     }
-    private bool IsInternal(IndexedLink link)
-    {
-        if (link.ParentPath.StartsWith(dataRoot, StringComparison.OrdinalIgnoreCase)) return true;
-        string root = dataRoot.TrimEnd('\\');
-        return link.ParentPath.Length + link.Name.Length == root.Length
-            && root.AsSpan().StartsWith(link.ParentPath, StringComparison.OrdinalIgnoreCase)
-            && root.AsSpan(link.ParentPath.Length).Equals(link.Name, StringComparison.OrdinalIgnoreCase);
-    }
+    private bool IsInternal(IndexedLink link, bool directory) => portableDataOnly
+        ? !directory && NativePathExclusion.ContainsPortableData(dataRoot, link.ParentPath, link.Name)
+        : NativePathExclusion.Contains(dataRoot, link.ParentPath, link.Name);
 }

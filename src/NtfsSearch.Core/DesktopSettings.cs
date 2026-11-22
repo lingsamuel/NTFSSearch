@@ -7,7 +7,7 @@ internal sealed record DesktopSettings(bool SkipExitIndexSave = false, bool? Sea
     int SearchServicePort = LocalSearchEndpoint.DefaultPort, bool SearchDirectorySizes = true,
     bool PrecomputeSort = true, bool IndexCreationTime = false, bool IndexModifiedTime = true, bool IndexFileSize = true)
 {
-    private const string FileName = "settings.json";
+    internal const string FileName = "settings.json";
 
     internal IndexMetadata Metadata =>
         (IndexCreationTime ? IndexMetadata.CreationTime : IndexMetadata.None)

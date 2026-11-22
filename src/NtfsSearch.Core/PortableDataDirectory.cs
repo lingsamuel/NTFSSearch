@@ -4,5 +4,5 @@ namespace NtfsSearch.Core;
 public static class PortableDataDirectory
 {
     public static string Resolve(string? executableDirectory = null) =>
-        Path.Combine(Path.GetFullPath(executableDirectory ?? AppContext.BaseDirectory), "Data");
+        Path.GetFullPath(executableDirectory ?? AppContext.BaseDirectory);
 }

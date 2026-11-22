@@ -101,6 +101,7 @@ export interface SettingsStatus extends IndexSettings {
   searchDirectorySizes: boolean
   skipExitIndexSave: boolean
   indexRestartRequired: boolean
+  searchServiceAvailable: boolean
   enabled: boolean
   port: number
   address: string | null
@@ -112,7 +113,7 @@ export interface SettingsStatus extends IndexSettings {
 
 export type SettingsRequest =
   | { type: 'getSettings' | 'restartSearchService' }
-  | ({ type: 'applySettings'; enabled: boolean; port: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean } & IndexSettings)
+  | ({ type: 'applySettings'; enabled?: boolean; port?: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean } & IndexSettings)
 
 export type DesktopMessage =
   | SearchResult

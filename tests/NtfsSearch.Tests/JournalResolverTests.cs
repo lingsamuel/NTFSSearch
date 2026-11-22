@@ -32,6 +32,25 @@ public class JournalResolverTests
     }
 
     [Fact]
+    public void PortableFilesStayOutOfJournalWhileOtherFilesInSameDirectoryRemainSearchable()
+    {
+        const ulong file = 10, parent = 99;
+        const string staging = "settings.json.0123456789abcdef0123456789abcdef.tmp";
+        string name = DesktopSettings.FileName;
+        var resolver = new JournalChangeResolver(Data, id => new(id, false, [new(parent, Internal, name)]), parent);
+
+        var atomicRename = new JournalBatch(new(1, 0), new(1, 1),
+            [new(file, parent, 0, 0x1000, 0, staging), new(file, parent, 0, 0x2000, 0, name)]);
+        Assert.Empty(resolver.Resolve(atomicRename, new(1, 0)).Files);
+        Assert.Empty(resolver.FilterState(new(file, false, [new(parent, Internal, staging)])).Links);
+
+        name = "notes.txt";
+        var visible = resolver.Resolve(Batch(1, file, (parent, 0x2000)), new(1, 1));
+        Assert.Equal(name, Assert.Single(Assert.Single(visible.Files).Links).Name);
+        Assert.Single(resolver.FilterState(new(file, false, [new(parent, Internal, name)])).Links);
+    }
+
+    [Fact]
     public void LastExternalHardLinkRemovalPublishesDeleteAndStillObservesExternalMetadata()
     {
         bool hybrid = true; int reads = 0;

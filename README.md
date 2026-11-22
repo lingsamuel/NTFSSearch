@@ -1,6 +1,6 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.18.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
+Windows NTFS 文件搜索工具，版本 0.19.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
 
 ## 使用
 
@@ -36,8 +36,8 @@ Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索�
 
 - 程序发现本机 NTFS 磁盘，管理员采集进程通过本地管道向普通权限搜索进程传输初扫数据和 USN 变更。卷完成后即可搜索。
 - 运行时索引、排序、采集状态和增量均留在内存。搜索使用已发布的卷视图，过时记录按卷后台合并。日志丢失或手工重扫时重新读取对应卷。
-- 正常退出时把各卷当前有效的文件元数据与 USN 水位逐卷用 Zstd 等级 3 单线程压缩，写成一份快照 `Data/index.ntsnap`。下次启动按卷解压、按设置建立排序，再按 USN 接续停机期间的变化。
-- 在「设置」可关闭搜索结果中的文件夹大小统计，并设置是否退出时保存索引。「索引状态」也可即时切换退出保存。偏好保存到 `Data/settings.json`。
+- 正常退出时把各卷当前有效的文件元数据与 USN 水位逐卷用 Zstd 等级 3 单线程压缩，写成程序同目录的 `index.ntsnap`。下次启动按卷解压、按设置建立排序，再按 USN 接续停机期间的变化。
+- 在「设置」可关闭搜索结果中的文件夹大小统计，并设置是否退出时保存索引。「索引状态」也可即时切换退出保存。偏好保存到程序同目录的 `settings.json`。
 - 退出保存时可选择「此次不保存」，程序清理本次临时快照后退出。进入最终替换阶段后会完成保存。
 - 启用旧快照缺少的元数据字段时，程序只为缺少所需字段的卷重新采集。正常退出保存后，下次可使用新的快照。
 - 「索引状态」逐卷显示检查快照、加载、重建排序、USN 补读和全卷采集阶段。进入实时监控后仍显示该卷是从快照恢复还是经过全卷采集。
@@ -62,6 +62,8 @@ dotnet run --project src/NtfsSearch.Cli -c Release -- bench 1000000 report.json 
 ```
 
 在 Windows 安装 Node.js、Rust MSVC、Microsoft C++ Build Tools 和 .NET 10 SDK，使用 PowerShell 执行 `scripts/build-windows.ps1` 构建便携版。交付目录为项目工作区的 `artifacts/windows`。从 Windows 构建镜像或临时 Git worktree 构建时，也将成品放到该交付目录。 [构建与交付约定](AGENTS.md)
+
+使用 `-SelfContained` 随包发布运行时，使用 `-WithoutHttp` 去掉 HTTP 服务与 ASP.NET Core 依赖。`-PackageAll` 一次生成普通版、自包含完整版和自包含无查询服务版，ZIP 默认放入 `artifacts/windows/packages`。各包均省略调试符号。每次分支推送生成 Nightly，在仓库的 Actions 产物有效期内最多保留最近四次。推送 tag 时，GitHub Actions 将三个包作为该 tag 的 Release 附件发布。
 
 Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 

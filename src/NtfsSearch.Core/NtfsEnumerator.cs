@@ -71,8 +71,11 @@ public static class NtfsEnumerator
 
     [SupportedOSPlatform("windows")]
     internal static void ReadRows(char drive, Action<int> initialize, NtfsRowVisitor add, CancellationToken token,
-        IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory)
+        IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory, bool portableDataOnly = false)
     {
+        bool IsExcluded(string parent, ReadOnlySpan<char> name, bool directory) => portableDataOnly
+            ? !directory && excludeDirectory is not null && NativePathExclusion.ContainsPortableData(excludeDirectory, parent, name)
+            : NativePathExclusion.Contains(excludeDirectory, parent, name);
         using var handle = OpenVolume(drive);
         var directories = new Dictionary<ulong, (ulong Parent, string Name)>();
         long recordCount = 0;
@@ -100,7 +103,7 @@ public static class NtfsEnumerator
                 var state = NativeFileState.Read(handle, frn, id => metadata.ReadFileState(drive, id));
                 foreach (var link in state.Links)
                 {
-                    if (NativePathExclusion.Contains(excludeDirectory, link.ParentPath, link.Name)) continue;
+                    if (IsExcluded(link.ParentPath, link.Name, directory: false)) continue;
                     add(link.ParentPath, link.Name, state.Size, state.ModifiedUtcTicks, false,
                         frn, link.ParentReference, state.CreatedUtcTicks ?? information.Value.CreatedUtcTicks);
                 }
@@ -109,7 +112,7 @@ public static class NtfsEnumerator
             {
                 string? parentPath = resolver.Resolve(parent);
                 if (parentPath is null) { skipped++; return; }
-                if (NativePathExclusion.Contains(excludeDirectory, parentPath, name)) return;
+                if (IsExcluded(parentPath, name, directory)) return;
                 add(parentPath, name, directory ? null : information?.Size,
                 information?.ModifiedUtcTicks, directory, frn, parent, information?.CreatedUtcTicks);
             }

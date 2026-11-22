@@ -178,7 +178,7 @@ internal static class MemoryCollector
             var progress = new ThrottledProgress(output.Progress);
             long skipped = 0;
             NtfsEnumerator.ReadRows(volume.Root[0], output.Start, output.Add, lifetime.Token, progress, value => skipped = value,
-                NativeJournal.CanonicalPathForMissingPath(data).TrimEnd('\\'));
+                NativeJournal.CanonicalPathForMissingPath(data), portableDataOnly: true);
             output.Finish();
             EnsureCurrentVolume(volume);
             var target = NativeJournal.Query(volume.Root[0]).Position;

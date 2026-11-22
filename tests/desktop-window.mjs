@@ -8,17 +8,18 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --index-memory-settings | --exit-save-skip]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
 const trayTest = mode === '--tray'
 const searchResultsTest = mode === '--search-results'
 const searchServiceSettingsTest = mode === '--search-service-settings'
+const withoutHttpTest = mode === '--without-http'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
 const exitSaveSkipTest = mode === '--exit-save-skip'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
-  : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
+  : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
@@ -39,7 +40,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || searchServiceSettingsTest || indexMemorySettingsTest || exitSaveSkipTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -533,6 +534,17 @@ try {
     await verifySearchResults()
   } else if (searchServiceSettingsTest) {
     await verifySearchServiceSettings()
+  } else if (withoutHttpTest) {
+    await click('设置')
+    const settingsReady = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
+    await until(settingsReady, '无查询服务版设置加载完成')
+    assert.equal(await evaluate("Boolean(document.querySelector('.settings-service'))"), false)
+    await evaluate("document.querySelector('input[name=search-directory-sizes]').click()")
+    await click('保存并应用')
+    await until(async () => await settingsReady() && JSON.parse(await readFile(settingsPath, 'utf8')).SearchDirectorySizes === false,
+      '无查询服务版保存桌面设置')
+    await click('返回')
+    await query('HELLO 000901', 1)
   } else if (indexMemorySettingsTest) {
     await verifyIndexMemorySettings(total)
   } else if (exitSaveSkipTest) {

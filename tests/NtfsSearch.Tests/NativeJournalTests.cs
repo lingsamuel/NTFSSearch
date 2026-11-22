@@ -135,6 +135,17 @@ public class NativeJournalTests
         Assert.Equal(expected, NativePathExclusion.Contains(excluded, parent, name));
     }
 
+    [Theory]
+    [InlineData(@"H:\", @"H:\", "index.ntsnap", true)]
+    [InlineData(@"H:\app", @"H:\app\", "settings.json.0123456789abcdef0123456789abcdef.tmp", true)]
+    [InlineData(@"H:\app", @"H:\app\", "index.ntsnap.manual.tmp", false)]
+    [InlineData(@"H:\app", @"H:\app\work\", "settings.json", false)]
+    [InlineData(@"H:\app", @"C:\app\", "index.ntsnap", false)]
+    public void PortableDataExclusionMatchOnlyOwnedFilesInProgramDirectory(string excluded, string parent, string name, bool expected)
+    {
+        Assert.Equal(expected, NativePathExclusion.ContainsPortableData(excluded, parent, name));
+    }
+
     [Fact]
     public void SubtreeWalkStreamsDirectoriesFirstAndDeduplicatesFullReferences()
     {

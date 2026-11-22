@@ -1,0 +1,102 @@
+name: Windows packages
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build Windows x64 packages
+    if: ${{ !github.event.deleted }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Prepare Rust MSVC target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Build three portable ZIPs
+        run: ./scripts/build-windows.ps1 -PackageAll -OutputDirectory artifacts/packages
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.ref_type == 'tag' && 'ntfs-search-release-win-x64' || 'ntfs-search-nightly-win-x64' }}
+          path: artifacts/packages/*.zip
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: ${{ github.ref_type == 'tag' && 1 || github.retention_days }}
+
+  nightly-retention:
+    name: Keep four Nightly builds
+    if: ${{ github.ref_type == 'branch' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    concurrency:
+      group: nightly-artifact-retention
+      cancel-in-progress: false
+    steps:
+      - name: Remove older Nightly artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          obsolete=$(gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts?name=ntfs-search-nightly-win-x64&per_page=100" \
+            | jq -r '[.[].artifacts[] | select(.expired | not)] | sort_by(.id) | reverse | .[4:][].id')
+          for id in $obsolete; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+          done
+
+  release:
+    name: Publish GitHub Release
+    if: ${{ github.ref_type == 'tag' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: windows-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ntfs-search-release-win-x64
+          path: packages
+      - name: Publish three ZIPs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if release=$(gh release view --json assets,isDraft -- "$RELEASE_TAG"); then
+            assets=$(jq -r '.assets[].name' <<< "$release")
+            missing=()
+            for file in packages/*.zip; do
+              if ! grep -Fxq -- "${file##*/}" <<< "$assets"; then
+                missing+=("$file")
+              fi
+            done
+            if ((${#missing[@]})); then
+              gh release upload -- "$RELEASE_TAG" "${missing[@]}"
+            fi
+            if [[ $(jq -r '.isDraft' <<< "$release") == true ]]; then
+              gh release edit --draft=false -- "$RELEASE_TAG"
+            fi
+          else
+            gh release create --verify-tag --generate-notes -- "$RELEASE_TAG" packages/*.zip
+          fi

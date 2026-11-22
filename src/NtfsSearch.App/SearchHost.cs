@@ -57,7 +57,7 @@ internal sealed class SearchHost
         snapshotPath = Path.Combine(this.cacheDirectory, ExitSnapshotStore.FileName);
         if (demoCount is int count)
         {
-            // 只有隔离的演示数据目录可用于验证快照保存，普通演示不写入便携版 Data。
+            // 只有隔离的演示数据目录可用于验证快照保存，普通演示不写入程序目录。
             saveDemoSnapshot = cacheDirectory is not null;
             demo = new(new SmokeBackend(count, this), catalog);
             demo.StatusChanged += () => StatusChanged?.Invoke();

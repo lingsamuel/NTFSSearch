@@ -193,7 +193,7 @@ def check_directory(process, receive, request_id, known):
     assert row["sizeHint"] is None, row
 
 def check_settings(backend, cli, sandbox):
-    # 便携版 CLI 从自身目录读取 Data，即使从其他目录调用也应如此。
+    # 便携版 CLI 从自身目录读取设置，即使从其他目录调用也应如此。
     portable = Path(sandbox) / "portable"
     portable.mkdir()
     cli_entry = Path(cli[-1]).resolve()
@@ -201,8 +201,11 @@ def check_settings(backend, cli, sandbox):
         if entry.is_file() and (entry.suffix in {".dll", ".json", ".exe"} or entry == cli_entry):
             shutil.copy2(entry, portable)
     portable_cli = cli[:-1] + [str(portable / cli_entry.name)]
-    data = portable / "Data"
-    data.mkdir()
+    data = portable
+    legacy = portable / "Data"
+    legacy.mkdir()
+    legacy_settings = legacy / "settings.json"
+    legacy_settings.write_text(json.dumps(dict(SearchServiceEnabled=True, SearchServicePort=1)), encoding="utf-8")
     settings = data / "settings.json"
     settings.write_text(json.dumps(dict(SkipExitIndexSave=True)), encoding="utf-8")
     env = os.environ.copy()
@@ -226,7 +229,7 @@ def check_settings(backend, cli, sandbox):
                                   searchDirectorySizes=sizes, skipExitIndexSave=skip)
 
         def assert_status(status, port, enabled, running, error=False, override=None, sizes=True, skip=True):
-            assert status == dict(type="settingsStatus", enabled=enabled, port=port,
+            assert status == dict(type="settingsStatus", searchServiceAvailable=True, enabled=enabled, port=port,
                                   address=f"http://127.0.0.1:{override or port}", portOverridden=override is not None,
                                   searchDirectorySizes=sizes, skipExitIndexSave=skip,
                                   running=running, busy=False, error=status["error"] if error else None,
@@ -303,7 +306,7 @@ def check_settings(backend, cli, sandbox):
             initial = service_status(receive)
             assert initial["address"] is None and "NTFS_SEARCH_PORT" in initial["error"], initial
             disabled = apply(process, receive, first_port, enabled=False)
-            assert disabled == dict(type="settingsStatus", enabled=False, port=first_port, address=None,
+            assert disabled == dict(type="settingsStatus", searchServiceAvailable=True, enabled=False, port=first_port, address=None,
                                     portOverridden=True, running=False, busy=False, error=None,
                                     searchDirectorySizes=True, skipExitIndexSave=True,
                                     indexRestartRequired=False, **INDEX_DEFAULTS), disabled
@@ -330,6 +333,7 @@ def check_settings(backend, cli, sandbox):
         desktop(backend, env, queue_exit_settings)
         assert json.loads(settings.read_bytes())["SkipExitIndexSave"] is True, "退出时丢弃了已排队的设置"
         assert snapshot.read_bytes() == original_snapshot, "退出没有遵守最新保存的偏好"
+        assert json.loads(legacy_settings.read_bytes())["SearchServicePort"] == 1
 
 
 def check_index_settings(backend, cli, sandbox):
@@ -426,6 +430,35 @@ def check_index_settings(backend, cli, sandbox):
     desktop(backend, env, restore_size)
 
 
+def check_without_http(backend, cli):
+    with port_socket() as listener:
+        port = listener.getsockname()[1]
+    artifact_root = Path(__file__).resolve().parents[1] / "artifacts"
+    artifact_root.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=artifact_root) as sandbox:
+        env = os.environ | {"NTFS_SEARCH_PORT": str(port), "NTFS_SEARCH_TEST_DATA": sandbox}
+        settings = Path(sandbox) / "settings.json"
+        settings.write_text(json.dumps(dict(SearchServiceEnabled=True, SearchServicePort=port)), encoding="utf-8")
+
+        def verify(process, receive):
+            status = service_status(receive)
+            assert status.get("searchServiceAvailable") is False and not status["running"], status
+            receive(lambda event: event["type"] == "result" and event["total"] == 1000)
+            assert_unavailable(port)
+            send(process, dict(type="applySettings", searchDirectorySizes=False))
+            saved = receive(lambda event: event["type"] == "settingsStatus" and not event["busy"])
+            assert saved["error"] is None and not saved["searchDirectorySizes"], saved
+            data = json.loads(settings.read_bytes())
+            assert data["SearchServiceEnabled"] and data["SearchServicePort"] == port
+
+        desktop(backend, env, verify)
+        assert (Path(sandbox) / "index.ntsnap").is_file()
+        cli_error = subprocess.run(cli + ["status"], env=env, capture_output=True,
+                                   encoding="utf-8", errors="replace", timeout=15)
+        assert cli_error.returncode != 0 and "带查询服务" in cli_error.stderr, cli_error
+    print("无查询服务版桌面搜索、设置、快照、端口和 CLI 验证通过。")
+
+
 def main(backend, cli):
     with port_socket() as listener:
         port = listener.getsockname()[1]
@@ -457,7 +490,8 @@ if __name__ == "__main__":
     # 支持直接传入 Windows EXE，或在其他系统传入 dotnet 和 DLL。
     args = sys.argv[1:]
     settings_only = args[0] == "--settings"
-    if settings_only:
+    without_http = args[0] == "--without-http"
+    if settings_only or without_http:
         args = args[1:]
     separator = args.index("--")
     backend, cli = args[:separator], args[separator + 1:]
@@ -468,5 +502,7 @@ if __name__ == "__main__":
             check_index_settings(backend, cli, sandbox)
             check_settings(backend, cli, sandbox)
         print("全局设置、索引开关、目录统计、退出偏好、HTTP 监听和 CLI 端口读取验证通过。")
+    elif without_http:
+        check_without_http(backend, cli)
     else:
         main(backend, cli)

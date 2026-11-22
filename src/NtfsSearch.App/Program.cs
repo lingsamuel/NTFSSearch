@@ -25,11 +25,8 @@ internal static class Program
                 string? settingsDirectory = demoCount.HasValue
                     ? Environment.GetEnvironmentVariable("NTFS_SEARCH_TEST_DATA")
                     : PortableDataDirectory.Resolve();
-                string? apiPort = Environment.GetEnvironmentVariable(LocalSearchEndpoint.PortVariable);
-                // 演示模式仅使用显式启用的服务，避免绑定正式桌面的默认端口。
-                bool enableServiceByDefault = demoCount is null || LocalSearchEndpoint.IsPortOverridden(apiPort);
                 await new DesktopSession(new SearchHost(demoCount, settingsDirectory), Publish, settingsDirectory,
-                    apiPort, enableServiceByDefault).RunAsync(input);
+                    demoCount.HasValue).RunAsync(input);
                 return 0;
             }
             catch (Exception error)

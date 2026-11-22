@@ -94,9 +94,9 @@ internal static class VolumeJournalService
     internal static JournalChangeResolver CreateResolver(string root, char drive, Func<ulong, IndexedFileState>? readState = null)
     {
         string canonical = NativeJournal.CanonicalPathForMissingPath(root);
-        var resolver = new JournalChangeResolver(canonical, readState ?? (reference => NativeJournal.GetCurrentFileStateById(drive, reference)));
-        if (canonical.StartsWith(drive + ":\\", StringComparison.OrdinalIgnoreCase) && Directory.Exists(root))
-            resolver.MarkInternal(NativeJournal.ReferenceForPath(root));
-        return resolver;
+        ulong? parent = canonical.StartsWith(drive + ":\\", StringComparison.OrdinalIgnoreCase) && Directory.Exists(root)
+            ? NativeJournal.ReferenceForPath(root) : null;
+        return new JournalChangeResolver(canonical,
+            readState ?? (reference => NativeJournal.GetCurrentFileStateById(drive, reference)), parent);
     }
 }
