@@ -8,6 +8,7 @@ export interface SearchRow {
   key: string
   name: string
   fullPath: string
+  matchRanges: number[]
   isDirectory: boolean
   sizeText: string
   sizeBytesText: string | null

@@ -320,25 +320,27 @@ internal sealed class DesktopSession
                 else if (result is not null)
                 {
                     options = snapshot with { Offset = offset };
-                    PublishResult(result, snapshot.RequestId, offset, request.UserInitiated);
+                    PublishResult(result, options, request.UserInitiated);
                 }
             }
             TryStartQuery();
         });
     }
 
-    private void PublishResult(SearchResult result, long requestId, int offset, bool userInitiated)
+    private void PublishResult(SearchResult result, SearchOptions page, bool userInitiated)
     {
+        string[] terms = SearchQuery.Parse(page.Text);
         publish(new
         {
-            Type = "result", RequestId = requestId, UserInitiated = userInitiated,
-            Offset = offset, Total = result.TotalCount, PageSize,
+            Type = "result", page.RequestId, UserInitiated = userInitiated,
+            page.Offset, Total = result.TotalCount, PageSize,
             UserMilliseconds = queryState.UserElapsed?.TotalMilliseconds,
             result.VolumesReady,
             Rows = result.Rows.Select(row => new
             {
                 Key = DesktopFileActions.EncodePath(row.FullPath),
                 row.Name, row.FullPath, row.IsDirectory,
+                MatchRanges = SearchQuery.MatchRanges(row.FullPath, row.Name.Length, terms, page.MatchPath),
                 SizeText = FileSizeDisplay.Format(row.Size),
                 SizeBytesText = row.Size is long size ? $"{size:N0} B" : null,
                 ModifiedText = row.ModifiedUtcTicks is long ticks && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks

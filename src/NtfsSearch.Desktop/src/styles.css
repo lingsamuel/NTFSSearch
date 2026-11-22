@@ -24,6 +24,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 
 .workspace {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: 100%;
   min-width: 0;
@@ -218,6 +219,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 }
 
 .entry-name { font-weight: 500; }
+.results-table td strong { font-weight: 700; }
 .entry-path, .entry-date, .entry-size { color: var(--muted); }
 .entry-size { text-align: right; }
 .entry-date, .entry-size, .page-number, .query-time { font-variant-numeric: tabular-nums; }

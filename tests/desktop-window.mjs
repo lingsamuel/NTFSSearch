@@ -8,11 +8,12 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
 const trayTest = mode === '--tray'
+const searchResultsTest = mode === '--search-results'
 const testData = join(output, trayTest ? 'TrayData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
@@ -33,7 +34,7 @@ if (trayTest) {
   await new Promise(resolve => apiProbe.close(resolve))
 }
 await new Promise(resolve => portProbe.close(resolve))
-const applicationArgs = mode === '--cached-fixture' ? [] : [trayTest ? '--desktop-test' : mode]
+const applicationArgs = mode === '--cached-fixture' ? [] : [trayTest || searchResultsTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -135,6 +136,65 @@ async function query(text, count) {
   })()`)
 }
 
+async function verifySearchResults() {
+  const bold = column => evaluate(`[...document.querySelectorAll('tbody tr:first-child .entry-${column} strong')].map(part => part.textContent)`)
+  await query('HELLO 000901', 1)
+  assert.deepEqual(await bold('name'), ['hello', '000901'])
+  assert.deepEqual(await bold('path'), ['hello', '000901'])
+  await query('目录009 HELLO', 6)
+  assert.deepEqual(await bold('name'), ['hello'])
+  assert.deepEqual(await bold('path'), ['目录009', 'hello'])
+  await query('"目录009/HELLO WORLD 000901.txt"', 1)
+  assert.deepEqual(await bold('name'), ['hello world 000901.txt'])
+  assert.deepEqual(await bold('path'), ['目录009\\hello world 000901.txt'])
+  assert.equal(await evaluate("[...document.querySelectorAll('tbody td.entry-name, tbody td.entry-path')].every(cell => cell.textContent === cell.title)"), true, '加粗保留原始名称和路径')
+
+  await evaluate("const scope = document.querySelector('.scope-select'); scope.value = 'name'; scope.dispatchEvent(new Event('change'))")
+  await query('文件 REPORT', 936)
+  await evaluate("document.querySelector('button[aria-label=下一页]').click()")
+  await until(() => evaluate("document.querySelector('.page-number').textContent.trim() === '2 / 5'"), '带加粗的第二页')
+  assert.deepEqual(await bold('name'), ['文件', 'report'])
+  assert.deepEqual(await bold('path'), ['文件', 'report'])
+  await query('', 1000)
+  assert.deepEqual(await bold('name'), [])
+  assert.deepEqual(await bold('path'), [])
+
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 660, height: 420, deviceScaleFactor: 1, mobile: false })
+  const windowControls = () => evaluate(`['.search-toolbar', '.search-field input', '.status-bar'].map(selector => {
+    const { left, right } = document.querySelector(selector).getBoundingClientRect();
+    return [left, right];
+  })`)
+  const controls = await windowControls()
+  const handle = await evaluate(`(() => {
+    const rect = document.querySelector('.column-resizer').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`)
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', ...handle, button: 'left', buttons: 1, clickCount: 1 })
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', ...handle, x: handle.x + 260, button: 'left', buttons: 1 })
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', ...handle, x: handle.x + 260, button: 'left', clickCount: 1 })
+  const dimensions = () => evaluate(`(() => {
+    const area = document.querySelector('.results-scroll');
+    return { left: area.scrollLeft, top: area.scrollTop, viewport: area.clientWidth, table: area.scrollWidth };
+  })()`)
+  await until(async () => { const area = await dimensions(); return area.table > area.viewport }, '宽结果表可横向滚动')
+  assert.deepEqual(await windowControls(), controls, '拖宽列不移动搜索框和底栏')
+  const wheel = (deltaY, modifiers) => cdp('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 200, y: 150, deltaX: 0, deltaY, modifiers })
+  await wheel(2000, 8)
+  await until(async () => { const area = await dimensions(); return area.left >= area.table - area.viewport - 1 }, 'Shift 加滚轮到右侧')
+  assert.equal((await dimensions()).top, 0)
+  assert.equal(await evaluate(`(() => {
+    const head = document.querySelector('thead th:last-child').getBoundingClientRect();
+    const cell = document.querySelector('tbody td:last-child').getBoundingClientRect();
+    return Math.abs(head.left - cell.left) < 1 && head.right <= innerWidth && head.left >= 0;
+  })()`), true, '最右列可见且表头与内容对齐')
+  assert.deepEqual(await windowControls(), controls, '横向滚动不移动搜索框和底栏')
+  await wheel(-2000, 8)
+  await until(async () => (await dimensions()).left === 0, 'Shift 加滚轮回到左侧')
+  await wheel(150, 0)
+  await until(async () => (await dimensions()).top > 0, '普通滚轮纵向滚动')
+  assert.equal((await dimensions()).left, 0)
+}
+
 try {
   const page = await until(async () => {
     try {
@@ -181,6 +241,8 @@ try {
       }
     }
     await writeFile(join(output, 'benchmark.json'), JSON.stringify({ rows: total, processes: JSON.parse(memory.stdout), samples }, null, 2))
+  } else if (searchResultsTest) {
+    await verifySearchResults()
   } else if (!trayTest) {
     const fileIcon = extension => `document.querySelector('td.entry-name[title$="${extension}"] img.entry-file-type-icon')`
     const textIcon = await until(() => evaluate(`(() => {
@@ -525,6 +587,7 @@ try {
     assert.deepEqual(await readFile(snapshotPath), previousSnapshot)
   }
   if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
+  else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

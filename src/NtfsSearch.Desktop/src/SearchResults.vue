@@ -34,8 +34,37 @@ const menu = shallowRef<{ key: string; left: number; top: number }>()
 const columnWidths = shallowRef<number[]>()
 const columnDrag = shallowRef<{ field: SortField; pointer: number; startX: number; widths: number[] }>()
 const rowExtensions = computed(() => props.rows.map(fileExtension))
+const rowParts = computed(() => props.rows.map(row => ({
+  name: textParts(row.name, row.matchRanges, row.fullPath.length - row.name.length),
+  path: textParts(row.fullPath, row.matchRanges, 0),
+})))
 const visibleRows = new Set<HTMLTableRowElement>()
 let iconObserver: IntersectionObserver | undefined
+
+function textParts(value: string, ranges: number[], offset: number) {
+  const parts: { text: string; matched: boolean }[] = []
+  let cursor = 0
+  for (let index = 0; index < ranges.length; index += 2) {
+    const start = Math.max(0, ranges[index] - offset)
+    const end = ranges[index + 1] - offset
+    if (end <= start) continue
+    if (start > cursor) parts.push({ text: value.slice(cursor, start), matched: false })
+    parts.push({ text: value.slice(start, end), matched: true })
+    cursor = end
+  }
+  if (cursor < value.length) parts.push({ text: value.slice(cursor), matched: false })
+  return parts
+}
+
+function scrollHorizontally(event: WheelEvent) {
+  if (!event.shiftKey || event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0) return
+  const area = event.currentTarget as HTMLElement
+  let distance = event.deltaY
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) distance *= 29
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) distance *= area.clientWidth
+  event.preventDefault()
+  area.scrollLeft += distance
+}
 
 function observeFileTypes() {
   if (!iconObserver) return
@@ -192,7 +221,7 @@ defineExpose({ focusSelection, scrollToStart })
 
 <template>
   <section class="results-panel" aria-label="搜索结果">
-    <div ref="scroller" class="results-scroll" @scroll="closeMenu">
+    <div ref="scroller" class="results-scroll" @scroll="closeMenu" @wheel="scrollHorizontally">
       <table ref="grid" class="results-table" :class="{ resizing: !!columnDrag }"
         :style="columnWidths ? { width: columnWidths.reduce((total, width) => total + width, 0) + 'px' } : undefined"
         role="grid" aria-label="搜索结果" :aria-busy="pending" tabindex="0"
@@ -223,9 +252,16 @@ defineExpose({ focusSelection, scrollToStart })
             <td class="entry-name" :title="row.name">
               <img v-if="fileTypeIcon(rowExtensions[index])" :src="fileTypeIcon(rowExtensions[index]) ?? undefined"
                 class="entry-file-type-icon" alt="">
-              <span v-else class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>{{ row.name }}
+              <span v-else class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>
+              <template v-for="(part, partIndex) in rowParts[index].name" :key="partIndex">
+                <strong v-if="part.matched">{{ part.text }}</strong><template v-else>{{ part.text }}</template>
+              </template>
             </td>
-            <td class="entry-path" :title="row.fullPath">{{ row.fullPath }}</td>
+            <td class="entry-path" :title="row.fullPath">
+              <template v-for="(part, partIndex) in rowParts[index].path" :key="partIndex">
+                <strong v-if="part.matched">{{ part.text }}</strong><template v-else>{{ part.text }}</template>
+              </template>
+            </td>
             <td class="entry-size" :title="row.sizeBytesText ?? undefined">{{ row.sizeText }}</td>
             <td class="entry-date">{{ row.modifiedText }}</td>
           </tr>

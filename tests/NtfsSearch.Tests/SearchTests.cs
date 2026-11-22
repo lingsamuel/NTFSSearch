@@ -35,6 +35,36 @@ public class SearchTests
     public void PathsUnicodeAndIncompleteInput(string query, int count) =>
         Assert.Equal(count, Sample().Search(query).TotalCount);
 
+    [Theory]
+    [InlineData("work/hello", 2)]
+    [InlineData(@"D:/work\hello", 2)]
+    [InlineData("\"C:/hello world/Report.TXT\"", 1)]
+    [InlineData("/工作/报告", 1)]
+    public void SearchAcceptsEitherPathSeparator(string query, int count)
+    {
+        var index = Sample();
+        foreach (bool matchPath in new[] { true, false })
+        {
+            var actual = index.Search(query, matchPath: matchPath);
+            var expected = index.Search(query.Replace('/', '\\'), matchPath: matchPath);
+            Assert.Equal(count, actual.TotalCount);
+            Assert.Equal(expected.Rows, actual.Rows);
+        }
+    }
+
+    [Theory]
+    [InlineData(@"C:\HELLO\hello-other-world.txt", "hello-other-world.txt", "HELLO world", true, "HELLO|hello|world")]
+    [InlineData(@"C:\HELLO\hello-other-world.txt", "hello-other-world.txt", "HELLO world", false, "hello|world")]
+    [InlineData(@"C:\HELLO\hello world.txt", "hello world.txt", "\"HELLO WORLD\"", true, "hello world")]
+    [InlineData(@"D:\Project Files\report.txt", "report.txt", "\"D:/PROJECT FILES\\report\"", false, @"D:\Project Files\report")]
+    [InlineData(@"C:\数据\ababa.txt", "ababa.txt", "aba ba", true, "ababa")]
+    [InlineData(@"C:\数据\ababa.txt", "ababa.txt", "", true, "")]
+    public void MatchRangesPreserveOriginalSpellingAndSearchScope(string path, string name, string query, bool matchPath, string expected)
+    {
+        var ranges = SearchQuery.MatchRanges(path, name.Length, SearchQuery.Parse(query), matchPath);
+        Assert.Equal(expected, string.Join('|', ranges.Chunk(2).Select(range => path[range[0]..range[1]])));
+    }
+
     [Fact]
     public void AllSortsAndPagesMatchIndependentOracle()
     {
