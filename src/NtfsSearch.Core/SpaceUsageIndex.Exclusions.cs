@@ -69,7 +69,17 @@ internal sealed partial class SpaceUsageIndex
         foreach (var layer in layers)
         {
             var index = layer.Index;
-            var order = index.SortOrder(SortField.Name);
+            if (!index.PrecomputeSort)
+            {
+                // 原文件身份失效时查找同一父目录中的替代文件，避免为排除规则建立全卷名称排序。
+                for (int row = 0; row < index.Count; row++)
+                {
+                    if ((row & 4095) == 0) token.ThrowIfCancellationRequested();
+                    if (MatchesFile(index, row, parentId) && name.SequenceEqual(index.Name(row, scratch))) return (index, row);
+                }
+                continue;
+            }
+            var order = index.SortOrder(SortField.Name, token);
             int low = 0, high = order.Count;
             while (low < high)
             {

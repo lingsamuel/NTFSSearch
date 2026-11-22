@@ -25,6 +25,47 @@ public class LiveIndexTests
         Assert.All(index.FindFileRows(15), id => Assert.Equal(38, index.GetRow(id).CreatedUtcTicks));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DisabledMetadataDoesNotChangeLayersAndStaysAbsentThroughMergeAndCheckpoint(bool precomputeSort)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, $"metadata-checkpoint-{Guid.NewGuid():N}", "current");
+        try
+        {
+            var builder = new IndexBuilder(1, fixedSize: true, IndexMetadata.None, precomputeSort);
+            builder.Add(@"C:\", "base", 1, 2, fileReference: 10, parentReference: 5, createdUtcTicks: 3);
+            var baseline = builder.Build();
+            var live = new LiveVolumeIndex(baseline, new(1, 0));
+            Assert.False(live.Apply(Tx(0, new IndexedFileState(10, false, [new(5, @"C:\", "base")], 4, 5, 6))));
+            Assert.Same(baseline, Assert.Single(live.Layers));
+            Assert.Equal(new JournalPosition(1, 1), live.Position);
+            Assert.True(live.Apply(Tx(1, new IndexedFileState(10, false, [new(5, @"C:\", "renamed")], 4, 5, 6))));
+            live.SaveCheckpoint(path, 0);
+            live = LiveVolumeIndex.LoadCheckpoint(baseline, path);
+            Assert.Equal(2, live.Layers.Count);
+            Assert.All(live.Layers, index =>
+            {
+                Assert.Equal(IndexMetadata.None, index.Metadata);
+                Assert.Equal(precomputeSort, index.PrecomputeSort);
+            });
+            Assert.True(live.CompactIfNeeded());
+            var compacted = Assert.Single(live.Layers);
+            var row = Assert.Single(compacted.Search("renamed").Rows);
+            Assert.Equal(IndexMetadata.None, compacted.Metadata);
+            Assert.Equal(precomputeSort, compacted.PrecomputeSort);
+            Assert.Equal(8, compacted.Statistics.RecordBytes);
+            Assert.Null(row.Size);
+            Assert.Null(row.ModifiedUtcTicks);
+            Assert.Null(row.CreatedUtcTicks);
+        }
+        finally
+        {
+            string directory = Path.GetDirectoryName(path)!;
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static SearchIndex Baseline()
     {
         var b = new IndexBuilder();

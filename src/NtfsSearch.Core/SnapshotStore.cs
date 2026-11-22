@@ -10,6 +10,16 @@ public static class SnapshotStore
 {
     private static ReadOnlySpan<byte> CompactMagic => "NTSIDX04"u8;
     private static ReadOnlySpan<byte> CreationMagic => "NTSIDX05"u8;
+    private const int RecordBlockRows = 16_384;
+
+    // .ntidx 继续使用原有的20字节记录。读写只交错一个批次，内存索引由独立列持有数据。
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    private readonly struct CompactSnapshotRecord(long modified, uint sizeCode, IndexRecord row)
+    {
+        internal readonly long Modified = modified;
+        internal readonly uint SizeCode = sizeCode;
+        internal readonly IndexRecord Row = row;
+    }
 
     private static bool IsCompactFormat(ReadOnlySpan<byte> magic)
         => magic.SequenceEqual(CompactMagic) || magic.SequenceEqual(CreationMagic);
@@ -52,25 +62,36 @@ public static class SnapshotStore
                 cancellationToken.ThrowIfCancellationRequested(); writer.Write(chunk.Length); crypto.Write(chunk);
             }
             WriteArray<long>(crypto, index.BigSizes, cancellationToken);
-            for (int start = 0; start < index.Count; start += 16_384)
+            var recordBlock = new CompactSnapshotRecord[Math.Min(RecordBlockRows, index.Count)];
+            for (int start = 0; start < index.Count; start += recordBlock.Length)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                crypto.Write(MemoryMarshal.AsBytes(index.Records.AsSpan(start, Math.Min(16_384, index.Count - start))));
+                int length = Math.Min(recordBlock.Length, index.Count - start);
+                for (int offset = 0; offset < length; offset++)
+                {
+                    int row = start + offset;
+                    recordBlock[offset] = new(index.Modified(row), index.SizeCodes?[row] ?? uint.MaxValue, index.Records[row]);
+                }
+                crypto.Write(MemoryMarshal.AsBytes(recordBlock.AsSpan(0, length)));
             }
-            var savedOrders = new SortPermutation[4];
+            var savedOrders = index.PrecomputeSort ? new SortPermutation[4] : null;
             var orderBlock = new int[Math.Min(65536, index.Count)];
             for (int field = 0; field < 4; field++)
             {
-                var order = index.SortOrder((SortField)field);
-                savedOrders[field] = order;
+                var sort = (SortField)field;
+                var selection = index.PrecomputeSort ? null : new SearchSortSelection(sort);
+                var (order, known) = index.ResolveSortOrder(sort, cancellationToken, selection);
                 int alias = -1;
                 // 修正视图的有效排列由两路归并产生，不能仅以基线共享引用推断alias。
-                if (!index.HasOrderCorrections)
+                if (savedOrders is not null && !index.HasOrderCorrections)
+                {
+                    savedOrders[field] = order;
                     for (int previous = 0; previous < field; previous++)
                         if (ReferenceEquals(order, savedOrders[previous])) { alias = previous; break; }
-                writer.Write(alias); writer.Write(index.KnownCount((SortField)field));
+                }
+                writer.Write(alias); writer.Write(known);
                 if (alias >= 0) continue;
-                using var ids = index.EnumerateSortOrder((SortField)field, cancellationToken).GetEnumerator();
+                using var ids = index.EnumerateSortOrder(sort, cancellationToken, selection).GetEnumerator();
                 for (int start = 0; start < index.Count; start += orderBlock.Length)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -128,6 +149,10 @@ public static class SnapshotStore
     }
 
     public static SearchIndex Load(string path, CancellationToken cancellationToken = default, IProgress<string>? progress = null)
+        => Load(path, IndexMetadata.All, cancellationToken, progress);
+
+    internal static SearchIndex Load(string path, IndexMetadata metadata, CancellationToken cancellationToken = default,
+        IProgress<string>? progress = null, bool precomputeSort = true)
     {
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("快照要求小端平台。");
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
@@ -140,7 +165,10 @@ public static class SnapshotStore
         bool hasIdentityField = compact || magic.AsSpan().SequenceEqual("NTSIDX03"u8);
         bool hasOrders = hasIdentityField || magic.AsSpan().SequenceEqual("NTSIDX02"u8);
         if (!hasOrders && !magic.AsSpan().SequenceEqual("NTSIDX01"u8)) throw new InvalidDataException("未知快照格式。");
-        int recordSize = compact ? 20 : 32;
+        bool loadSize = metadata.HasFlag(IndexMetadata.FileSize);
+        bool loadModified = metadata.HasFlag(IndexMetadata.ModifiedTime);
+        bool loadCreation = metadata.HasFlag(IndexMetadata.CreationTime);
+        int recordSize = compact ? Unsafe.SizeOf<CompactSnapshotRecord>() : 32;
         int count = ReadCount(reader, payload, recordSize), directoryCount = ReadCount(reader, payload, 4);
         int chunks = ReadCount(reader, payload, 4), lastUsed = ReadCount(reader, NameArena.ChunkChars, 1);
         int nameCount = compact ? ReadCount(reader, payload - stream.Position, sizeof(ulong)) : 0;
@@ -184,56 +212,75 @@ public static class SnapshotStore
         }
         if (asciiChunks == 0 && asciiLastUsed != 0) throw new InvalidDataException("快照ASCII名称块长度错误。");
         if (compact) arena.ValidateReferences(cancellationToken);
-        long[] bigSizes = compact ? ReadArray<long>(stream, bigSizeCount, payload, cancellationToken) : [];
-        foreach (long size in bigSizes)
-            if (size <= int.MaxValue) throw new InvalidDataException("快照大小旁表包含无效值。");
+        long[] bigSizes = loadSize ? ReadArray<long>(stream, bigSizeCount, payload, cancellationToken) : [];
+        for (int i = 0; i < bigSizeCount; i++)
+        {
+            if ((i & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+            if ((loadSize ? bigSizes[i] : reader.ReadInt64()) <= int.MaxValue)
+                throw new InvalidDataException("快照大小旁表包含无效值。");
+        }
         if (count > (payload - stream.Position) / recordSize) throw new InvalidDataException("快照记录数越界。");
         long recordsPosition = stream.Position;
         var records = IndexArrays.Persistent<IndexRecord>(count);
+        uint[]? sizeCodes = loadSize ? IndexArrays.Persistent<uint>(count) : null;
+        long[]? modifiedTimes = loadModified ? IndexArrays.Persistent<long>(count) : null;
         using var legacyNames = compact ? null : new MappedSnapshotNames(stream, legacyChunks);
         if (compact)
         {
-            for (int start = 0; start < count; start += 16_384)
+            var batch = new CompactSnapshotRecord[Math.Min(RecordBlockRows, count)];
+            for (int start = 0; start < count; start += batch.Length)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                stream.ReadExactly(MemoryMarshal.AsBytes(records.AsSpan(start, Math.Min(16_384, count - start))));
+                int rows = Math.Min(batch.Length, count - start);
+                stream.ReadExactly(MemoryMarshal.AsBytes(batch.AsSpan(0, rows)));
+                for (int i = 0; i < rows; i++)
+                {
+                    ref readonly var source = ref batch[i];
+                    var row = source.Row;
+                    uint sizeCode = source.SizeCode;
+                    bool hasSize = sizeCode != uint.MaxValue;
+                    if (row.Directory >= directoryCount || row.NameId >= arena.Count
+                        || row.IsDirectory && (hasSize || arena.IsAscii(row.NameId))
+                        || hasSize && sizeCode > int.MaxValue && (sizeCode & int.MaxValue) >= bigSizeCount)
+                        throw new InvalidDataException("快照记录引用越界。");
+                    int id = start + i;
+                    records[id] = loadModified ? row : row.WithoutModified();
+                    if (sizeCodes is not null) sizeCodes[id] = sizeCode;
+                    if (modifiedTimes is not null) modifiedTimes[id] = source.Modified;
+                }
             }
         }
         else
         {
             // 旧名称只映射只读视图；每批转换直接写新行，避免同时保留两套全名称和全记录。
             arena.LastUsed = 0;
-            var sizeTable = new SizeTable();
-            var batch = new byte[32 * 16_384];
-            for (int start = 0; start < count; start += 16_384)
+            var sizeTable = loadSize ? new SizeTable() : null;
+            var batch = new byte[recordSize * Math.Min(RecordBlockRows, count)];
+            for (int start = 0; start < count; start += RecordBlockRows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                int rows = Math.Min(16_384, count - start);
-                stream.ReadExactly(batch.AsSpan(0, rows * 32));
+                int rows = Math.Min(RecordBlockRows, count - start);
+                stream.ReadExactly(batch.AsSpan(0, rows * recordSize));
                 for (int i = 0; i < rows; i++)
                 {
-                    var raw = batch.AsSpan(i * 32, 32);
+                    var raw = batch.AsSpan(i * recordSize, recordSize);
                     long offset = BinaryPrimitives.ReadInt64LittleEndian(raw);
                     long size = BinaryPrimitives.ReadInt64LittleEndian(raw[8..]);
-                    long modified = BinaryPrimitives.ReadInt64LittleEndian(raw[16..]);
                     int directory = BinaryPrimitives.ReadInt32LittleEndian(raw[24..]);
                     ushort length = BinaryPrimitives.ReadUInt16LittleEndian(raw[28..]);
                     ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(raw[30..]);
                     if (directory < 0 || directory >= directoryCount || (flags & ~7) != 0 || (flags & 2) != 0 && size < 0)
                         throw new InvalidDataException("快照记录引用越界。");
-                    records[start + i] = new(arena.Add(legacyNames!.Get(offset, length), (flags & 1) != 0), sizeTable.Add((flags & 3) == 2 ? size : -1),
-                        modified, directory, (flags & 1) != 0, (flags & 4) != 0);
+                    int id = start + i;
+                    bool isDirectory = (flags & 1) != 0;
+                    records[id] = new(arena.Add(legacyNames!.Get(offset, length), isDirectory), directory, isDirectory,
+                        loadModified && (flags & 4) != 0);
+                    if (sizeCodes is not null) sizeCodes[id] = sizeTable!.Add((flags & 3) == 2 ? size : -1);
+                    if (modifiedTimes is not null) modifiedTimes[id] = BinaryPrimitives.ReadInt64LittleEndian(raw[16..]);
                 }
             }
             arena.Seal();
-            bigSizes = sizeTable.Freeze();
-        }
-        foreach (ref readonly var r in records.AsSpan())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (r.Directory >= directoryCount || r.NameId >= arena.Count || r.IsDirectory && (r.HasSize || arena.IsAscii(r.NameId))
-                || r.HasSize && r.SizeCode > int.MaxValue && (r.SizeCode & int.MaxValue) >= bigSizes.Length)
-                throw new InvalidDataException("快照记录引用越界。");
+            bigSizes = sizeTable?.Freeze() ?? [];
         }
         SortPermutation[]? orders = null;
         int[]? known = null;
@@ -254,12 +301,24 @@ public static class SnapshotStore
                     if (count > (payload - stream.Position) / sizeof(int)) throw new InvalidDataException("排序缓存越界。");
                     orders[field] = SortPermutation.Read(stream, count, seen, cancellationToken);
                 }
-                for (int i = 0; i < count; i++)
-                {
-                    if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-                    if (SearchIndex.IsKnown(records[orders[field][i]], (SortField)field) != (i < knownCount))
-                        throw new InvalidDataException("排序缓存的已知元数据边界不符。");
-                }
+                if (field == (int)SortField.Size && loadSize || field == (int)SortField.Modified && loadModified)
+                    for (int i = 0; i < count; i++)
+                    {
+                        if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                        int id = orders[field][i];
+                        bool isKnown = field == (int)SortField.Size ? sizeCodes![id] != uint.MaxValue : records[id].HasModified;
+                        if (isKnown != (i < knownCount)) throw new InvalidDataException("排序缓存的已知元数据边界不符。");
+                    }
+            }
+            if (!loadSize)
+            {
+                orders[(int)SortField.Size] = orders[(int)SortField.Path];
+                known[(int)SortField.Size] = 0;
+            }
+            if (!loadModified)
+            {
+                orders[(int)SortField.Modified] = orders[(int)SortField.Path];
+                known[(int)SortField.Modified] = 0;
             }
         }
         ulong[]? references = null, parents = null;
@@ -281,14 +340,30 @@ public static class SnapshotStore
         ulong[]? knownCreationTimes = null;
         if (hasCreation)
         {
-            creationTimes = ReadArray<long>(stream, count, payload, cancellationToken);
-            knownCreationTimes = ReadArray<ulong>(stream, (int)(((long)count + 63) / 64), payload, cancellationToken);
-            if (count % 64 != 0 && (knownCreationTimes[^1] >> (count % 64)) != 0)
-                throw new InvalidDataException("快照创建时间位图越界。");
+            int words = (int)(((long)count + 63) / 64);
+            if (loadCreation)
+            {
+                creationTimes = ReadArray<long>(stream, count, payload, cancellationToken);
+                knownCreationTimes = ReadArray<ulong>(stream, words, payload, cancellationToken);
+            }
+            else
+            {
+                long bytes = (long)count * sizeof(long) + (long)words * sizeof(ulong);
+                if (bytes > payload - stream.Position) throw new InvalidDataException("快照数组越界。");
+                stream.Position += bytes;
+            }
+            if (count % 64 != 0)
+            {
+                if (knownCreationTimes is null) stream.Position -= sizeof(ulong);
+                ulong last = knownCreationTimes is not null ? knownCreationTimes[^1] : reader.ReadUInt64();
+                if ((last >> (count % 64)) != 0) throw new InvalidDataException("快照创建时间位图越界。");
+            }
         }
         if (stream.Position != payload) throw new InvalidDataException("快照包含多余数据。");
         var index = new SearchIndex(arena, records, directories, cancellationToken, progress, orders, known, references, parents,
-            bigSizes: bigSizes, creationTimes: creationTimes, knownCreationTimes: knownCreationTimes);
+            bigSizes: bigSizes, creationTimes: creationTimes, knownCreationTimes: knownCreationTimes,
+            sizeCodes: sizeCodes, modifiedTimes: modifiedTimes, metadata: metadata, precomputeSort: precomputeSort,
+            availableMetadata: hasCreation ? IndexMetadata.All : IndexMetadata.FileSize | IndexMetadata.ModifiedTime);
         index.CheckpointFingerprint = legacyFingerprint;
         if (!compact && index.HasIdentity)
             index.CheckpointFingerprint = IndexFingerprint.LegacyFromSerialized(index, stream, recordsPosition, legacyChunks, cancellationToken);

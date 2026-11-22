@@ -152,7 +152,7 @@ public sealed class LiveVolumeIndex
             }
             next.Add(ownsHidden || !ReferenceEquals(directories, layer.Directories) ? layer.WithView(hidden, directories, token) : layer);
         }
-        var builder = new IndexBuilder(changedFiles.Sum(f => f.Links.Count));
+        var builder = new IndexBuilder(changedFiles.Sum(f => f.Links.Count), fixedSize: false, layers[0].Metadata, layers[0].PrecomputeSort);
         int added = 0;
         foreach (var file in changedFiles)
             foreach (var link in file.Links)
@@ -193,9 +193,13 @@ public sealed class LiveVolumeIndex
         foreach (var (index, id) in links)
         {
             var r = index.Records[id];
-            if (r.IsDirectory != file.IsDirectory || (r.HasSize ? index.Size(id) : (long?)null) != (file.IsDirectory ? null : file.Size)
-                || (r.HasModified ? r.Modified : (long?)null) != file.ModifiedUtcTicks
-                || index.CreatedUtcTicks(id) != file.CreatedUtcTicks) return false;
+            var metadata = index.Metadata;
+            if (r.IsDirectory != file.IsDirectory
+                || metadata.HasFlag(IndexMetadata.FileSize) && !r.IsDirectory
+                    && (index.HasSize(id) ? index.Size(id) : (long?)null) != file.Size
+                || metadata.HasFlag(IndexMetadata.ModifiedTime)
+                    && (index.HasModified(id) ? index.Modified(id) : (long?)null) != file.ModifiedUtcTicks
+                || metadata.HasFlag(IndexMetadata.CreationTime) && index.CreatedUtcTicks(id) != file.CreatedUtcTicks) return false;
             int found = -1;
             var name = index.Name(id, scratch);
             for (int link = 0; link < remaining.Count; link++)
@@ -249,7 +253,7 @@ public sealed class LiveVolumeIndex
 
     private static SearchIndex Merge(IReadOnlyList<SearchIndex> indexes, CancellationToken token)
     {
-        var builder = new IndexBuilder(indexes.Sum(index => index.VisibleCount), fixedSize: true);
+        var builder = new IndexBuilder(indexes.Sum(index => index.VisibleCount), fixedSize: true, indexes[0].Metadata, indexes[0].PrecomputeSort);
         var directories = new Dictionary<(string Path, ulong Identity), int>();
         Span<char> scratch = stackalloc char[255];
         foreach (var index in indexes)
@@ -272,8 +276,8 @@ public sealed class LiveVolumeIndex
                     }
                     mapped[row.Directory] = directory;
                 }
-                builder.AddRecord(directory, index.Name(id, scratch), row.HasSize ? index.Size(id) : null,
-                    row.HasModified ? row.Modified : null, row.IsDirectory, index.FileReferences![id], index.CreatedUtcTicks(id));
+                builder.AddRecord(directory, index.Name(id, scratch), index.HasSize(id) ? index.Size(id) : null,
+                    index.HasModified(id) ? index.Modified(id) : null, row.IsDirectory, index.FileReferences![id], index.CreatedUtcTicks(id));
             }
         }
         return builder.Build(token);

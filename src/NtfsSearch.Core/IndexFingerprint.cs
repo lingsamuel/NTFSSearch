@@ -72,10 +72,11 @@ internal static class IndexFingerprint
             ref readonly var record = ref index.Records[id];
             output.UInt64(index.FileReferences![id]); output.Int32(record.Directory);
             long? created = index.CreatedUtcTicks(id);
-            output.Int32((record.IsDirectory ? 1 : 0) | (record.HasSize ? 2 : 0) | (record.HasModified ? 4 : 0)
+            bool hasSize = index.HasSize(id), hasModified = index.HasModified(id);
+            output.Int32((record.IsDirectory ? 1 : 0) | (hasSize ? 2 : 0) | (hasModified ? 4 : 0)
                 | (created.HasValue ? 8 : 0));
             // 未知值的物理占位不属于逻辑元数据，跨快照格式统一为零。
-            output.Int64(record.HasSize ? index.Size(id) : 0); output.Int64(record.HasModified ? record.Modified : 0);
+            output.Int64(hasSize ? index.Size(id) : 0); output.Int64(hasModified ? index.Modified(id) : 0);
             if (created is long ticks) output.Int64(ticks);
             output.Text(index.Name(id, scratch));
         }

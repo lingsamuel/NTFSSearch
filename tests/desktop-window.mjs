@@ -8,20 +8,22 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --index-memory-settings]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
 const trayTest = mode === '--tray'
 const searchResultsTest = mode === '--search-results'
 const searchServiceSettingsTest = mode === '--search-service-settings'
-const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData' : 'ExitSaveData')
+const indexMemorySettingsTest = mode === '--index-memory-settings'
+const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
+  : indexMemorySettingsTest ? 'IndexMemoryData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
 if (mode !== '--cached-fixture') {
   await mkdir(testData, { recursive: true })
-  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest }))
+  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest, ...(trayTest ? { IndexCreationTime: true } : {}) }))
   await writeFile(snapshotPath, previousSnapshot)
 }
 const portProbe = createServer().listen(0, '127.0.0.1')
@@ -36,7 +38,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || searchServiceSettingsTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || searchServiceSettingsTest || indexMemorySettingsTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -44,8 +46,13 @@ const applicationEnv = {
   WEBVIEW2_USER_DATA_FOLDER: join(output, 'WebView'),
   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
 }
-const application = spawn(resolve(executable), applicationArgs, { stdio: 'ignore', env: applicationEnv })
-const exited = once(application, 'exit')
+let application
+let exited
+function launchApplication() {
+  application = spawn(resolve(executable), applicationArgs, { stdio: 'ignore', env: applicationEnv })
+  exited = once(application, 'exit')
+}
+launchApplication()
 const exec = promisify(execFile)
 const powerShell = script => exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand',
   Buffer.from(script, 'utf16le').toString('base64')], {
@@ -110,6 +117,12 @@ async function evaluate(expression) {
 }
 
 const requestQuit = () => evaluate("void window.__TAURI_INTERNALS__.invoke('send_request', { request: { type: 'quit' } })")
+
+async function quitApplication() {
+  await requestQuit()
+  const [code] = await Promise.race([exited, sleep(8000, undefined, { ref: false }).then(() => { throw new Error('等待正常退出超时') })])
+  assert.equal(code, 0)
+}
 
 async function screenshot(name) {
   const png = await cdp('Page.captureScreenshot', { format: 'png' })
@@ -197,17 +210,19 @@ async function verifySearchResults() {
   assert.equal((await dimensions()).left, 0)
 }
 
+const visible = selector => evaluate(`(() => {
+  const element = document.querySelector(${JSON.stringify(selector)});
+  return !!element?.getClientRects().length && getComputedStyle(element).visibility === 'visible';
+})()`)
+const click = label => evaluate(`(() => {
+  const button = [...document.querySelectorAll('button')].find(button => button.getClientRects().length
+    && getComputedStyle(button).visibility === 'visible'
+    && (button.getAttribute('aria-label') ?? button.textContent.trim()) === ${JSON.stringify(label)});
+  if (!button || button.disabled) throw new Error('缺少可操作的按钮：' + ${JSON.stringify(label)});
+  button.click();
+})()`)
+
 async function verifySearchServiceSettings() {
-  const visible = selector => evaluate(`(() => {
-    const element = document.querySelector(${JSON.stringify(selector)});
-    return !!element?.getClientRects().length && getComputedStyle(element).visibility === 'visible';
-  })()`)
-  const click = label => evaluate(`(() => {
-    const button = [...document.querySelectorAll('button')].find(button => button.getClientRects().length
-      && (button.getAttribute('aria-label') ?? button.textContent.trim()) === ${JSON.stringify(label)});
-    if (!button || button.disabled) throw new Error('缺少可操作的按钮：' + ${JSON.stringify(label)});
-    button.click();
-  })()`)
   const enabled = '.settings-workspace input[name=search-service-enabled]'
   const searchSizes = '.settings-workspace input[name=search-directory-sizes]'
   const saveExit = '.settings-workspace input[name=save-exit-index]'
@@ -296,7 +311,7 @@ async function verifySearchServiceSettings() {
   assert.equal(await evaluate("document.querySelector('.space-level').value"), '3')
 }
 
-try {
+async function waitForDesktop(total) {
   const page = await until(async () => {
     try {
       const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
@@ -314,8 +329,6 @@ try {
     socket.addEventListener('open', resolve, { once: true })
     socket.addEventListener('error', reject, { once: true })
   })
-  const benchmark = mode === '--desktop-benchmark'
-  const total = benchmark ? 1_000_000 : 1000
   await until(async () => {
     const error = await evaluate("document.querySelector('.startup-error span')?.textContent")
     if (error) throw new Error(error)
@@ -323,6 +336,115 @@ try {
   }, '初始精确计数', 90_000)
   assert.equal(await evaluate("document.activeElement.getAttribute('aria-label')"), '搜索文件和文件夹')
   assert.equal(await evaluate("document.querySelectorAll('tbody tr').length"), 200)
+}
+
+async function verifyIndexMemorySettings(total) {
+  const switches = {
+    PrecomputeSort: 'precompute-sort', IndexCreationTime: 'index-creation-time',
+    IndexModifiedTime: 'index-modified-time', IndexFileSize: 'index-file-size',
+  }
+  const defaults = { PrecomputeSort: true, IndexCreationTime: false, IndexModifiedTime: true, IndexFileSize: true }
+  const disabledColumns = { PrecomputeSort: false, IndexCreationTime: true, IndexModifiedTime: false, IndexFileSize: false }
+  const field = name => `document.querySelector('.settings-workspace input[name=${name}]')`
+  const ready = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
+  const columns = () => evaluate("[...document.querySelectorAll('thead .column-label')].map(label => label.textContent)")
+  const pendingRestart = () => evaluate("[...document.querySelectorAll('.settings-workspace [role=status]')].some(status => status.textContent.includes('索引设置已保存'))")
+  const folderSizes = () => evaluate(`(() => {
+    const input = ${field('search-directory-sizes')};
+    return { checked: input.checked, disabled: input.disabled };
+  })()`)
+  const spaceEnabled = () => evaluate("document.querySelector('button[aria-label=空间分析]')?.disabled === false")
+  async function openSettings() {
+    await click('设置')
+    await until(ready, '索引设置加载完成')
+  }
+  async function checkSwitches(values) {
+    for (const [name, checked] of Object.entries(values)) {
+      assert.equal(await evaluate(`${field(switches[name])}?.checked`), checked, switches[name])
+    }
+  }
+  async function editSwitches(values) {
+    for (const [name, checked] of Object.entries(values)) {
+      await evaluate(`(() => {
+        const input = ${field(switches[name])};
+        if (input.checked !== ${checked}) input.click();
+      })()`)
+    }
+  }
+  async function saveSwitches(values, needsRestart) {
+    await click('保存并应用')
+    await until(async () => {
+      const saved = JSON.parse(await readFile(settingsPath, 'utf8'))
+      return await ready() && (await pendingRestart()) === needsRestart && saved.SearchDirectorySizes === true
+        && Object.entries(values).every(([name, checked]) => saved[name] === checked)
+    }, '保存索引设置和文件夹大小偏好')
+  }
+  async function restartApplication() {
+    await quitApplication()
+    socket.close()
+    launchApplication()
+    await waitForDesktop(total)
+  }
+
+  const allColumns = ['名称', '完整路径', '大小', '修改时间']
+  assert.deepEqual(await columns(), allColumns)
+  assert.equal(await spaceEnabled(), true)
+  await click('大小')
+  await until(() => evaluate("document.querySelector('thead th[aria-sort=ascending]')?.textContent.trim() === '大小'"), '选择大小排序')
+  await openSettings()
+  await checkSwitches(defaults)
+  assert.equal(await pendingRestart(), false)
+  assert.match(await evaluate("document.querySelector('[aria-labelledby=index-settings-title]').textContent"), /保存后，以下索引设置将在下次重启时生效/)
+  await editSwitches(disabledColumns)
+  assert.deepEqual(await folderSizes(), { checked: true, disabled: true })
+  assert.match(await evaluate("document.querySelector('[aria-labelledby=search-settings-title]').textContent"), /依赖.*索引文件大小/)
+  assert.equal(await pendingRestart(), false)
+  await saveSwitches(disabledColumns, true)
+  await click('返回')
+  assert.deepEqual(await columns(), allColumns, '保存后仍使用当前进程的列')
+  assert.equal(await spaceEnabled(), true, '保存后空间分析继续使用当前进程设置')
+  assert.equal(await evaluate("document.querySelector('thead th[aria-sort=ascending]').textContent.trim()"), '大小')
+
+  await openSettings()
+  await checkSwitches(disabledColumns)
+  assert.equal(await pendingRestart(), true, '重新打开设置仍显示待重启')
+  await editSwitches(defaults)
+  assert.deepEqual(await folderSizes(), { checked: true, disabled: false })
+  await saveSwitches(defaults, false)
+  await editSwitches(disabledColumns)
+  await saveSwitches(disabledColumns, true)
+  await restartApplication()
+
+  assert.deepEqual(await columns(), ['名称', '完整路径'])
+  assert.equal(await evaluate("document.querySelector('tbody tr:first-child').cells.length"), 2)
+  assert.equal(await evaluate("document.querySelector('thead th[aria-sort=ascending]').textContent.trim()"), '名称')
+  assert.equal(await spaceEnabled(), false)
+  assert.match(await evaluate("document.querySelector('button[aria-label=空间分析]').getAttribute('aria-description')"), /索引文件大小/)
+  await openSettings()
+  await checkSwitches(disabledColumns)
+  assert.equal(await pendingRestart(), false)
+  assert.deepEqual(await folderSizes(), { checked: true, disabled: true })
+  const restoredSize = { ...disabledColumns, IndexFileSize: true }
+  await editSwitches(restoredSize)
+  assert.deepEqual(await folderSizes(), { checked: true, disabled: false })
+  await saveSwitches(restoredSize, true)
+  await restartApplication()
+
+  assert.deepEqual(await columns(), ['名称', '完整路径', '大小'])
+  assert.equal(await spaceEnabled(), true)
+  await click('大小')
+  await until(() => evaluate("document.querySelector('thead th[aria-sort=ascending]')?.textContent.trim() === '大小'"), '选择大小升序')
+  // 演示目录大于单个文件，降序首页才能验证目录合计与文件混排。
+  await click('大小')
+  await until(() => evaluate(`document.querySelector('thead th[aria-sort=descending]')?.textContent.trim() === '大小'
+    && [...document.querySelectorAll('tbody tr')].some(row => row.querySelector('.entry-icon.folder')
+      && / B$/.test(row.querySelector('.entry-size').title))`), '恢复保存的文件夹大小统计')
+}
+
+try {
+  const benchmark = mode === '--desktop-benchmark'
+  const total = benchmark ? 1_000_000 : 1000
+  await waitForDesktop(total)
 
   if (benchmark) {
     await sleep(2000)
@@ -346,6 +468,8 @@ try {
     await verifySearchResults()
   } else if (searchServiceSettingsTest) {
     await verifySearchServiceSettings()
+  } else if (indexMemorySettingsTest) {
+    await verifyIndexMemorySettings(total)
   } else if (!trayTest) {
     const fileIcon = extension => `document.querySelector('td.entry-name[title$="${extension}"] img.entry-file-type-icon')`
     const textIcon = await until(() => evaluate(`(() => {
@@ -672,9 +796,7 @@ try {
     assert.equal(await backendId(), backend, '再次启动复用原搜索后端')
   }
   // 使用现有桌面通信完成退出握手，避免测试依赖通知区图标是否被 Windows 折叠。
-  await requestQuit()
-  const [code] = await Promise.race([exited, sleep(8000, undefined, { ref: false }).then(() => { throw new Error('等待正常退出超时') })])
-  assert.equal(code, 0)
+  await quitApplication()
   const leftover = await powerShell(`if (Get-Process -Id ${backend} -ErrorAction SilentlyContinue) { 'running' }`)
   assert.equal(leftover.stdout.trim(), '')
   if (trayTest) {
@@ -695,6 +817,7 @@ try {
   if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
   else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
+  else if (indexMemorySettingsTest) console.log('Windows 索引内存设置、重启生效、搜索结果列和文件夹大小偏好通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

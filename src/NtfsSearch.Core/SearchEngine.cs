@@ -7,6 +7,8 @@ namespace NtfsSearch.Core;
 
 public sealed partial class SearchIndex
 {
+    internal const int DirectMatchSortLimit = 16_384;
+
     public SearchResult Search(string text, SortField sort = SortField.Name, bool descending = false,
         bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default,
         SearchFilter? filter = null)
@@ -19,10 +21,14 @@ public sealed partial class SearchIndex
         if (query.TotalCount == Count && !HasOrderCorrections)
         {
             int end = (int)Math.Min(Count, (long)offset + limit);
-            for (int i = offset; i < end; i++)
+            if (offset < end)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                rows.Add(GetRow(OrderedId(sort, descending, i)));
+                var (order, known) = ResolveSortOrder(sort, cancellationToken);
+                for (int i = offset; i < end; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    rows.Add(GetRow(order[descending && i < known ? known - 1 - i : i]));
+                }
             }
             return new(Count, rows, timer.Elapsed);
         }
@@ -91,7 +97,7 @@ public sealed partial class SearchIndex
                     {
                         if (!IsVisible(id)) continue;
                         ref readonly var record = ref Records[id];
-                        if (filter is not null && !filter.Matches(this, id, in record)) continue;
+                        if (filter is not null && !filter.Matches(this, id)) continue;
                         bool matches = true;
                         for (int t = 0; t < terms.Length; t++)
                         {
@@ -126,9 +132,9 @@ public sealed partial class SearchIndex
     }
 
     internal IEnumerable<int> EnumerateMatches(ulong[]? bits, long total, SortField sort, bool descending, CancellationToken token,
-        DirectorySizeOrder? directorySizes = null)
+        DirectorySizeOrder? directorySizes = null, SearchSortSelection? selection = null)
     {
-        if (bits is not null && total <= 16_384)
+        if (bits is not null && total <= DirectMatchSortLimit)
         {
             var ids = new int[(int)total];
             int next = 0, words = (int)(((long)Count + 63) / 64);
@@ -147,17 +153,18 @@ public sealed partial class SearchIndex
             foreach (int id in ids) { token.ThrowIfCancellationRequested(); yield return id; }
             yield break;
         }
+        if (!PrecomputeSort) selection ??= new(sort);
         if (directorySizes is not { HasKnownDirectories: true })
         {
-            foreach (int id in EnumerateOrdered(sort, descending, token))
+            foreach (int id in EnumerateOrdered(sort, descending, token, selection: selection))
                 if (Matches(id)) yield return id;
             yield break;
         }
 
         // 已知目录与文件归并完才访问未知段。大量目录命中时，第一页可直接从已知值开始。
-        using var regular = EnumerateOrdered(sort, descending, token, knownOnly: true).Where(Matches).GetEnumerator();
-        using var folders = directorySizes.Ordered(descending, token).Where(Matches).GetEnumerator();
-        bool hasRegular = KnownCount(sort) != 0 && (bits is null || HasMatchingFile()) && regular.MoveNext();
+        using var regular = EnumerateOrdered(sort, descending, token, knownOnly: true, selection).Where(Matches).GetEnumerator();
+        using var folders = directorySizes.Ordered(descending, token, selection).Where(Matches).GetEnumerator();
+        bool hasRegular = (bits is null || HasMatchingFile()) && regular.MoveNext();
         bool hasFolder = folders.MoveNext();
         while (hasRegular || hasFolder)
         {
@@ -173,7 +180,7 @@ public sealed partial class SearchIndex
                 hasRegular = regular.MoveNext();
             }
         }
-        foreach (int id in EnumerateOrdered(sort, descending, token, knownOnly: false))
+        foreach (int id in EnumerateOrdered(sort, descending, token, knownOnly: false, selection))
             if (Matches(id) && (!Records[id].IsDirectory || !directorySizes.GetSize(id).HasValue)) yield return id;
 
         bool Matches(int id) => IsVisible(id) && (bits is null || (bits[id / 64] & (1UL << (id % 64))) != 0);
@@ -188,7 +195,7 @@ public sealed partial class SearchIndex
                 ulong mask = bits![word];
                 while (mask != 0)
                 {
-                    if (Records[word * 64 + BitOperations.TrailingZeroCount(mask)].HasSize) return true;
+                    if (HasSize(word * 64 + BitOperations.TrailingZeroCount(mask))) return true;
                     mask &= mask - 1;
                 }
             }

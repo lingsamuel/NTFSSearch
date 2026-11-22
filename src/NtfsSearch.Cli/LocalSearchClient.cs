@@ -17,7 +17,7 @@ internal static class LocalSearchClient
         using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
         {
             BaseAddress = baseAddress,
-            Timeout = TimeSpan.FromSeconds(12)
+            Timeout = isSearch ? LocalSearchEndpoint.OnDemandSortTimeout + TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(12)
         };
         try
         {

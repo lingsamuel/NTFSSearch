@@ -8,11 +8,12 @@ internal sealed class PreparedSearch(SearchIndex index, ulong[]? bits, long tota
     private ulong[]? ownedBits = bits;
     private bool disposed;
     public long TotalCount { get; } = total;
+    internal bool RequiresFullOrder => ownedBits is null || TotalCount > SearchIndex.DirectMatchSortLimit;
     public IEnumerable<int> Ids(SortField sort, bool descending, CancellationToken token,
-        DirectorySizeOrder? directorySizes = null)
+        DirectorySizeOrder? directorySizes = null, SearchSortSelection? selection = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        return index.EnumerateMatches(ownedBits, TotalCount, sort, descending, token, directorySizes);
+        return index.EnumerateMatches(ownedBits, TotalCount, sort, descending, token, directorySizes, selection);
     }
     public void Dispose()
     {

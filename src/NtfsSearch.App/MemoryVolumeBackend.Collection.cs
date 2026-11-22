@@ -29,7 +29,8 @@ internal sealed partial class MemoryVolumeBackend
             string journalName = MemoryCollectorPipe.NewName(), scanName = MemoryCollectorPipe.NewName();
             using var journal = MemoryCollectorPipe.CreateServer(journalName, acrossElevation: true);
             using var scan = MemoryCollectorPipe.CreateServer(scanName, acrossElevation: true);
-            await connection.RequestAsync(new(volume.Volume, dataDirectory, journalName, scanName, null, policy.WorkerProcessors), scanToken);
+            await connection.RequestAsync(new(volume.Volume, dataDirectory, journalName, scanName, null,
+                policy.WorkerProcessors, metadata), scanToken);
             await Task.WhenAll(MemoryCollectorPipe.AcceptAsync(journal, connection.ProcessId, scanToken),
                 MemoryCollectorPipe.AcceptAsync(scan, connection.ProcessId, scanToken));
 
@@ -115,7 +116,7 @@ internal sealed partial class MemoryVolumeBackend
                     using (var body = frame.Open()) ScanStarted(volume, generation, body.ReadInt32());
                     break;
                 case CollectorFrameKind.ScanStart when records is null:
-                    using (var body = frame.Open()) records = new(body.ReadInt32());
+                    using (var body = frame.Open()) records = new(body.ReadInt32(), metadata, precomputeSort);
                     break;
                 case CollectorFrameKind.ScanRows when records is not null:
                     records.ReadRows(frame, token);
@@ -126,7 +127,7 @@ internal sealed partial class MemoryVolumeBackend
                         var target = CollectorWire.ReadPosition(body);
                         var skipped = body.ReadInt64();
                         var progress = new ScanProgress(message => Report(volume, generation, message));
-                        progress.Report("建立排序索引…");
+                        if (precomputeSort) progress.Report("建立排序索引…");
                         return (records.Build(token, progress), target, skipped);
                     }
                 default:
@@ -144,7 +145,7 @@ internal sealed partial class MemoryVolumeBackend
             Report(volume, generation, "索引可用，正在检查 USN 水位…");
             string name = MemoryCollectorPipe.NewName();
             using var pipe = MemoryCollectorPipe.CreateServer(name, acrossElevation: true);
-            await connection.RequestAsync(new(volume.Volume, dataDirectory, name, null, initial.Position, 0), token);
+            await connection.RequestAsync(new(volume.Volume, dataDirectory, name, null, initial.Position, 0, metadata), token);
             await MemoryCollectorPipe.AcceptAsync(pipe, connection.ProcessId, token);
             var frames = new CollectorFrameReader(pipe);
             var (start, target) = ReadStart(await frames.ReadAsync(token));

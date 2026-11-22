@@ -3,10 +3,14 @@ namespace NtfsSearch.Core;
 public sealed class IndexBuilder
 {
     private readonly NameArena names;
-    private readonly SizeTable sizes = new();
+    private readonly SizeTable? sizes;
+    private readonly IndexMetadata metadata;
+    private readonly bool precomputeSort;
     private IndexRecord[] records;
     private int count;
     private ulong[]? fileReferences;
+    private uint[]? sizeCodes;
+    private long[]? modifiedTimes;
     private long[]? creationTimes;
     private ulong[]? knownCreationTimes;
     private bool identityComplete = true;
@@ -18,13 +22,20 @@ public sealed class IndexBuilder
 
     public IndexBuilder(int capacity = 0) : this(capacity, fixedSize: false) { }
 
-    internal IndexBuilder(int capacity, bool fixedSize)
+    internal IndexBuilder(int capacity, bool fixedSize, IndexMetadata metadata = IndexMetadata.All, bool precomputeSort = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(capacity);
         this.fixedSize = fixedSize;
+        this.metadata = metadata;
+        this.precomputeSort = precomputeSort;
         names = new((int)Math.Clamp((long)capacity * 32, 256, NameArena.ChunkChars));
         records = fixedSize ? IndexArrays.Persistent<IndexRecord>(capacity) : new IndexRecord[capacity];
         if (fixedSize) fileReferences = IndexArrays.Persistent<ulong>(capacity);
+        if (metadata.HasFlag(IndexMetadata.FileSize))
+        {
+            sizes = new();
+            sizeCodes = fixedSize ? IndexArrays.Persistent<uint>(capacity) : new uint[capacity];
+        }
     }
 
     public void Add(string parentPath, ReadOnlySpan<char> name, long? size = null,
@@ -89,13 +100,22 @@ public sealed class IndexBuilder
         if (count == records.Length)
         {
             Array.Resize(ref records, Math.Max(16, checked(count + Math.Max(count / 2, 1))));
+            if (sizeCodes is not null) Array.Resize(ref sizeCodes, records.Length);
+            if (modifiedTimes is not null) Array.Resize(ref modifiedTimes, records.Length);
             if (creationTimes is not null)
             {
                 Array.Resize(ref creationTimes, records.Length);
                 Array.Resize(ref knownCreationTimes, BitWords(records.Length));
             }
         }
-        if (createdUtcTicks is long creation)
+        if (sizeCodes is not null) sizeCodes[count] = sizes!.Add(isDirectory ? -1 : size ?? -1);
+        bool hasModified = modifiedUtcTicks.HasValue && metadata.HasFlag(IndexMetadata.ModifiedTime);
+        if (hasModified)
+        {
+            modifiedTimes ??= fixedSize ? IndexArrays.Persistent<long>(records.Length) : new long[records.Length];
+            modifiedTimes[count] = modifiedUtcTicks.GetValueOrDefault();
+        }
+        if (createdUtcTicks is long creation && metadata.HasFlag(IndexMetadata.CreationTime))
         {
             creationTimes ??= fixedSize ? IndexArrays.Persistent<long>(records.Length) : new long[records.Length];
             knownCreationTimes ??= fixedSize ? IndexArrays.Persistent<ulong>(BitWords(records.Length)) : new ulong[BitWords(records.Length)];
@@ -107,8 +127,7 @@ public sealed class IndexBuilder
             if (fileReferences.Length != records.Length) Array.Resize(ref fileReferences, records.Length);
             fileReferences[count] = fileReference.Value;
         }
-        records[count++] = new(names.Add(name, isDirectory), sizes.Add(isDirectory ? -1 : size ?? -1), modifiedUtcTicks.GetValueOrDefault(),
-            directory, isDirectory, modifiedUtcTicks.HasValue);
+        records[count++] = new(names.Add(name, isDirectory), directory, isDirectory, hasModified);
     }
 
     private static int BitWords(int length) => (int)(((long)length + 63) / 64);
@@ -120,6 +139,9 @@ public sealed class IndexBuilder
         times[id] = value.GetValueOrDefault();
     }
 
+    private T[] FreezeColumn<T>(T[] values, int length) where T : unmanaged
+        => fixedSize && values.Length == length ? values : IndexArrays.Freeze(values, length);
+
     public SearchIndex Build(CancellationToken cancellationToken = default, IProgress<string>? progress = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -127,37 +149,42 @@ public sealed class IndexBuilder
         built = true;
         names.Seal();
         // 终态大数组与构建期增长、散列表隔离，避免长期活对象夹住临时LOH空洞。
-        var array = fixedSize && records.Length == count ? records : IndexArrays.Freeze(records, count);
+        var array = FreezeColumn(records, count);
         records = [];
         directoryIds.Clear();
-        long[]? times = creationTimes is null ? null
-            : fixedSize && creationTimes.Length == count ? creationTimes : IndexArrays.Freeze(creationTimes, count);
-        ulong[]? known = knownCreationTimes is null ? null
-            : fixedSize && knownCreationTimes.Length == BitWords(count) ? knownCreationTimes : IndexArrays.Freeze(knownCreationTimes, BitWords(count));
+        uint[]? sizeColumn = sizeCodes is null ? null : FreezeColumn(sizeCodes, count);
+        long[]? modifiedColumn = modifiedTimes is null ? null : FreezeColumn(modifiedTimes, count);
+        long[]? times = creationTimes is null ? null : FreezeColumn(creationTimes, count);
+        ulong[]? known = knownCreationTimes is null ? null : FreezeColumn(knownCreationTimes, BitWords(count));
+        sizeCodes = null;
+        modifiedTimes = null;
         creationTimes = null;
         knownCreationTimes = null;
         ulong[]? references = count == 0 ? [] : null;
         if (identityComplete && fileReferences is not null)
         {
-            references = fixedSize && fileReferences.Length == count ? fileReferences : IndexArrays.Freeze(fileReferences, count);
+            references = FreezeColumn(fileReferences, count);
             bool sorted = true;
             for (int i = 1; i < count; i++)
                 if (SearchIndex.CompareReference(references[i - 1], references[i]) > 0) { sorted = false; break; }
             if (!sorted)
             {
-                if (times is null) Array.Sort(references, array, Comparer<ulong>.Create(SearchIndex.CompareReference));
-                else SortWithCreationTimes(references, array, times, known!, cancellationToken);
+                if (sizeColumn is null && modifiedColumn is null && times is null)
+                    Array.Sort(references, array, Comparer<ulong>.Create(SearchIndex.CompareReference));
+                else SortWithMetadata(references, array, sizeColumn, modifiedColumn, times, known, cancellationToken);
             }
         }
         fileReferences = null;
         return new(names, array, directories.ToArray(), cancellationToken, progress,
             fileReferences: references, directoryReferences: references is null ? null : IndexArrays.Copy<ulong>(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(directoryReferences)),
-            bigSizes: sizes.Freeze(), creationTimes: times, knownCreationTimes: known);
+            bigSizes: sizes?.Freeze(), creationTimes: times, knownCreationTimes: known,
+            sizeCodes: sizeColumn, modifiedTimes: modifiedColumn, metadata: metadata, precomputeSort: precomputeSort);
     }
 
-    private static void SortWithCreationTimes(ulong[] references, IndexRecord[] rows, long[] times, ulong[] known, CancellationToken token)
+    private static void SortWithMetadata(ulong[] references, IndexRecord[] rows, uint[]? sizes,
+        long[]? modified, long[]? times, ulong[]? known, CancellationToken token)
     {
-        // 排序只附带原行号，随后按置换周期移动行和时间列，避免复制两份全卷数据。
+        // 排序只附带原行号，随后按置换周期移动行和已启用的列，避免复制两份全卷数据。
         var order = new int[references.Length];
         for (int i = 0; i < order.Length; i++) order[i] = i;
         Array.Sort(references, order, Comparer<ulong>.Create(SearchIndex.CompareReference));
@@ -166,6 +193,8 @@ public sealed class IndexBuilder
             if ((i & 65535) == 0) token.ThrowIfCancellationRequested();
             if (order[i] == i) continue;
             IndexRecord row = rows[i];
+            uint size = sizes?[i] ?? 0;
+            long modification = modified?[i] ?? 0;
             long? creation = SearchIndex.ReadCreationTime(times, known, i);
             int destination = i;
             while (order[destination] != i)
@@ -173,12 +202,16 @@ public sealed class IndexBuilder
                 int source = order[destination];
                 if ((source & 65535) == 0) token.ThrowIfCancellationRequested();
                 rows[destination] = rows[source];
-                WriteCreationTime(times, known, destination, SearchIndex.ReadCreationTime(times, known, source));
+                if (sizes is not null) sizes[destination] = sizes[source];
+                if (modified is not null) modified[destination] = modified[source];
+                if (times is not null) WriteCreationTime(times, known!, destination, SearchIndex.ReadCreationTime(times, known, source));
                 order[destination] = destination;
                 destination = source;
             }
             rows[destination] = row;
-            WriteCreationTime(times, known, destination, creation);
+            if (sizes is not null) sizes[destination] = size;
+            if (modified is not null) modified[destination] = modification;
+            if (times is not null) WriteCreationTime(times, known!, destination, creation);
             order[destination] = destination;
         }
     }

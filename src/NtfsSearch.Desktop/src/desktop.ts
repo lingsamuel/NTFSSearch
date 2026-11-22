@@ -41,6 +41,8 @@ export interface IndexStatus {
   discoveryComplete: boolean
   collectionCancelled: boolean
   skipExitIndexSave: boolean
+  indexModifiedTime: boolean
+  indexFileSize: boolean
   progress: string | null
   error: string | null
 }
@@ -87,10 +89,18 @@ export interface SpaceAnalysisResult {
   } | null
 }
 
-export interface SettingsStatus {
+interface IndexSettings {
+  precomputeSort?: boolean
+  indexCreationTime?: boolean
+  indexModifiedTime?: boolean
+  indexFileSize?: boolean
+}
+
+export interface SettingsStatus extends IndexSettings {
   type: 'settingsStatus'
   searchDirectorySizes: boolean
   skipExitIndexSave: boolean
+  indexRestartRequired: boolean
   enabled: boolean
   port: number
   address: string | null
@@ -102,7 +112,7 @@ export interface SettingsStatus {
 
 export type SettingsRequest =
   | { type: 'getSettings' | 'restartSearchService' }
-  | { type: 'applySettings'; enabled: boolean; port: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean }
+  | ({ type: 'applySettings'; enabled: boolean; port: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean } & IndexSettings)
 
 export type DesktopMessage =
   | SearchResult

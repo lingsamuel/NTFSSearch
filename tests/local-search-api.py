@@ -18,6 +18,7 @@ import urllib.request
 
 
 http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+INDEX_DEFAULTS = dict(precomputeSort=True, indexCreationTime=False, indexModifiedTime=True, indexFileSize=True)
 
 
 def port_socket():
@@ -181,6 +182,16 @@ def assert_unavailable(port):
         raise AssertionError(f"端口 {port} 仍在提供 HTTP 服务")
 
 
+def check_directory(process, receive, request_id, known):
+    send(process, dict(type="query", requestId=request_id, text="深层1", matchPath=False,
+                       sort=2, descending=True))
+    result = receive(lambda event: event["type"] == "result" and event["requestId"] == request_id
+                     and not event["directorySortPending"] and event["total"] == 1)
+    row, = result["rows"]
+    assert row["isDirectory"]
+    assert row["sizeBytesText"] == ("15,308,800 B" if known else None), row
+    assert row["sizeHint"] is None, row
+
 def check_settings(backend, cli, sandbox):
     # 便携版 CLI 从自身目录读取 Data，即使从其他目录调用也应如此。
     portable = Path(sandbox) / "portable"
@@ -218,18 +229,9 @@ def check_settings(backend, cli, sandbox):
             assert status == dict(type="settingsStatus", enabled=enabled, port=port,
                                   address=f"http://127.0.0.1:{override or port}", portOverridden=override is not None,
                                   searchDirectorySizes=sizes, skipExitIndexSave=skip,
-                                  running=running, busy=False, error=status["error"] if error else None), status
+                                  running=running, busy=False, error=status["error"] if error else None,
+                                  indexRestartRequired=False, **INDEX_DEFAULTS), status
             assert bool(status["error"]) == error, status
-
-        def check_directory(process, receive, request_id, known):
-            send(process, dict(type="query", requestId=request_id, text="深层1", matchPath=False,
-                               sort=2, descending=True))
-            result = receive(lambda event: event["type"] == "result" and event["requestId"] == request_id
-                             and not event["directorySortPending"] and event["total"] == 1)
-            row, = result["rows"]
-            assert row["isDirectory"]
-            assert row["sizeBytesText"] == ("15,308,800 B" if known else None), row
-            assert row["sizeHint"] is None, row
 
         def configure(process, receive):
             assert_status(service_status(receive), 18791, False, False)
@@ -303,7 +305,8 @@ def check_settings(backend, cli, sandbox):
             disabled = apply(process, receive, first_port, enabled=False)
             assert disabled == dict(type="settingsStatus", enabled=False, port=first_port, address=None,
                                     portOverridden=True, running=False, busy=False, error=None,
-                                    searchDirectorySizes=True, skipExitIndexSave=True), disabled
+                                    searchDirectorySizes=True, skipExitIndexSave=True,
+                                    indexRestartRequired=False, **INDEX_DEFAULTS), disabled
             assert json.loads(settings.read_bytes())["SearchServicePort"] == first_port
 
         def queue_exit_settings(process, receive):
@@ -329,6 +332,91 @@ def check_settings(backend, cli, sandbox):
         assert snapshot.read_bytes() == original_snapshot, "退出没有遵守最新保存的偏好"
 
 
+def check_index_settings(backend, cli, sandbox):
+    data = Path(sandbox) / "index-settings"
+    data.mkdir()
+    with port_socket() as listener:
+        port = listener.getsockname()[1]
+    env = os.environ | {"NTFS_SEARCH_TEST_DATA": str(data), "NTFS_SEARCH_PORT": str(port)}
+    settings = dict(precomputeSort=False, indexCreationTime=True, indexModifiedTime=False, indexFileSize=False)
+    text = '"hello world"'
+    time_filter = "2026-01-01T00:00:00Z"
+
+    def apply(process, receive, **values):
+        return change_service(process, receive, "applySettings", enabled=True, port=18791,
+                              searchDirectorySizes=True, skipExitIndexSave=True, **values)
+
+    def check_preferences(status, expected, restart_required):
+        assert {key: status.get(key) for key in expected} == expected, status
+        assert status["indexRestartRequired"] is restart_required and status["searchDirectorySizes"], status
+        assert status["error"] is None, status
+
+    def ready(receive, size, modified):
+        status = receive(lambda event: event["type"] == "status" and event["volumesReady"] == 2)
+        assert status["indexFileSize"] is size and status["indexModifiedTime"] is modified, status
+
+    def reject(query, setting):
+        try:
+            request(port, "search", query)
+        except urllib.error.HTTPError as error:
+            with error:
+                assert error.code == 400 and setting in json.load(error)["error"], query
+        else:
+            raise AssertionError(f"接口接受了依赖关闭设置的查询 {query}")
+
+    def configure(process, receive):
+        check_preferences(service_status(receive), INDEX_DEFAULTS, False)
+        ready(receive, size=True, modified=True)
+        reject(dict(createdFrom=time_filter), "索引创建时间")
+        row = request(port, "search", dict(text=text, limit=1))["rows"][0]
+        assert row["sizeBytes"] is not None and row["modifiedUtc"] and row["createdUtc"] is None, row
+
+        check_preferences(apply(process, receive, **settings), settings, True)
+        check_preferences(apply(process, receive, **INDEX_DEFAULTS), INDEX_DEFAULTS, False)
+        check_preferences(apply(process, receive, **settings), settings, True)
+        # 旧客户端保存时不发送索引字段，重启 HTTP 监听也不会切换正在使用的索引。
+        check_preferences(apply(process, receive), settings, True)
+        check_preferences(change_service(process, receive, "restartSearchService"), settings, True)
+        assert request(port, "search", dict(text=text, sort="size", limit=1))["total"] == 59
+        reject(dict(createdBefore=time_filter), "索引创建时间")
+
+    def restart(process, receive):
+        check_preferences(service_status(receive), settings, False)
+        ready(receive, size=False, modified=False)
+        expected = request(port, "search", dict(text=text, sort="name"))
+        assert expected["total"] == 59
+        assert all(row["sizeBytes"] is None and row["modifiedUtc"] is None and row["createdUtc"]
+                   for row in expected["rows"]), expected
+        assert request(port, "search", dict(text=text, createdBefore=time_filter))["total"] == 59
+        for sort in (2, 3):
+            send(process, dict(type="query", requestId=sort, text=text, sort=sort, descending=True))
+            results = receive(lambda event: event["type"] == "result" and event["requestId"] == sort)
+            assert [row["fullPath"] for row in results["rows"]] == [row["fullPath"] for row in expected["rows"]]
+        check_directory(process, receive, 4, known=False)
+        send(process, dict(type="spaceAnalysis", requestId=5))
+        error = receive(lambda event: event["type"] == "error")
+        assert error["scope"] == "action" and "索引文件大小" in error["message"], error
+
+        for query in [dict(sort="size"), dict(minSizeBytes=0), dict(maxSizeBytes=1)]:
+            reject(query, "索引文件大小")
+        for query in [dict(sort="modified"), dict(modifiedFrom=time_filter), dict(modifiedBefore=time_filter)]:
+            reject(query, "索引修改时间")
+        cli_error = subprocess.run(cli + ["search", "--sort", "size"], env=env, capture_output=True,
+                                   encoding="utf-8", errors="replace", timeout=15)
+        assert cli_error.returncode != 0 and not cli_error.stdout and "索引文件大小" in cli_error.stderr, cli_error
+
+        check_preferences(apply(process, receive, indexFileSize=True), settings | dict(indexFileSize=True), True)
+
+    def restore_size(process, receive):
+        check_preferences(service_status(receive), settings | dict(indexFileSize=True), False)
+        ready(receive, size=True, modified=False)
+        check_directory(process, receive, 1, known=True)
+
+    desktop(backend, env, configure)
+    desktop(backend, env, restart)
+    desktop(backend, env, restore_size)
+
+
 def main(backend, cli):
     with port_socket() as listener:
         port = listener.getsockname()[1]
@@ -342,6 +430,7 @@ def main(backend, cli):
     artifact_root.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(dir=artifact_root) as sandbox:
         env["NTFS_SEARCH_TEST_DATA"] = sandbox
+        (Path(sandbox) / "settings.json").write_text(json.dumps(dict(IndexCreationTime=True)), encoding="utf-8")
         with ExitStack() as connections:
             desktop(backend, env, lambda process, receive: check_live_api(process, receive, port, run_cli, connections))
         assert (Path(sandbox) / "index.ntsnap").is_file()
@@ -367,7 +456,8 @@ if __name__ == "__main__":
         artifact_root = Path(__file__).resolve().parents[1] / "artifacts"
         artifact_root.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=artifact_root) as sandbox:
+            check_index_settings(backend, cli, sandbox)
             check_settings(backend, cli, sandbox)
-        print("全局设置、目录统计开关、退出偏好、HTTP 监听和 CLI 端口读取验证通过。")
+        print("全局设置、索引开关、目录统计、退出偏好、HTTP 监听和 CLI 端口读取验证通过。")
     else:
         main(backend, cli)

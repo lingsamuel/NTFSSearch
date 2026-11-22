@@ -69,7 +69,7 @@ internal sealed class CollectorFrameWriter(Stream stream)
 }
 
 internal sealed record MemoryCollectorRequest(NtfsVolume Volume, string DataDirectory, string JournalPipe,
-    string? ScanPipe, JournalPosition? Resume, int WorkerProcessors)
+    string? ScanPipe, JournalPosition? Resume, int WorkerProcessors, IndexMetadata Metadata)
 {
     internal static MemoryCollectorRequest Read(CollectorFrame frame)
     {
@@ -77,9 +77,10 @@ internal sealed record MemoryCollectorRequest(NtfsVolume Volume, string DataDire
         var volume = CollectorWire.ReadVolume(reader);
         string directory = reader.ReadString();
         string journal = reader.ReadString();
+        var metadata = (IndexMetadata)reader.ReadByte();
         return reader.ReadBoolean()
-            ? new(volume, directory, journal, reader.ReadString(), null, reader.ReadInt32())
-            : new(volume, directory, journal, null, CollectorWire.ReadPosition(reader), 0);
+            ? new(volume, directory, journal, reader.ReadString(), null, reader.ReadInt32(), metadata)
+            : new(volume, directory, journal, null, CollectorWire.ReadPosition(reader), 0, metadata);
     }
 
     internal void Write(BinaryWriter writer)
@@ -87,6 +88,7 @@ internal sealed record MemoryCollectorRequest(NtfsVolume Volume, string DataDire
         CollectorWire.WriteVolume(writer, Volume);
         writer.Write(DataDirectory);
         writer.Write(JournalPipe);
+        writer.Write((byte)Metadata);
         writer.Write(ScanPipe is not null);
         if (ScanPipe is not null)
         {

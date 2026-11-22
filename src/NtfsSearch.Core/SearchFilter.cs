@@ -21,17 +21,20 @@ public sealed record SearchFilter(
             throw new ArgumentException("创建时间范围无效。");
     }
 
-    internal bool Matches(SearchIndex index, int id, in IndexRecord record)
+    internal bool Matches(SearchIndex index, int id)
     {
         if (HasSizeRange)
         {
-            if (!record.HasSize) return false;
+            if (!index.HasSize(id)) return false;
             long size = index.Size(id);
             if (size < MinSizeBytes || size > MaxSizeBytes) return false;
         }
-        if (HasModifiedRange && (!record.HasModified ||
-            record.Modified < ModifiedFromUtcTicks || record.Modified >= ModifiedBeforeUtcTicks))
-            return false;
+        if (HasModifiedRange)
+        {
+            if (!index.HasModified(id)) return false;
+            long modified = index.Modified(id);
+            if (modified < ModifiedFromUtcTicks || modified >= ModifiedBeforeUtcTicks) return false;
+        }
         if (HasCreatedRange)
         {
             if (index.CreatedUtcTicks(id) is not long created) return false;

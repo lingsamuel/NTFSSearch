@@ -6,6 +6,60 @@ namespace NtfsSearch.Tests;
 public class SortPermutationTests
 {
     [Fact]
+    public void OnDemandSortingMatchesPrecomputedPagesAcrossVolumesAndDirections()
+    {
+        var eager = new SearchCatalog();
+        var lazy = new SearchCatalog();
+        foreach (string root in new[] { @"C:\", @"D:\" })
+        {
+            var all = new IndexBuilder(2050);
+            var selected = new IndexBuilder(2050, fixedSize: false, precomputeSort: false);
+            for (int id = 0; id < 2050; id++)
+                foreach (var builder in new[] { all, selected })
+                    builder.Add(root, $"file-{2049 - id:D4}.txt", id % 4 == 0 ? null : id % 7,
+                        id % 5 == 0 ? null : id % 13);
+            eager.Publish(root, all.Build());
+            var index = selected.Build();
+            Assert.Equal(0, index.Statistics.SortBytes);
+            lazy.Publish(root, index);
+        }
+
+        foreach (var sort in new[] { SortField.Size, SortField.Path, SortField.Modified, SortField.Name, SortField.Size })
+            foreach (bool descending in new[] { false, true })
+            {
+                const int offset = 3300, limit = 81;
+                var expected = eager.SearchDesktop("", sort, descending, true, offset, limit, default);
+                var actual = lazy.SearchDesktop("", sort, descending, true, offset, limit, default);
+                Assert.Equal(expected.TotalCount, actual.TotalCount);
+                Assert.Equal(expected.Rows, actual.Rows);
+            }
+    }
+
+    [Fact]
+    public void OnDemandOrderReusesVisibilityOnlyViewsAndReleasesReplacedPaths()
+    {
+        var builder = new IndexBuilder(2, fixedSize: false, precomputeSort: false);
+        builder.Add(@"C:\old\", "a.txt");
+        builder.Add(@"C:\second\", "b.txt");
+        var original = builder.Build();
+        var selection = new SearchSortSelection(SortField.Path);
+        selection.UpdateOwners([original]);
+        var order = original.ResolveSortOrder(SortField.Path, default, selection).Order;
+
+        var hidden = original.WithView([1UL], original.Directories, default);
+        selection.UpdateOwners([hidden]);
+        Assert.Same(order, hidden.ResolveSortOrder(SortField.Path, default, selection).Order);
+
+        var moved = hidden.WithView(null, [@"C:\third\", @"C:\second\"], default);
+        selection.UpdateOwners([moved]);
+        Assert.Same(original, moved.IdentitySource);
+        Assert.False(selection.Contains(original));
+        Assert.Equal(1, moved.ResolveSortOrder(SortField.Path, default, selection).Order[0]);
+        Assert.Equal(0, original.ResolveSortOrder(SortField.Path, default, selection).Order[0]);
+        Assert.False(selection.Contains(original));
+    }
+
+    [Fact]
     public void CodecPreservesByteBoundariesAndLast24BitId()
     {
         var values = new int[1 << 24];

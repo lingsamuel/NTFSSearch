@@ -13,6 +13,8 @@ internal sealed class SearchHost
     private volatile MemoryVolumeBackend? windowsBackend;
 
     internal SearchCatalog Catalog => catalog;
+    internal IndexMetadata Metadata { get; private set; } = IndexMetadata.All;
+    internal bool PrecomputeSort { get; private set; } = true;
     internal IReadOnlyList<VolumeStatus> Statuses => windowsBackend?.Statuses ?? demo?.Statuses ?? [];
     internal CollectorMetrics? Metrics => windowsBackend?.Metrics;
     internal event Action? StatusChanged;
@@ -54,9 +56,15 @@ internal sealed class SearchHost
         {
             // 只有隔离的演示数据目录可用于验证快照保存，普通演示不写入便携版 Data。
             saveDemoSnapshot = cacheDirectory is not null;
-            demo = new(new SmokeBackend(count), catalog);
+            demo = new(new SmokeBackend(count, this), catalog);
             demo.StatusChanged += () => StatusChanged?.Invoke();
         }
+    }
+
+    internal void ConfigureIndex(IndexMetadata metadata, bool precomputeSort)
+    {
+        Metadata = metadata;
+        PrecomputeSort = precomputeSort;
     }
 
     internal async Task RunAutomaticAsync(CancellationToken token)
@@ -67,7 +75,7 @@ internal sealed class SearchHost
             return;
         }
 
-        var backend = new MemoryVolumeBackend(catalog, ReadStartup, cacheDirectory);
+        var backend = new MemoryVolumeBackend(catalog, ReadStartup, cacheDirectory, Metadata, PrecomputeSort);
         backend.StatusChanged += () => StatusChanged?.Invoke();
         backend.Progress += (message, failure) => Progress?.Invoke(message, failure);
         backend.FileActivity += (key, parents) => FileActivity?.Invoke(key, parents);
@@ -75,14 +83,15 @@ internal sealed class SearchHost
         await backend.RunAsync(token);
     }
 
-    private IEnumerable<ExitSnapshotVolume> ReadStartup(CancellationToken token, Action<NtfsVolume, bool, int> progress)
+    private IEnumerable<ExitSnapshotVolume> ReadStartup(CancellationToken token, Action<NtfsVolume, bool, int> progress,
+        Action<NtfsVolume, IndexMetadata> missingMetadata)
     {
         if (!File.Exists(snapshotPath)) yield break;
         Progress?.Invoke("正在加载上次退出保存的索引…", false);
         int parallelism = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount,
             VolumeResources.AvailableMemoryBytes()).CacheLoadLimit;
         using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, parallelism, progress,
-            requireCreationMetadata: true).GetEnumerator();
+            Metadata, missingMetadata, PrecomputeSort).GetEnumerator();
         while (true)
         {
             ExitSnapshotVolume current;
@@ -231,15 +240,16 @@ internal sealed class SearchHost
         }
     }
 
-    private sealed class SmokeBackend(int count) : IAutomaticVolumeBackend
+    private sealed class SmokeBackend(int count, SearchHost host) : IAutomaticVolumeBackend
     {
         internal static readonly NtfsVolume[] Volumes =
             [new("smoke-volume", @"C:\", 100, "测试"), new("smoke-empty", @"D:\", 100, "空卷")];
         public IReadOnlyList<NtfsVolume> Discover() => count == 1000 ? Volumes : [Volumes[0]];
         public string CacheRevision(NtfsVolume volume) => "v1";
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) =>
-            Task.FromResult<CachedVolume?>(new(volume == Volumes[0] ? DemoData.Create(count, includeDeepBranch: count == 1000)
-                : new IndexBuilder().Build(token), false));
+            Task.FromResult<CachedVolume?>(new(volume == Volumes[0]
+                ? DemoData.Create(count, includeDeepBranch: count == 1000, host.Metadata, host.PrecomputeSort)
+                : new IndexBuilder(0, fixedSize: false, host.Metadata, host.PrecomputeSort).Build(token), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;
         public string ReadStatus(NtfsVolume volume) => "测试磁盘已发现";
     }

@@ -100,7 +100,7 @@ internal static class MemoryCollector
                 token.ThrowIfCancellationRequested();
                 if (fence?.IsCompletedSuccessfully == true)
                 {
-                    // 后端建好四列排序后取一次水位。必须确认它之前的所有批次仍可连续交付。
+                    // 后端建好基线索引后取一次水位。必须确认它之前的所有批次仍可连续交付。
                     var current = NativeJournal.Query(volume);
                     current.Validate(position);
                     await writer.WriteAsync(CollectorFrameKind.JournalFence, body => CollectorWire.WritePosition(body, current.Position), token);
@@ -115,7 +115,7 @@ internal static class MemoryCollector
                 EnsureCurrentVolume(request.Volume);
                 var transaction = resolver.Resolve(batch, position, token);
                 foreach (var part in VolumeJournalService.SplitResolved(transaction, resolver, drive, token))
-                    await writer.WriteAsync(CollectorFrameKind.Changes, ChangeLogStore.Encode(new(++sequence, part)), token);
+                    await writer.WriteAsync(CollectorFrameKind.Changes, ChangeLogStore.Encode(new(++sequence, part), request.Metadata), token);
                 position = batch.To;
             }
         }
@@ -144,6 +144,7 @@ internal static class MemoryCollector
                     CollectorWire.WriteVolume(body, request.Volume);
                     body.Write(request.DataDirectory);
                     CollectorWire.WritePosition(body, start);
+                    body.Write((byte)request.Metadata);
                 }, token);
                 await output.WriteAsync(CollectorFrameKind.WorkerStarted, body => body.Write(child.Id), token);
                 await input.CopyToAsync(destination, 64 << 10, token);
@@ -168,11 +169,12 @@ internal static class MemoryCollector
         var volume = CollectorWire.ReadVolume(request);
         string data = request.ReadString();
         var start = CollectorWire.ReadPosition(request);
+        var metadata = (IndexMetadata)request.ReadByte();
         var closed = CancelWhenClosedAsync(pipe, lifetime, forceExit: true);
         try
         {
             EnsureCurrentVolume(volume);
-            var output = new MemoryScanWriter(pipe, lifetime.Token);
+            var output = new MemoryScanWriter(pipe, lifetime.Token, metadata);
             var progress = new ThrottledProgress(output.Progress);
             long skipped = 0;
             NtfsEnumerator.ReadRows(volume.Root[0], output.Start, output.Add, lifetime.Token, progress, value => skipped = value,

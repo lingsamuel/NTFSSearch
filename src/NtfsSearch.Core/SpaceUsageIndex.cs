@@ -278,7 +278,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath, bool includeFileR
     }
 
     private static Usage ReadSize(SearchIndex index, int id)
-        => index.Records[id].HasSize ? new(index.Size(id), 0) : new(0, 1);
+        => index.HasSize(id) ? new(index.Size(id), 0) : new(0, 1);
 
     internal readonly record struct Usage(Int128 Bytes, long Unknown)
     {
@@ -346,7 +346,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath, bool includeFileR
             {
                 if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
                 ref readonly var row = ref index.Records[id];
-                if (row.HasSize && row.SizeCode != 0) offsets[row.Directory + 1]++;
+                if (index.HasNonzeroSize(id)) offsets[row.Directory + 1]++;
             }
             for (int slot = 0; slot < index.Directories.Length; slot++)
             {
@@ -370,7 +370,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath, bool includeFileR
             {
                 if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
                 ref readonly var row = ref index.Records[id];
-                if (row.HasSize && row.SizeCode != 0) rows[position[row.Directory]++] = id;
+                if (index.HasNonzeroSize(id)) rows[position[row.Directory]++] = id;
             }
         }
 

@@ -51,6 +51,9 @@ internal sealed class DesktopSession
     }
 
     private bool SearchServiceEnabled => settings.SearchServiceEnabled ?? enableServiceByDefault;
+    private bool IndexesFileSize => host.Metadata.HasFlag(IndexMetadata.FileSize);
+    private bool IndexesModifiedTime => host.Metadata.HasFlag(IndexMetadata.ModifiedTime);
+    private bool SearchDirectorySizesEnabled => IndexesFileSize && settings.SearchDirectorySizes;
 
     internal async Task RunAsync(TextReader input)
     {
@@ -77,7 +80,9 @@ internal sealed class DesktopSession
             try { settings = DesktopSettings.Load(settingsDirectory); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
             { PublishError("action", "无法读取应用设置：" + error.Message); }
-        directorySizes.SetEnabled(settings.SearchDirectorySizes);
+        // 本进程的索引布局与排序策略在首次发布前固定，后续保存的选项在下次启动时读取。
+        host.ConfigureIndex(settings.Metadata, settings.PrecomputeSort);
+        directorySizes.SetEnabled(SearchDirectorySizesEnabled);
         string? serviceError = null;
         try { await searchService.InitializeAsync(SearchServiceEnabled, settings.SearchServicePort); }
         catch (ArgumentException error)
@@ -162,12 +167,20 @@ internal sealed class DesktopSession
     {
         try
         {
+            if (!IndexesFileSize && request.Type is ("spaceAnalysis" or "spacePath" or "spaceDetails" or "spaceExclude" or "spaceRestore"))
+                throw new InvalidOperationException("请在设置中开启「索引文件大小」并重启应用以使用空间分析。");
             switch (request.Type)
             {
                 case "query":
                     if (request.RequestId < options.RequestId) break;
-                    options = new(request.RequestId, request.Text, request.Sort,
-                        request.Descending, request.MatchPath, request.Offset);
+                    bool unavailableSort = request.Sort switch
+                    {
+                        SortField.Size => !IndexesFileSize,
+                        SortField.Modified => !IndexesModifiedTime,
+                        _ => false
+                    };
+                    options = new(request.RequestId, request.Text, unavailableSort ? SortField.Name : request.Sort,
+                        !unavailableSort && request.Descending, request.MatchPath, request.Offset);
                     RunQuery();
                     break;
                 case "quit":
@@ -462,7 +475,7 @@ internal sealed class DesktopSession
             Active = metrics?.ActiveRoots.Length ?? 0,
             ScanLimit = metrics?.ScanLimit,
             Refreshing = refreshing, DiscoveryComplete = discoveryComplete, CollectionCancelled = collectionCancelled,
-            settings.SkipExitIndexSave,
+            settings.SkipExitIndexSave, IndexFileSize = IndexesFileSize, IndexModifiedTime = IndexesModifiedTime,
             Progress = progress, Error = indexError
         });
     }
@@ -515,7 +528,15 @@ internal sealed class DesktopSession
         if (request.Enabled is not bool enable || request.SearchDirectorySizes is not bool includeDirectories)
             throw new ArgumentException("设置项不完整。");
         bool changeService = enable != SearchServiceEnabled || request.Port != settings.SearchServicePort;
-        var next = settings with { SearchDirectorySizes = includeDirectories, SkipExitIndexSave = request.SkipExitIndexSave };
+        var next = settings with
+        {
+            SearchDirectorySizes = includeDirectories,
+            SkipExitIndexSave = request.SkipExitIndexSave,
+            PrecomputeSort = request.PrecomputeSort ?? settings.PrecomputeSort,
+            IndexCreationTime = request.IndexCreationTime ?? settings.IndexCreationTime,
+            IndexModifiedTime = request.IndexModifiedTime ?? settings.IndexModifiedTime,
+            IndexFileSize = request.IndexFileSize ?? settings.IndexFileSize
+        };
         if (changeService)
             return searchService.ApplyAsync(enable, request.Port,
                 () => SaveSettings(next with { SearchServiceEnabled = enable, SearchServicePort = request.Port }));
@@ -525,7 +546,7 @@ internal sealed class DesktopSession
 
     private void RefreshDirectorySizePreference()
     {
-        if (!directorySizes.SetEnabled(settings.SearchDirectorySizes)) return;
+        if (!directorySizes.SetEnabled(SearchDirectorySizesEnabled)) return;
         // 丢弃展示页和在途搜索捕获的统计引用，再按原搜索条件刷新。
         displayedResult = null;
         displayedPage = null;
@@ -540,7 +561,9 @@ internal sealed class DesktopSession
     {
         settingsStatus = new(SearchServiceEnabled, settings.SearchServicePort,
             searchService.Address?.GetLeftPart(UriPartial.Authority), searchService.PortOverridden,
-            searchService.Running, Busy: false, error, settings.SearchDirectorySizes, settings.SkipExitIndexSave);
+            searchService.Running, Busy: false, error, settings.SearchDirectorySizes, settings.SkipExitIndexSave,
+            settings.PrecomputeSort, settings.IndexCreationTime, settings.IndexModifiedTime, settings.IndexFileSize,
+            settings.Metadata != host.Metadata || settings.PrecomputeSort != host.PrecomputeSort);
         publish(settingsStatus);
     }
 
@@ -579,7 +602,8 @@ internal sealed class DesktopSession
     private sealed record SearchOptions(long RequestId, string Text, SortField Sort, bool Descending, bool MatchPath, int Offset);
 
     private sealed record SettingsStatus(bool Enabled, int Port, string? Address, bool PortOverridden,
-        bool Running, bool Busy, string? Error, bool SearchDirectorySizes, bool SkipExitIndexSave)
+        bool Running, bool Busy, string? Error, bool SearchDirectorySizes, bool SkipExitIndexSave,
+        bool PrecomputeSort, bool IndexCreationTime, bool IndexModifiedTime, bool IndexFileSize, bool IndexRestartRequired)
     {
         public string Type => "settingsStatus";
     }
@@ -589,5 +613,6 @@ internal sealed class DesktopSession
         string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null,
         long DetailId = 0, string[]? DirectoryIds = null, string[]? ManualDirectoryIds = null, string[]? BranchIds = null,
         bool SkipExitIndexSave = false, string? FileReference = null, bool? Enabled = null, int Port = 0,
-        bool? SearchDirectorySizes = null);
+        bool? SearchDirectorySizes = null, bool? PrecomputeSort = null, bool? IndexCreationTime = null,
+        bool? IndexModifiedTime = null, bool? IndexFileSize = null);
 }

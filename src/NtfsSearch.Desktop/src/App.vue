@@ -48,6 +48,10 @@ let focusBeforeSettings: HTMLElement | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
 const hasAvailableIndex = computed(() => (result.value?.volumesReady ?? 0) > 0)
+const indexFileSize = computed(() => indexStatus.value?.indexFileSize ?? true)
+const indexModifiedTime = computed(() => indexStatus.value?.indexModifiedTime ?? true)
+const canViewSpace = computed(() => connected.value && !!indexStatus.value && indexFileSize.value && !saving.value)
+const spaceUnavailable = '空间分析需要启用「索引文件大小」。'
 const page = computed(() => result.value ? Math.floor(result.value.offset / result.value.pageSize) + 1 : 1)
 const pages = computed(() => result.value ? Math.max(1, Math.ceil(result.value.total / result.value.pageSize)) : 1)
 const canPage = computed(() => connected.value && !pending.value && !queryError.value)
@@ -96,6 +100,11 @@ function receive(message: DesktopMessage) {
     }
     case 'status':
       indexStatus.value = message
+      if ((sort.value === 2 && !indexFileSize.value) || (sort.value === 3 && !indexModifiedTime.value)) {
+        sort.value = 0
+        descending.value = false
+      }
+      if (showingSpace.value && !indexFileSize.value) closeSpace()
       break
     case 'settingsStatus':
       settingsStatus.value = message
@@ -262,7 +271,7 @@ function requestSettings(request: SettingsRequest) {
 }
 
 function viewSpace(root = '', directoryId = '', path?: string) {
-  if (!connected.value || saving.value) return
+  if (!canViewSpace.value) return
   const byPath = path !== undefined
   showingSpace.value = true
   spaceRoot.value = byPath ? space.value?.root ?? '' : root
@@ -366,12 +375,14 @@ onBeforeUnmount(() => {
           <option value="name">仅名称</option>
         </select>
         <button type="button" class="outlined-button toolbar-button" aria-label="空间分析"
-          :disabled="!connected || !!saving" @click="viewSpace()">空间分析</button>
+          :disabled="!canViewSpace" :title="indexFileSize ? undefined : spaceUnavailable"
+          :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="viewSpace()">空间分析</button>
         <button type="button" class="outlined-button toolbar-button" @click="openSettings">设置</button>
       </header>
 
       <SearchResults v-show="!showingSpace" ref="resultsTable" v-model:selected-key="selectedKey" :rows="fatal ? [] : result?.rows ?? []"
         :sort="sort" :descending="descending" :pending="pending" :empty-message="emptyMessage"
+        :index-file-size="indexFileSize" :index-modified-time="indexModifiedTime"
         @sort="sortBy" @action="fileAction">
         <div v-if="fatal" class="startup-error" role="alert">
           <strong>搜索服务异常</strong>
@@ -386,7 +397,7 @@ onBeforeUnmount(() => {
           <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
             {{ result.userMilliseconds.toFixed(2) }} ms
           </span>
-          <span v-if="!pending && (result?.directorySortPending || result?.directorySortFailed)" class="directory-sort-status"
+          <span v-if="indexFileSize && !pending && (result?.directorySortPending || result?.directorySortFailed)" class="directory-sort-status"
             :title="result.directorySortPending ? '正在计算目录大小，排序待更新' : '部分目录大小统计失败'">
             {{ result.directorySortPending ? '正在计算目录大小，排序待更新' : '部分目录大小统计失败' }}
           </span>

@@ -28,9 +28,9 @@ public class CompactIndexTests
     }
 
     [Fact]
-    public void RecordsUse20BytesAndKeepFullMetadataRange()
+    public void RecordsUse8BytesAndKeepFullMetadataRange()
     {
-        Assert.Equal(20, Marshal.SizeOf<IndexRecord>());
+        Assert.Equal(8, Marshal.SizeOf<IndexRecord>());
         var builder = new IndexBuilder();
         builder.Add(@"C:\", "known", long.MaxValue, long.MinValue);
         builder.Add(@"C:\", "unknown");
@@ -43,16 +43,58 @@ public class CompactIndexTests
         Assert.True(index.GetRow(2).IsDirectory);
         Assert.Null(index.GetRow(2).Size);
         Assert.Equal(long.MaxValue, index.GetRow(2).ModifiedUtcTicks);
-        var boundary = new IndexRecord(int.MaxValue, int.MaxValue, long.MinValue, int.MaxValue, false, true);
+        var boundary = new IndexRecord(int.MaxValue, int.MaxValue, false, true);
         Assert.Equal(int.MaxValue, boundary.NameId);
         Assert.Equal(int.MaxValue, boundary.Directory);
-        Assert.True(boundary.HasSize);
         Assert.True(boundary.HasModified);
         Assert.False(boundary.IsDirectory);
-        var directory = new IndexRecord(int.MaxValue, uint.MaxValue, long.MaxValue, int.MaxValue, true, false);
+        var directory = new IndexRecord(int.MaxValue, int.MaxValue, true, false);
         Assert.True(directory.IsDirectory);
         Assert.False(directory.HasModified);
         Assert.Equal(int.MaxValue, directory.Directory);
+    }
+
+    [Theory]
+    [InlineData(0, 8)]
+    [InlineData(1, 12)]
+    [InlineData(2, 16)]
+    [InlineData(3, 20)]
+    [InlineData(4, 16)]
+    [InlineData(5, 20)]
+    [InlineData(6, 24)]
+    [InlineData(7, 28)]
+    public void EnabledMetadataControlsPayloadAndValuesAfterIdentitySorting(int flags, int rowBytes)
+    {
+        var metadata = (IndexMetadata)flags;
+        var builder = new IndexBuilder(1, fixedSize: false, metadata);
+        builder.Add(@"C:\", "unknown", fileReference: 25, parentReference: 5);
+        builder.Add(@"C:\", "large", long.MaxValue, long.MinValue, fileReference: 20, parentReference: 5, createdUtcTicks: long.MaxValue);
+        builder.Add(@"C:\", "zero", 0, 0, fileReference: 10, parentReference: 5, createdUtcTicks: long.MinValue);
+        var index = builder.Build();
+        bool sizeEnabled = metadata.HasFlag(IndexMetadata.FileSize);
+        bool modifiedEnabled = metadata.HasFlag(IndexMetadata.ModifiedTime);
+        bool creationEnabled = metadata.HasFlag(IndexMetadata.CreationTime);
+
+        Assert.Equal(metadata, index.Metadata);
+        Assert.Equal(sizeEnabled, index.SizeCodes is not null);
+        Assert.Equal(sizeEnabled, index.BigSizes.Length != 0);
+        Assert.Equal(modifiedEnabled, index.ModifiedTimes is not null);
+        Assert.Equal(creationEnabled, index.CreationTimes is not null);
+        Assert.Equal(creationEnabled, index.KnownCreationTimes is not null);
+        Assert.Equal(rowBytes * 3 + (sizeEnabled ? sizeof(long) : 0) + (creationEnabled ? sizeof(ulong) : 0), index.Statistics.RecordBytes);
+        Assert.Equal(new[] { "zero", "large", "unknown" }, Enumerable.Range(0, index.Count).Select(id => index.GetRow(id).Name));
+        Assert.Equal(sizeEnabled ? 0L : null, index.GetRow(0).Size);
+        Assert.Equal(modifiedEnabled ? 0L : null, index.GetRow(0).ModifiedUtcTicks);
+        Assert.Equal(creationEnabled ? long.MinValue : null, index.GetRow(0).CreatedUtcTicks);
+        Assert.Equal(sizeEnabled ? long.MaxValue : null, index.GetRow(1).Size);
+        Assert.Equal(modifiedEnabled ? long.MinValue : null, index.GetRow(1).ModifiedUtcTicks);
+        Assert.Equal(creationEnabled ? long.MaxValue : null, index.GetRow(1).CreatedUtcTicks);
+        Assert.Null(index.GetRow(2).Size);
+        Assert.Null(index.GetRow(2).ModifiedUtcTicks);
+        Assert.Null(index.GetRow(2).CreatedUtcTicks);
+        Assert.Equal(sizeEnabled ? 1 : 0, index.Search("", filter: new(MaxSizeBytes: 0)).TotalCount);
+        Assert.Equal(modifiedEnabled ? 1 : 0, index.Search("", filter: new(ModifiedFromUtcTicks: 0)).TotalCount);
+        Assert.Equal(creationEnabled ? 1 : 0, index.Search("", filter: new(CreatedFromUtcTicks: 0)).TotalCount);
     }
 
     [Fact]
@@ -97,6 +139,44 @@ public class CompactIndexTests
             for (int i = 0; i < sizes.Length; i++) Assert.Equal(sizes[i], restored.GetRow(i).Size);
             Assert.Equal(sizes.Skip(1).Append(null), restored.Search("", SortField.Size).Rows.Select(row => row.Size));
             Assert.Equal(sizes.Skip(1).Reverse().Append(null), restored.Search("", SortField.Size, true).Rows.Select(row => row.Size));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StaticSnapshotRetainsPackedRowsAndOnlyLoadsRequestedColumns(bool includeCreation)
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, $"metadata-static-{Guid.NewGuid():N}.ntidx");
+        try
+        {
+            var builder = new IndexBuilder();
+            builder.Add(@"C:\", "z", long.MaxValue, long.MinValue, createdUtcTicks: includeCreation ? 7 : null);
+            builder.Add(@"C:\", "a", 0, 0);
+            var original = builder.Build();
+            SnapshotStore.Save(original, path);
+            byte[] bytes = File.ReadAllBytes(path);
+            Assert.Equal((includeCreation ? "NTSIDX05"u8 : "NTSIDX04"u8).ToArray(), bytes[..8]);
+            int rowStart = 40 + sizeof(int) + @"C:\".Length * sizeof(char)
+                + original.Names.Descriptors.Length * sizeof(ulong)
+                + original.Names.Chunks.Sum(chunk => sizeof(int) + chunk.Length * sizeof(char))
+                + original.Names.AsciiChunks.Sum(chunk => sizeof(int) + chunk.Length)
+                + original.BigSizes.Length * sizeof(long);
+            var first = bytes.AsSpan(rowStart, 20);
+            Assert.Equal(long.MinValue, BinaryPrimitives.ReadInt64LittleEndian(first));
+            Assert.Equal(0x80000000U, BinaryPrimitives.ReadUInt32LittleEndian(first[8..]));
+            Assert.Equal(0x80000000U, BinaryPrimitives.ReadUInt32LittleEndian(first[12..]));
+            Assert.Equal(0U, BinaryPrimitives.ReadUInt32LittleEndian(first[16..]));
+            Assert.Equal(original.Search("").Rows, SnapshotStore.Load(path).Search("").Rows);
+
+            var projected = SnapshotStore.Load(path, IndexMetadata.ModifiedTime);
+            Assert.Equal(2 * 16, projected.Statistics.RecordBytes);
+            Assert.Equal(new long?[] { long.MinValue, 0 }, projected.Search("", SortField.Modified).Rows.Select(row => row.ModifiedUtcTicks));
+            Assert.Null(projected.SizeCodes);
+            Assert.Empty(projected.BigSizes);
+            Assert.Null(projected.CreationTimes);
+            Assert.Null(projected.KnownCreationTimes);
         }
         finally { File.Delete(path); }
     }

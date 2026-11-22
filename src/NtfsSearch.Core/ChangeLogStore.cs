@@ -284,19 +284,21 @@ public sealed class ChangeLogStore : IDisposable
         if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), digest)) throw new InvalidDataException("变化事务校验失败。");
         return Decode(payload);
     }
-    internal static byte[] Encode(CommittedChange change)
+    internal static byte[] Encode(CommittedChange change, IndexMetadata metadata = IndexMetadata.All)
     {
         using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
         var transaction = change.Transaction;
         writer.Write(change.Sequence); writer.Write(transaction.From.JournalId); writer.Write(transaction.From.NextUsn); writer.Write(transaction.To.NextUsn);
         // 旧事务在此写非负的文件数。用反码区分带创建时间的事务，可在同一日志继续追加。
-        bool hasCreation = transaction.Files.Any(file => file.CreatedUtcTicks.HasValue);
+        bool hasCreation = metadata.HasFlag(IndexMetadata.CreationTime) && transaction.Files.Any(file => file.CreatedUtcTicks.HasValue);
         writer.Write(hasCreation ? ~transaction.Files.Count : transaction.Files.Count);
         foreach (var file in transaction.Files)
         {
             writer.Write(file.FileReference); writer.Write(file.IsDirectory);
-            writer.Write(file.Size.HasValue); if (file.Size is long size) writer.Write(size);
-            writer.Write(file.ModifiedUtcTicks.HasValue); if (file.ModifiedUtcTicks is long ticks) writer.Write(ticks);
+            long? size = metadata.HasFlag(IndexMetadata.FileSize) ? file.Size : null;
+            long? modified = metadata.HasFlag(IndexMetadata.ModifiedTime) ? file.ModifiedUtcTicks : null;
+            writer.Write(size.HasValue); if (size is long bytes) writer.Write(bytes);
+            writer.Write(modified.HasValue); if (modified is long ticks) writer.Write(ticks);
             if (hasCreation)
             {
                 writer.Write(file.CreatedUtcTicks.HasValue);

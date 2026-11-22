@@ -14,12 +14,13 @@ public class IndexFingerprintTests
         {
             var builder = new IndexBuilder();
             foreach (int id in reverse ? new[] { 11, 12, 10 } : new[] { 10, 11, 12 })
-                builder.Add(@"C:\", id == 11 ? "unique\ud800" : "repeat", fileReference: (ulong)id, parentReference: 5);
+                builder.Add(@"C:\", id == 11 ? "unique\ud800" : "repeat", modifiedUtcTicks: id == 12 ? 0 : null,
+                    fileReference: (ulong)id, parentReference: 5);
             return builder.Build();
         }
         var a = Build(false); var b = Build(true);
         Assert.NotEqual(a.Records[0].NameId, b.Records[0].NameId);
-        b.Records[0] = new(b.Records[0].NameId, uint.MaxValue, long.MaxValue, 0, false, false);
+        b.ModifiedTimes![0] = long.MaxValue;
         Assert.Equal(IndexFingerprint.Canonical(a, default), IndexFingerprint.Canonical(b, default));
         Assert.Equal(IndexFingerprint.Canonical(a, default), IndexFingerprint.Canonical(
             a.WithView([1UL], [@"C:\moved\"], default), default));

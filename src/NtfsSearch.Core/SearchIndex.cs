@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 
 namespace NtfsSearch.Core;
@@ -7,6 +6,14 @@ public sealed partial class SearchIndex
 {
     internal readonly NameArena Names;
     internal readonly IndexRecord[] Records;
+    internal IndexMetadata Metadata { get; }
+    // 静态快照可能早于某个字段。实时更新仍按 Metadata 采集，另存退出快照时才检查已有覆盖。
+    internal IndexMetadata AvailableMetadata { get; }
+    internal bool PrecomputeSort { get; }
+    private SearchIndex? sortSource;
+    internal SearchIndex SortSource => sortSource ?? this;
+    internal readonly uint[]? SizeCodes;
+    internal readonly long[]? ModifiedTimes;
     internal readonly long[] BigSizes;
     // 两列同时存在。独立位图标记缺失值，时间列保留完整的64位值域。
     internal readonly long[]? CreationTimes;
@@ -78,8 +85,16 @@ public sealed partial class SearchIndex
     {
         var view = new SearchIndex(Names, Records, directories, token, storedOrders: orders, storedKnown: knownCounts,
             fileReferences: FileReferences, directoryReferences: DirectoryReferences, hiddenRows: hidden, storageId: storageId ?? StorageId, bigSizes: BigSizes,
-            creationTimes: CreationTimes, knownCreationTimes: KnownCreationTimes);
+            creationTimes: CreationTimes, knownCreationTimes: KnownCreationTimes,
+            sizeCodes: SizeCodes, modifiedTimes: ModifiedTimes, metadata: Metadata, precomputeSort: PrecomputeSort,
+            availableMetadata: AvailableMetadata);
         view.identitySource = IdentitySource;
+        if (!PrecomputeSort)
+        {
+            // 仅可见性变化时沿用同一个排序来源，父路径变化时重新计算有效顺序。
+            if (ReferenceEquals(directories, Directories)) view.sortSource = SortSource;
+            return view;
+        }
         if (!ReferenceEquals(directories, Directories))
         {
             // 以最初快照排序为参照累计修正，只保留受影响ID，查询时归并两个有序流。
@@ -99,11 +114,16 @@ public sealed partial class SearchIndex
                 for (int field = 0; field < 4; field++)
                 {
                     token.ThrowIfCancellationRequested();
+                    if (!HasSortableMetadata((SortField)field))
+                    {
+                        view.corrections[field] = view.corrections[(int)SortField.Path];
+                        continue;
+                    }
                     var sorted = affected.ToArray();
                     SortIndex.Sort(sorted, (a, b) => view.Compare(a, b, (SortField)field), token);
                     view.corrections[field] = sorted;
                     int known = sorted.Length;
-                    while (known > 0 && !IsKnown(Records[sorted[known - 1]], (SortField)field)) known--;
+                    while (known > 0 && !IsKnown(sorted[known - 1], (SortField)field)) known--;
                     view.correctionKnown[field] = known;
                 }
             }
@@ -118,14 +138,19 @@ public sealed partial class SearchIndex
     internal SearchIndex(NameArena names, IndexRecord[] records, string[] directories,
         CancellationToken cancellationToken, IProgress<string>? progress = null, SortPermutation[]? storedOrders = null, int[]? storedKnown = null,
         ulong[]? fileReferences = null, ulong[]? directoryReferences = null, ulong[]? hiddenRows = null, string? storageId = null, long[]? bigSizes = null,
-        long[]? creationTimes = null, ulong[]? knownCreationTimes = null)
+        long[]? creationTimes = null, ulong[]? knownCreationTimes = null, uint[]? sizeCodes = null, long[]? modifiedTimes = null,
+        IndexMetadata metadata = IndexMetadata.All, bool precomputeSort = true, IndexMetadata? availableMetadata = null)
     {
         Names = names; Records = records; Directories = directories;
-        BigSizes = bigSizes ?? [];
+        Metadata = metadata;
+        AvailableMetadata = metadata & (availableMetadata ?? IndexMetadata.All);
+        PrecomputeSort = precomputeSort;
+        SizeCodes = sizeCodes; ModifiedTimes = modifiedTimes; BigSizes = bigSizes ?? [];
         CreationTimes = creationTimes; KnownCreationTimes = knownCreationTimes;
         FileReferences = fileReferences; DirectoryReferences = directoryReferences; HiddenRows = hiddenRows;
         StorageId = storageId ?? Guid.NewGuid().ToString("N");
         VisibleCount = Count - (hiddenRows?.Sum(w => System.Numerics.BitOperations.PopCount(w)) ?? 0);
+        if (!precomputeSort) return;
         if (storedOrders is not null && storedKnown is not null)
         {
             Array.Copy(storedOrders, orders, 4); Array.Copy(storedKnown, knownCounts, 4);
@@ -138,41 +163,74 @@ public sealed partial class SearchIndex
         {
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report($"建立 {field} 排序（{Count:N0} 条，可取消）…");
-            if ((field == SortField.Size && !Records.Any(r => r.HasSize))
-                || (field == SortField.Modified && !Records.Any(r => r.HasModified)))
+            if (!HasSortableMetadata(field))
             {
                 orders[(int)field] = orders[(int)SortField.Path];
-                knownCounts[(int)field] = 0;
                 continue;
             }
-            int[] order = SortPermutation.UsesPackedStorage(Count)
-                ? temporaryOrder ??= new int[Count] : IndexArrays.Persistent<int>(Count);
-            for (int id = 0; id < Count; id++) order[id] = id;
-            bool sorted = true;
-            for (int i = 1; i < Count; i++)
-            {
-                if ((i & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
-                if (Compare(order[i - 1], order[i], field) > 0) { sorted = false; break; }
-            }
-            if (!sorted)
-            {
-                // 四列复用同一份临时排列，避免大对象堆留下四份待回收的巨型数组。
-                if (Count > 1_000_000) sortScratch ??= new int[Count];
-                order = SortIndex.Sort(order, (a, b) => Compare(a, b, field), cancellationToken, sortScratch);
-            }
-            orders[(int)field] = SortPermutation.TakeSorted(order, cancellationToken);
-            int known = Count;
-            while (known > 0 && !IsKnown(Records[order[known - 1]], field)) known--;
-            knownCounts[(int)field] = known;
+            var sorted = BuildSortOrder(field, cancellationToken, ref sortScratch, ref temporaryOrder);
+            orders[(int)field] = sorted.Order;
+            knownCounts[(int)field] = sorted.Known;
         }
         progress?.Report("排序索引已就绪。");
     }
 
+    private bool HasSortableMetadata(SortField field) => field switch
+    {
+        SortField.Size => SizeCodes is not null && Array.Exists(SizeCodes, static code => code != uint.MaxValue),
+        SortField.Modified => ModifiedTimes is not null && Array.Exists(Records, static row => row.HasModified),
+        _ => true
+    };
+
+    private sealed record RowSortOrder(SortPermutation Order, int Known);
+
+    private RowSortOrder BuildSortOrder(SortField field, CancellationToken token)
+    {
+        int[]? scratch = null, temporary = null;
+        return BuildSortOrder(field, token, ref scratch, ref temporary);
+    }
+
+    private RowSortOrder BuildSortOrder(SortField field, CancellationToken token,
+        ref int[]? sortScratch, ref int[]? temporaryOrder)
+    {
+        int[] order = SortPermutation.UsesPackedStorage(Count)
+            ? temporaryOrder ??= new int[Count] : IndexArrays.Persistent<int>(Count);
+        for (int id = 0; id < Count; id++)
+        {
+            if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
+            order[id] = id;
+        }
+        bool sorted = true;
+        for (int i = 1; i < Count; i++)
+        {
+            if ((i & 65535) == 0) token.ThrowIfCancellationRequested();
+            if (Compare(order[i - 1], order[i], field) > 0) { sorted = false; break; }
+        }
+        if (!sorted)
+        {
+            // 多列预计算复用临时排列和归并缓冲，减少构建期间分配的大数组。
+            if (Count > 1_000_000) sortScratch ??= new int[Count];
+            order = SortIndex.Sort(order, (a, b) => Compare(a, b, field), token, sortScratch);
+        }
+        var frozen = SortPermutation.TakeSorted(order, token);
+        int known = Count;
+        while (known > 0 && !IsKnown(order[known - 1], field))
+        {
+            if ((known & 65535) == 0) token.ThrowIfCancellationRequested();
+            known--;
+        }
+        return new(frozen, known);
+    }
+
     internal ReadOnlySpan<char> Name(int id, Span<char> scratch) => Names.Get(Records[id].NameId, scratch);
     internal ReadOnlyMemory<char> NameMemory(int id) => Names.GetMemory(Records[id].NameId);
+    internal bool HasSize(int id) => SizeCodes is not null && SizeCodes[id] != uint.MaxValue;
+    internal bool HasNonzeroSize(int id) => SizeCodes is not null && SizeCodes[id] is > 0 and < uint.MaxValue;
+    internal bool HasModified(int id) => Records[id].HasModified;
+    internal long Modified(int id) => ModifiedTimes?[id] ?? 0;
     internal long Size(int id)
     {
-        uint code = Records[id].SizeCode;
+        uint code = SizeCodes?[id] ?? uint.MaxValue;
         return code <= int.MaxValue ? code : code == uint.MaxValue ? -1 : BigSizes[(int)(code & int.MaxValue)];
     }
 
@@ -185,29 +243,41 @@ public sealed partial class SearchIndex
         ref readonly var r = ref Records[id];
         Span<char> scratch = stackalloc char[255];
         string name = Name(id, scratch).ToString();
-        return new(id, name, Directories[r.Directory] + name, r.HasSize ? Size(id) : null,
-            r.HasModified ? r.Modified : null, r.IsDirectory) { CreatedUtcTicks = CreatedUtcTicks(id) };
+        return new(id, name, Directories[r.Directory] + name, HasSize(id) ? Size(id) : null,
+            HasModified(id) ? Modified(id) : null, r.IsDirectory) { CreatedUtcTicks = CreatedUtcTicks(id) };
     }
 
     public IndexStatistics Statistics => new(Count, Directories.Length, Names.CapacityBytes,
-        (long)Count * Marshal.SizeOf<IndexRecord>() + (long)BigSizes.Length * sizeof(long)
+        (long)Count * Unsafe.SizeOf<IndexRecord>() + (long)BigSizes.Length * sizeof(long)
+            + (long)(SizeCodes?.Length ?? 0) * sizeof(uint) + (long)(ModifiedTimes?.Length ?? 0) * sizeof(long)
             + (long)(CreationTimes?.Length ?? 0) * sizeof(long) + (long)(KnownCreationTimes?.Length ?? 0) * sizeof(ulong),
-        orders.Distinct<SortPermutation>(ReferenceEqualityComparer.Instance).Sum(a => a.StorageBytes),
+        PrecomputeSort ? orders.Distinct<SortPermutation>(ReferenceEqualityComparer.Instance).Sum(a => a.StorageBytes) : 0,
         Directories.Sum(p => (long)p.Length * sizeof(char) + 32));
 
-    internal SortPermutation SortOrder(SortField field) => orders[(int)field];
-    internal IEnumerable<int> EnumerateSortOrder(SortField field, CancellationToken token)
-        => EnumerateOrdered(field, false, token);
-
-    private IEnumerable<int> EnumerateOrdered(SortField field, bool descending, CancellationToken token, bool? knownOnly = null)
+    internal (SortPermutation Order, int Known) ResolveSortOrder(SortField field, CancellationToken token,
+        SearchSortSelection? selection = null)
     {
         int f = (int)field;
-        int start = knownOnly == false ? knownCounts[f] : 0;
-        int end = knownOnly == true ? knownCounts[f] : Count;
+        if (PrecomputeSort) return (orders[f], knownCounts[f]);
+        var source = SortSource;
+        var sorted = selection is null ? source.BuildSortOrder(field, token)
+            : selection.Get(source, () => source.BuildSortOrder(field, token), token);
+        return (sorted.Order, sorted.Known);
+    }
+
+    internal SortPermutation SortOrder(SortField field, CancellationToken token = default) => ResolveSortOrder(field, token).Order;
+    internal IEnumerable<int> EnumerateSortOrder(SortField field, CancellationToken token, SearchSortSelection? selection = null)
+        => EnumerateOrdered(field, false, token, selection: selection);
+
+    private IEnumerable<int> EnumerateOrdered(SortField field, bool descending, CancellationToken token, bool? knownOnly = null,
+        SearchSortSelection? selection = null)
+    {
+        int f = (int)field;
+        var (order, known) = ResolveSortOrder(field, token, selection);
+        int start = knownOnly == false ? known : 0;
+        int end = knownOnly == true ? known : Count;
         if (corrections is null)
         {
-            var order = orders[f];
-            int known = knownCounts[f];
             for (int position = start; position < end; position++)
             {
                 if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
@@ -231,12 +301,12 @@ public sealed partial class SearchIndex
             else if (old < end) { yield return OrderedId(field, descending, old); old++; }
         }
     }
-    internal int KnownCount(SortField field) => knownCounts[(int)field];
+    internal int KnownCount(SortField field) => ResolveSortOrder(field, default).Known;
 
-    internal static bool IsKnown(in IndexRecord r, SortField field) => field switch
+    internal bool IsKnown(int id, SortField field) => field switch
     {
-        SortField.Size => r.HasSize,
-        SortField.Modified => r.HasModified,
+        SortField.Size => HasSize(id),
+        SortField.Modified => HasModified(id),
         _ => true
     };
 
@@ -244,14 +314,13 @@ public sealed partial class SearchIndex
 
     internal static int CompareAcross(SearchIndex left, int a, SearchIndex right, int b, SortField field, bool descending)
     {
-        ref readonly var x = ref left.Records[a]; ref readonly var y = ref right.Records[b];
-        bool ak = IsKnown(x, field), bk = IsKnown(y, field);
+        bool ak = left.IsKnown(a, field), bk = right.IsKnown(b, field);
         if (ak != bk) return ak ? -1 : 1;
         int compare = field switch
         {
             SortField.Name => CompareNames(left, a, right, b),
             SortField.Size => ak ? left.Size(a).CompareTo(right.Size(b)) : 0,
-            SortField.Modified => ak ? x.Modified.CompareTo(y.Modified) : 0,
+            SortField.Modified => ak ? left.Modified(a).CompareTo(right.Modified(b)) : 0,
             _ => 0
         };
         compare = ComparePathAndRow(left, a, right, b, compare);
@@ -259,7 +328,7 @@ public sealed partial class SearchIndex
     }
 
     internal Int128? EffectiveSize(int id, DirectorySizeOrder? directories)
-        => Records[id].IsDirectory ? directories?.GetSize(id) : Records[id].HasSize ? Size(id) : null;
+        => Records[id].IsDirectory ? directories?.GetSize(id) : HasSize(id) ? Size(id) : null;
 
     internal static int CompareSizes(SearchIndex left, int a, Int128? leftSize,
         SearchIndex right, int b, Int128? rightSize, bool descending = false)

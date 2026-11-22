@@ -6,8 +6,8 @@ using NtfsSearch.Core;
 namespace NtfsSearch.App;
 
 internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
-    Func<CancellationToken, Action<NtfsVolume, bool, int>, IEnumerable<ExitSnapshotVolume>> startup,
-    string? cacheDirectory = null)
+    Func<CancellationToken, Action<NtfsVolume, bool, int>, Action<NtfsVolume, IndexMetadata>, IEnumerable<ExitSnapshotVolume>> startup,
+    string? cacheDirectory = null, IndexMetadata metadata = IndexMetadata.All, bool precomputeSort = true)
 {
     private readonly object gate = new();
     private readonly Dictionary<string, VolumeState> volumes = new(StringComparer.Ordinal);
@@ -252,7 +252,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
 
     private void Restore(CancellationToken token)
     {
-        foreach (var view in startup(token, ReportRestore))
+        foreach (var view in startup(token, ReportRestore, ReportMissingMetadata))
         {
             token.ThrowIfCancellationRequested();
             lock (gate)
@@ -270,7 +270,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         {
             restored = true;
             if (!suspended)
-                foreach (var volume in volumes.Values.Where(v => v.View is null && !v.Refresh))
+                foreach (var volume in volumes.Values.Where(v => v.View is null && !v.Refresh && !v.SnapshotMissingMetadata))
                     volume.Status = new(volume.Volume.Root, NoSnapshot);
         }
         StatusChanged?.Invoke();
@@ -289,8 +289,24 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         {
             if (suspended || !volumes.TryGetValue(VolumeCache.Key(source), out var volume)
                 || volume.Refresh || volume.View is not null) return;
-            string stage = sorting ? "正在重建快照的四列排序" : "正在加载退出快照";
+            string stage = sorting ? "正在重建快照排序" : "正在加载退出快照";
             volume.Status = new(volume.Volume.Root, $"{stage}，共 {rows:N0} 项…");
+        }
+        StatusChanged?.Invoke();
+    }
+
+    private void ReportMissingMetadata(NtfsVolume source, IndexMetadata missing)
+    {
+        lock (gate)
+        {
+            if (suspended || !volumes.TryGetValue(VolumeCache.Key(source), out var volume)
+                || volume.Refresh || volume.View is not null) return;
+            var fields = new List<string>(3);
+            if ((missing & IndexMetadata.FileSize) != 0) fields.Add("文件大小");
+            if ((missing & IndexMetadata.ModifiedTime) != 0) fields.Add("修改时间");
+            if ((missing & IndexMetadata.CreationTime) != 0) fields.Add("创建时间");
+            volume.SnapshotMissingMetadata = true;
+            volume.Status = new(volume.Volume.Root, $"退出快照缺少{string.Join("、", fields)}，等待全卷采集…");
         }
         StatusChanged?.Invoke();
     }
@@ -330,6 +346,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         internal bool Confirmed;
         internal bool Monitoring;
         internal bool RestoredFromSnapshot;
+        internal bool SnapshotMissingMetadata;
         internal ExitSnapshotVolume? View;
         internal DirectoryGraph? Graph;
         internal VolumeStatus Status = new(volume.Root, "正在检查退出快照…");

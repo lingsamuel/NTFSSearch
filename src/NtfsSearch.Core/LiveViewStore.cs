@@ -80,7 +80,8 @@ internal static class LiveViewStore
             if (!Guid.TryParseExact(id, "N", out _)) throw new InvalidDataException("增量段名称无效。");
             int rows = Count(reader, int.MaxValue, 1);
             string segmentRoot = path.EndsWith(".bak", StringComparison.Ordinal) ? path[..^4] : path;
-            var layer = i == 0 ? baseIndex : SnapshotStore.Load(Path.Combine(segmentRoot + ".segments", id + ".ntidx"), token);
+            var layer = i == 0 ? baseIndex : SnapshotStore.Load(Path.Combine(segmentRoot + ".segments", id + ".ntidx"),
+                baseIndex.Metadata, token, precomputeSort: baseIndex.PrecomputeSort);
             if (rows != layer.Count) throw new InvalidDataException("检查点段记录数不符。");
             ulong[]? hidden = reader.ReadBoolean() ? ReadArray(stream, (int)(((long)layer.Count + 63) / 64), payload, token) : null;
             if (hidden is not null && layer.Count % 64 != 0 && (hidden[^1] >> (layer.Count % 64)) != 0)

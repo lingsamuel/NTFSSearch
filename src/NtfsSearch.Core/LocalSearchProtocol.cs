@@ -8,6 +8,7 @@ internal static class LocalSearchEndpoint
     internal const int DefaultPort = 18791;
     internal const string StatusPath = "/v1/status";
     internal const string SearchPath = "/v1/search";
+    internal static readonly TimeSpan OnDemandSortTimeout = TimeSpan.FromSeconds(60);
 
     internal static bool IsPortOverridden(string? portOverride) => !string.IsNullOrWhiteSpace(portOverride);
 

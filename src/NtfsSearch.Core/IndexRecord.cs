@@ -2,28 +2,36 @@ using System.Runtime.InteropServices;
 
 namespace NtfsSearch.Core;
 
-// 两个ID的高位存标志；大小用直接值或旁表码，修改时间保留完整64位值域。
-[StructLayout(LayoutKind.Sequential, Pack = 4)]
+[Flags]
+internal enum IndexMetadata
+{
+    None = 0,
+    FileSize = 1,
+    ModifiedTime = 2,
+    CreationTime = 4,
+    All = FileSize | ModifiedTime | CreationTime
+}
+
+// 两个ID的高位保存目录类型和修改时间的已知标志，其余元数据按需独立存放。
+[StructLayout(LayoutKind.Sequential)]
 internal readonly struct IndexRecord
 {
-    public readonly long Modified;
-    public readonly uint SizeCode;
     private readonly uint nameAndModified;
     private readonly uint directoryAndType;
     public int NameId => (int)(nameAndModified & int.MaxValue);
     public int Directory => (int)(directoryAndType & int.MaxValue);
     public bool IsDirectory => (directoryAndType & 0x80000000U) != 0;
-    public bool HasSize => SizeCode != uint.MaxValue;
     public bool HasModified => (nameAndModified & 0x80000000U) != 0;
 
-    internal IndexRecord(int nameId, uint sizeCode, long modified, int directory, bool isDirectory, bool hasModified)
+    internal IndexRecord(int nameId, int directory, bool isDirectory, bool hasModified)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(nameId);
         ArgumentOutOfRangeException.ThrowIfNegative(directory);
-        SizeCode = isDirectory ? uint.MaxValue : sizeCode; Modified = modified;
         nameAndModified = (uint)nameId | (hasModified ? 0x80000000U : 0);
         directoryAndType = (uint)directory | (isDirectory ? 0x80000000U : 0);
     }
+
+    internal IndexRecord WithoutModified() => new(NameId, Directory, IsDirectory, hasModified: false);
 }
 
 public enum SortField { Name, Path, Size, Modified }

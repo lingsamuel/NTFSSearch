@@ -9,6 +9,8 @@ const props = defineProps<{
   descending: boolean
   pending: boolean
   emptyMessage: string
+  indexFileSize: boolean
+  indexModifiedTime: boolean
 }>()
 const selected = defineModel<string | null>('selectedKey', { required: true })
 const emit = defineEmits<{
@@ -22,6 +24,8 @@ const columns = [
   { field: 2, name: '大小', css: 'size' },
   { field: 3, name: '修改时间', css: 'modified' },
 ] as const
+const visibleColumns = computed(() => columns.filter(({ field }) =>
+  (field !== 2 || props.indexFileSize) && (field !== 3 || props.indexModifiedTime)))
 const actions = [
   { type: 'open', label: '打开', shortcut: 'Enter' },
   { type: 'reveal', label: '打开所在目录' },
@@ -32,7 +36,7 @@ const grid = ref<HTMLTableElement>()
 const menuElement = ref<HTMLDivElement>()
 const menu = shallowRef<{ key: string; left: number; top: number }>()
 const columnWidths = shallowRef<number[]>()
-const columnDrag = shallowRef<{ field: SortField; pointer: number; startX: number; widths: number[] }>()
+const columnDrag = shallowRef<{ index: number; pointer: number; startX: number; widths: number[] }>()
 const rowExtensions = computed(() => props.rows.map(fileExtension))
 const rowParts = computed(() => props.rows.map(row => ({
   name: textParts(row.name, row.matchRanges, row.fullPath.length - row.name.length),
@@ -91,10 +95,10 @@ function requestVisibleFileTypes(entries: IntersectionObserverEntry[]) {
   setVisibleFileTypes(extensions)
 }
 
-function startColumnResize(event: PointerEvent, field: SortField) {
+function startColumnResize(event: PointerEvent, index: number) {
   if (event.button !== 0 || !event.isPrimary || !grid.value?.tHead) return
   const widths = Array.from(grid.value.tHead.rows[0].cells, cell => cell.offsetWidth)
-  columnDrag.value = { field, pointer: event.pointerId, startX: event.clientX, widths }
+  columnDrag.value = { index, pointer: event.pointerId, startX: event.clientX, widths }
   const handle = event.currentTarget as HTMLElement
   handle.setPointerCapture(event.pointerId)
 }
@@ -104,7 +108,7 @@ function resizeColumn(event: PointerEvent) {
   if (!drag || event.pointerId !== drag.pointer) return
   // 第一拖以实际列宽为起点，锁住其余列，避免表格重新分配列宽。
   const widths = drag.widths.slice()
-  widths[drag.field] = Math.max(64, Math.round(widths[drag.field] + event.clientX - drag.startX))
+  widths[drag.index] = Math.max(64, Math.round(widths[drag.index] + event.clientX - drag.startX))
   columnWidths.value = widths
 }
 
@@ -205,6 +209,10 @@ function handleGridKey(event: KeyboardEvent) {
   event.preventDefault()
 }
 
+watch(visibleColumns, () => {
+  columnDrag.value = undefined
+  columnWidths.value = undefined
+})
 watch(rowExtensions, observeFileTypes, { flush: 'post' })
 onMounted(() => {
   window.addEventListener('pointerdown', closeMenu)
@@ -228,18 +236,18 @@ defineExpose({ focusSelection, scrollToStart })
         :aria-activedescendant="selected ? 'result-' + rows.findIndex(row => row.key === selected) : undefined"
         @keydown="handleGridKey">
         <colgroup>
-          <col v-for="column in columns" :key="column.field" :class="'column-' + column.css"
-            :style="columnWidths ? { width: columnWidths[column.field] + 'px' } : undefined">
+          <col v-for="(column, index) in visibleColumns" :key="column.field" :class="'column-' + column.css"
+            :style="columnWidths ? { width: columnWidths[index] + 'px' } : undefined">
         </colgroup>
         <thead>
           <tr>
-            <th v-for="column in columns" :key="column.field" scope="col" :class="{ sorted: sort === column.field }"
+            <th v-for="(column, index) in visibleColumns" :key="column.field" scope="col" :class="{ sorted: sort === column.field }"
               :aria-sort="sort === column.field ? (descending ? 'descending' : 'ascending') : undefined">
               <button type="button" @click="emit('sort', column.field)">
                 <span class="column-label">{{ column.name }}</span>
                 <span v-if="sort === column.field" class="sort-caret" :class="{ descending }" aria-hidden="true"></span>
               </button>
-              <span class="column-resizer" aria-hidden="true" @pointerdown.prevent="startColumnResize($event, column.field)"
+              <span class="column-resizer" aria-hidden="true" @pointerdown.prevent="startColumnResize($event, index)"
                 @pointermove="resizeColumn" @lostpointercapture="finishColumnResize"></span>
             </th>
           </tr>
@@ -262,8 +270,8 @@ defineExpose({ focusSelection, scrollToStart })
                 <strong v-if="part.matched">{{ part.text }}</strong><template v-else>{{ part.text }}</template>
               </template>
             </td>
-            <td class="entry-size" :title="row.sizeBytesText ?? row.sizeHint ?? undefined">{{ row.sizeText }}</td>
-            <td class="entry-date">{{ row.modifiedText }}</td>
+            <td v-if="indexFileSize" class="entry-size" :title="row.sizeBytesText ?? row.sizeHint ?? undefined">{{ row.sizeText }}</td>
+            <td v-if="indexModifiedTime" class="entry-date">{{ row.modifiedText }}</td>
           </tr>
         </tbody>
       </table>

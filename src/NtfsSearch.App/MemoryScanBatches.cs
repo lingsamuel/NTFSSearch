@@ -4,7 +4,7 @@ using NtfsSearch.Core;
 namespace NtfsSearch.App;
 
 // 活动帧最多保存256 KiB数据外加最后一条记录。路径表随帧清空，重复父路径只需传一次。
-internal sealed class MemoryScanWriter(Stream stream, CancellationToken token)
+internal sealed class MemoryScanWriter(Stream stream, CancellationToken token, IndexMetadata metadata = IndexMetadata.All)
 {
     private const int BlockBytes = 256 << 10;
     private readonly CollectorFrameWriter frames = new(stream);
@@ -31,6 +31,9 @@ internal sealed class MemoryScanWriter(Stream stream, CancellationToken token)
             rowWriter.Write(parentReference);
         }
         rowWriter.Write(file);
+        if (!metadata.HasFlag(IndexMetadata.FileSize)) size = null;
+        if (!metadata.HasFlag(IndexMetadata.ModifiedTime)) modified = null;
+        if (!metadata.HasFlag(IndexMetadata.CreationTime)) created = null;
         byte flags = (byte)((directory ? 1 : 0) | (size.HasValue ? 2 : 0) | (modified.HasValue ? 4 : 0) | (created.HasValue ? 8 : 0));
         rowWriter.Write(flags);
         if (size is { } bytes) rowWriter.Write(bytes);
@@ -51,9 +54,9 @@ internal sealed class MemoryScanWriter(Stream stream, CancellationToken token)
     }
 }
 
-internal sealed class MemoryScanReader(int capacity)
+internal sealed class MemoryScanReader(int capacity, IndexMetadata metadata = IndexMetadata.All, bool precomputeSort = true)
 {
-    private readonly IndexBuilder builder = new(capacity);
+    private readonly IndexBuilder builder = new(capacity, fixedSize: false, metadata, precomputeSort);
     private Dictionary<(string Path, ulong Reference), int> directories = [];
 
     internal SearchIndex Build(CancellationToken token, IProgress<string>? progress = null)

@@ -24,6 +24,36 @@ public sealed class DesktopSettingsTests
     }
 
     [Fact]
+    public void LegacySettingsUseIndexDefaultsAndRoundTripEachPreference()
+    {
+        string directory = Path.Combine(AppContext.BaseDirectory, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "settings.json"), """{"SearchDirectorySizes":false}""");
+            var legacy = DesktopSettings.Load(directory);
+            Assert.True(legacy.PrecomputeSort);
+            Assert.False(legacy.IndexCreationTime);
+            Assert.True(legacy.IndexModifiedTime);
+            Assert.True(legacy.IndexFileSize);
+
+            DesktopSettings[] updates =
+            [
+                legacy with { PrecomputeSort = false },
+                legacy with { IndexCreationTime = true },
+                legacy with { IndexModifiedTime = false },
+                legacy with { IndexFileSize = false }
+            ];
+            foreach (var update in updates)
+            {
+                update.Save(directory);
+                Assert.Equal(update, DesktopSettings.Load(directory));
+            }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public void ExitSavePreferenceSurvivesRestartAlongsideTheExistingSnapshot()
     {
         string directory = Path.Combine(AppContext.BaseDirectory, Guid.NewGuid().ToString("N"));

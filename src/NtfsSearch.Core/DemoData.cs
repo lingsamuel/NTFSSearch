@@ -5,9 +5,10 @@ public static class DemoData
     public static SearchIndex Create(int count = 1000)
         => Create(count, includeDeepBranch: false);
 
-    internal static SearchIndex Create(int count, bool includeDeepBranch)
+    internal static SearchIndex Create(int count, bool includeDeepBranch, IndexMetadata metadata = IndexMetadata.All,
+        bool precomputeSort = true)
     {
-        var b = new IndexBuilder(count);
+        var b = new IndexBuilder(count, fixedSize: false, metadata, precomputeSort);
         string[] extensions = ["txt", "dll", "png", "json", "md", "exe", "zip", "log"];
         const int firstFolder = 103, fileInBranch = 108;
         string branchPath = @"C:\演示\目录001\";

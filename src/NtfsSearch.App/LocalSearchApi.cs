@@ -48,7 +48,7 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
         app.UseHostFiltering();
         app.UseRateLimiter();
         app.MapGet(LocalSearchEndpoint.StatusPath, () => Results.Json(host.ReadApiStatus()));
-        app.MapPost(LocalSearchEndpoint.SearchPath, (HttpRequest request) => SearchAsync(host.Catalog, request, app.Lifetime.ApplicationStopping))
+        app.MapPost(LocalSearchEndpoint.SearchPath, (HttpRequest request) => SearchAsync(host, request, app.Lifetime.ApplicationStopping))
             .RequireRateLimiting(SearchConcurrency);
         try
         {
@@ -68,12 +68,12 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
         await app.StopAsync();
     }
 
-    private static async Task<IResult> SearchAsync(SearchCatalog catalog, HttpRequest request, CancellationToken stopping)
+    private static async Task<IResult> SearchAsync(SearchHost host, HttpRequest request, CancellationToken stopping)
     {
         if (!request.HasJsonContentType())
             return Error("查询请求须发送 JSON。", StatusCodes.Status415UnsupportedMediaType);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(request.HttpContext.RequestAborted, stopping);
-        deadline.CancelAfter(SearchTimeout);
+        deadline.CancelAfter(host.PrecomputeSort ? SearchTimeout : LocalSearchEndpoint.OnDemandSortTimeout);
         try
         {
             var query = await request.ReadFromJsonAsync<LocalSearchRequest>(deadline.Token);
@@ -87,10 +87,20 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
                 "modified" => SortField.Modified,
                 _ => throw new ArgumentException("sort 必须为 name、path、size 或 modified。")
             };
+            IndexMetadata metadata = host.Metadata;
+            if ((sort == SortField.Size || query.MinSizeBytes.HasValue || query.MaxSizeBytes.HasValue)
+                && !metadata.HasFlag(IndexMetadata.FileSize))
+                return IndexSettingRequired("索引文件大小");
+            if ((sort == SortField.Modified || query.ModifiedFrom is not null || query.ModifiedBefore is not null)
+                && !metadata.HasFlag(IndexMetadata.ModifiedTime))
+                return IndexSettingRequired("索引修改时间");
+            if ((query.CreatedFrom is not null || query.CreatedBefore is not null)
+                && !metadata.HasFlag(IndexMetadata.CreationTime))
+                return IndexSettingRequired("索引创建时间");
             var filter = new SearchFilter(query.MinSizeBytes, query.MaxSizeBytes,
                 ParseUtcTicks(query.ModifiedFrom, "modifiedFrom"), ParseUtcTicks(query.ModifiedBefore, "modifiedBefore"),
                 ParseUtcTicks(query.CreatedFrom, "createdFrom"), ParseUtcTicks(query.CreatedBefore, "createdBefore"));
-            var result = catalog.Search(query.Text ?? "", sort, query.Descending, query.MatchPath,
+            var result = host.Catalog.Search(query.Text ?? "", sort, query.Descending, query.MatchPath,
                 query.Offset, query.Limit, deadline.Token, filter);
             deadline.Token.ThrowIfCancellationRequested();
             return Results.Json(new
@@ -127,6 +137,9 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
     private static DateTime? ToUtc(long? ticks) =>
         ticks is long value && value >= DateTime.MinValue.Ticks && value <= DateTime.MaxValue.Ticks
             ? new DateTime(value, DateTimeKind.Utc) : null;
+
+    private static IResult IndexSettingRequired(string setting) =>
+        Error($"请在设置中开启「{setting}」并重启应用以使用此查询条件。");
 
     private static IResult Error(string message, int status = StatusCodes.Status400BadRequest) =>
         Results.Json(new { Error = message }, statusCode: status);

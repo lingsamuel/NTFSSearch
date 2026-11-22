@@ -32,7 +32,7 @@ public sealed class ExitSnapshotTests : IDisposable
         Assert.Equal(volume with { PhysicalDisks = null }, restored.Volume with { PhysicalDisks = null });
         Assert.Equal(volume.PhysicalDisks, restored.Volume.PhysicalDisks);
         Assert.Equal(live.Position, restored.Position);
-        Assert.True(restored.HasCreationMetadata);
+        Assert.Equal(IndexMetadata.All, index.Metadata);
         Assert.All(index.FindFileRows(12), id => Assert.Equal(638999999999999997, index.GetRow(id).CreatedUtcTicks));
         Assert.Equal(5, index.Count);
         Assert.True(index.HasIdentity);
@@ -64,11 +64,11 @@ public sealed class ExitSnapshotTests : IDisposable
         File.WriteAllBytes(SnapshotPath, bytes);
 
         var restored = Assert.Single(ExitSnapshotStore.Load(SnapshotPath));
-        Assert.False(restored.HasCreationMetadata);
+        Assert.Equal(IndexMetadata.FileSize | IndexMetadata.ModifiedTime, Assert.Single(restored.Layers).Metadata);
         Assert.Equal(new(7, 100), restored.Position);
         Assert.Null(Assert.Single(restored.Layers).GetRow(0).CreatedUtcTicks);
         Assert.Empty(ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 1,
-            (_, _, _) => throw new InvalidOperationException("旧格式进入了复原流程。"), requireCreationMetadata: true));
+            (_, _, _) => throw new InvalidOperationException("旧格式进入了复原流程。"), metadata: IndexMetadata.All));
     }
 
     [Fact]
@@ -77,12 +77,94 @@ public sealed class ExitSnapshotTests : IDisposable
         ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "first"), Volume("D", "second")]);
         var stages = new System.Collections.Concurrent.ConcurrentQueue<(string VolumeId, bool Sorting, int Rows)>();
         var restored = ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 2,
-            (volume, sorting, rows) => stages.Enqueue((volume.Id, sorting, rows)), requireCreationMetadata: true).ToArray();
+            (volume, sorting, rows) => stages.Enqueue((volume.Id, sorting, rows)), metadata: IndexMetadata.All).ToArray();
 
         Assert.Equal(2, restored.Length);
         foreach (var volume in restored)
             Assert.Equal(new[] { (volume.Volume.Id, false, 1), (volume.Volume.Id, true, 1) },
                 stages.Where(stage => stage.VolumeId == volume.Volume.Id));
+    }
+
+    [Fact]
+    public void RestoresAFullSnapshotWithoutAllocatingDisabledMetadata()
+    {
+        var volume = WithMetadata("C", IndexMetadata.All);
+        ExitSnapshotStore.Save(SnapshotPath, [volume]);
+
+        var restored = Assert.Single(ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 1, null,
+            metadata: IndexMetadata.FileSize));
+        var index = Assert.Single(restored.Layers);
+        var row = Assert.Single(index.Search("").Rows);
+        Assert.Equal(volume.Position, restored.Position);
+        Assert.Equal(IndexMetadata.FileSize, index.Metadata);
+        Assert.Equal(42, row.Size);
+        Assert.Null(row.ModifiedUtcTicks);
+        Assert.Null(row.CreatedUtcTicks);
+    }
+
+    [Fact]
+    public void MissingFieldsRequireCollectionOnlyForTheAffectedVolume()
+    {
+        ExitSnapshotStore.Save(SnapshotPath, [WithMetadata("C", IndexMetadata.All),
+            WithMetadata("D", IndexMetadata.FileSize)]);
+
+        var missing = new List<(string, IndexMetadata)>();
+        var restored = ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 1, null,
+            metadata: IndexMetadata.All, missingMetadata: (volume, fields) => missing.Add((volume.Id, fields))).ToArray();
+        Assert.Equal("C", Assert.Single(restored).Volume.Id);
+        Assert.Equal(("D", IndexMetadata.CreationTime | IndexMetadata.ModifiedTime), Assert.Single(missing));
+        var saved = Assert.Single(ExitSnapshotStore.Load(SnapshotPath), v => v.Volume.Id == "D");
+        Assert.Equal(IndexMetadata.FileSize, Assert.Single(saved.Layers).Metadata);
+    }
+
+    [Theory]
+    [InlineData(3, false, (int)IndexMetadata.CreationTime)]
+    [InlineData(4, false, (int)IndexMetadata.CreationTime)]
+    [InlineData(5, true, (int)(IndexMetadata.CreationTime | IndexMetadata.ModifiedTime))]
+    [InlineData(5, false, (int)IndexMetadata.None)]
+    public void ConvertedStaticSnapshotPreservesAvailableMetadata(int version, bool sizeOnly, int missingFieldMask)
+    {
+        var missingFields = (IndexMetadata)missingFieldMask;
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "source.ntidx");
+        var source = WithMetadata("C", version < 5 ? IndexMetadata.FileSize | IndexMetadata.ModifiedTime : IndexMetadata.All);
+        if (version == 3) LegacySnapshotFixture.Write(Assert.Single(source.Layers), path);
+        else SnapshotStore.Save(Assert.Single(source.Layers), path);
+
+        var index = sizeOnly ? SnapshotStore.Load(path, IndexMetadata.FileSize) : SnapshotStore.Load(path);
+        var view = index.WithView(null, index.Directories, default);
+        ExitSnapshotStore.Save(SnapshotPath, [source with { Layers = [view] }, WithMetadata("D", IndexMetadata.All)]);
+
+        var restored = ExitSnapshotStore.Load(SnapshotPath);
+        var saved = Assert.Single(restored, volume => volume.Volume.Id == "C");
+        var row = Assert.Single(saved.Layers).GetRow(0);
+        Assert.Equal(source.Position, saved.Position);
+        Assert.Equal(42, row.Size);
+        Assert.Equal((missingFields & IndexMetadata.ModifiedTime) == 0 ? 90L : null, row.ModifiedUtcTicks);
+        Assert.Equal((missingFields & IndexMetadata.CreationTime) == 0 ? 80L : null, row.CreatedUtcTicks);
+        Assert.Equal(IndexMetadata.All & ~missingFields, Assert.Single(saved.Layers).Metadata);
+
+        var missing = new List<(string, IndexMetadata)>();
+        var full = ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 1, null,
+            metadata: IndexMetadata.All, missingMetadata: (volume, fields) => missing.Add((volume.Id, fields))).ToArray();
+        if (missingFields == IndexMetadata.None)
+        {
+            Assert.Empty(missing);
+            Assert.Equal(new[] { "C", "D" }, full.Select(volume => volume.Volume.Id));
+        }
+        else
+        {
+            Assert.Equal("D", Assert.Single(full).Volume.Id);
+            Assert.Equal(("C", missingFields), Assert.Single(missing));
+        }
+    }
+
+    private static ExitSnapshotVolume WithMetadata(string id, IndexMetadata metadata)
+    {
+        string root = $"{id}:\\";
+        var builder = new IndexBuilder(1, fixedSize: true, metadata);
+        builder.Add(root, "file.txt", 42, 90, fileReference: 10, parentReference: 5, createdUtcTicks: 80);
+        return new(new(id, root, 0, ""), new(7, 100), [builder.Build()]);
     }
 
     [Fact]

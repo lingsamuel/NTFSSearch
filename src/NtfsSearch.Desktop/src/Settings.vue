@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import type { SettingsRequest, SettingsStatus } from './desktop'
 
 const props = defineProps<{
@@ -15,6 +15,14 @@ const enabled = ref(false)
 const port = ref<number | string>('')
 const searchDirectorySizes = ref(true)
 const saveExitIndex = ref(true)
+const indexOptions = [
+  { key: 'precomputeSort', name: 'precompute-sort', label: '预计算排序' },
+  { key: 'indexCreationTime', name: 'index-creation-time', label: '索引创建时间' },
+  { key: 'indexModifiedTime', name: 'index-modified-time', label: '索引修改时间' },
+  { key: 'indexFileSize', name: 'index-file-size', label: '索引文件大小' },
+] as const
+const defaultIndexSettings = { precomputeSort: true, indexCreationTime: false, indexModifiedTime: true, indexFileSize: true }
+const indexSettings = reactive({ ...defaultIndexSettings })
 const portError = ref('')
 const copyFeedback = ref('')
 let saved: SettingsStatus | undefined
@@ -40,6 +48,9 @@ watch(() => props.status, status => {
     searchDirectorySizes.value = status.searchDirectorySizes
   if (!saved || status.skipExitIndexSave !== saved.skipExitIndexSave)
     saveExitIndex.value = !status.skipExitIndexSave
+  for (const { key } of indexOptions) {
+    if (!saved || status[key] !== saved[key]) indexSettings[key] = status[key] ?? defaultIndexSettings[key]
+  }
   saved = status
 }, { immediate: true })
 watch(curl, () => { copyFeedback.value = '' })
@@ -52,7 +63,7 @@ function save() {
   }
   portError.value = ''
   emit('request', { type: 'applySettings', enabled: enabled.value, port: value,
-    searchDirectorySizes: searchDirectorySizes.value, skipExitIndexSave: !saveExitIndex.value })
+    searchDirectorySizes: searchDirectorySizes.value, skipExitIndexSave: !saveExitIndex.value, ...indexSettings })
 }
 
 function restart() {
@@ -84,14 +95,27 @@ onMounted(() => back.value?.focus())
           <section aria-labelledby="search-settings-title">
             <h2 id="search-settings-title">搜索</h2>
             <label class="settings-toggle">
-              <input v-model="searchDirectorySizes" name="search-directory-sizes" type="checkbox">计算搜索结果中的文件夹大小
+              <input v-model="searchDirectorySizes" name="search-directory-sizes" type="checkbox"
+                :disabled="!indexSettings.indexFileSize"
+                :aria-describedby="!indexSettings.indexFileSize ? 'folder-size-note' : undefined">计算搜索结果中的文件夹大小
             </label>
+            <p v-if="!indexSettings.indexFileSize" id="folder-size-note" class="settings-note">
+              文件夹大小统计依赖「索引文件大小」。
+            </p>
           </section>
           <section aria-labelledby="index-settings-title">
             <h2 id="index-settings-title">索引</h2>
             <label class="settings-toggle">
               <input v-model="saveExitIndex" name="save-exit-index" type="checkbox">退出时保存索引
             </label>
+            <p class="settings-note index-settings-note">保存后，以下索引设置将在下次重启时生效。请从托盘菜单退出程序，再重新打开。</p>
+            <label v-for="option in indexOptions" :key="option.key" class="settings-toggle">
+              <input v-model="indexSettings[option.key]" :name="option.name" type="checkbox"
+                :aria-describedby="option.key === 'indexFileSize' ? 'index-file-size-note' : undefined">{{ option.label }}
+            </label>
+            <p id="index-file-size-note" class="settings-note">
+              关闭文件大小索引会停用大小列、按大小排序和筛选、文件夹大小统计及空间分析。
+            </p>
           </section>
           <section class="settings-service" aria-labelledby="service-settings-title">
             <h2 id="service-settings-title">搜索服务</h2>
@@ -123,7 +147,10 @@ onMounted(() => back.value?.focus())
       </form>
     </div>
     <footer class="settings-footer">
-      <p v-if="error" id="settings-error" class="settings-error" role="alert">{{ error }}</p>
+      <div class="settings-feedback">
+        <p v-if="status?.indexRestartRequired" class="settings-note" role="status">索引设置已保存，下次重启生效。</p>
+        <p v-if="error" id="settings-error" class="settings-error" role="alert">{{ error }}</p>
+      </div>
       <button type="submit" form="desktop-settings" class="outlined-button" :disabled="!connected || !status || busy">
         保存并应用
       </button>
@@ -154,6 +181,8 @@ onMounted(() => back.value?.focus())
 .settings-content h2 { margin: 0 0 12px; font-size: 16px; }
 .settings-content fieldset { display: grid; gap: 22px; margin: 0; padding: 0; border: 0; }
 .settings-toggle, .settings-port { display: flex; align-items: center; gap: 8px; }
+.settings-toggle + .settings-toggle { margin-top: 7px; }
+.settings-note.index-settings-note { margin: 12px 0 7px; }
 .settings-service .settings-port { margin: 12px 0; }
 .settings-toggle input { accent-color: var(--accent); }
 .settings-port input {
@@ -180,6 +209,8 @@ onMounted(() => back.value?.focus())
   background: var(--chrome);
 }
 .settings-footer button { flex: none; }
+.settings-feedback p { margin: 0; }
+.settings-feedback p + p { margin-top: 4px; }
 .settings-example { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .settings-example h3 { margin: 0 0 7px; font-size: 13px; }
 .settings-command { display: flex; align-items: center; gap: 8px; }
