@@ -1,6 +1,6 @@
 namespace NtfsSearch.Core;
 
-internal sealed record SpaceFolder(SpaceBreadcrumb[] Breadcrumbs, Int128 Bytes, long UnknownFiles,
+internal sealed record SpaceFolder(string Path, SpaceBreadcrumb[] Breadcrumbs, Int128 Bytes, long UnknownFiles,
     bool IsEmpty, SpaceItem[] Children);
 internal sealed record SpaceBreadcrumb(ulong Id, string Name);
 internal sealed record SpaceItem(ulong? DirectoryId, string Name, string? Path, Int128 Bytes, long Count = 1);
@@ -76,6 +76,59 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
 
     internal bool Contains(ulong reference) => reference == 0 || folders.ContainsKey(reference);
 
+    /// <summary>接受盘符、资源管理器复制的绝对路径和扩展路径，保留实际索引名称。</summary>
+    internal static string? NormalizeLocalPath(string? input)
+    {
+        string path = input?.TrimStart() ?? "";
+        if (path.StartsWith('"'))
+        {
+            var quoted = path.AsSpan().TrimEnd();
+            if (quoted.Length < 2 || quoted[^1] != '"') return null;
+            path = quoted[1..^1].ToString();
+        }
+        path = path.Replace('/', '\\');
+        if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) path = path[4..];
+        if (path.Length < 2 || !char.IsAsciiLetter(path[0]) || path[1] != ':'
+            || path.Length > 2 && path[2] != '\\') return null;
+        // Win32 的路径规范化可能去掉名称尾部的点和空格，导致命中另一个已索引目录。
+        return path.Length == 2 ? path + '\\' : path;
+    }
+
+    /// <summary>在当前卷的目录树上匹配已规范化的绝对路径，包括自身没有记录的目录锚。</summary>
+    internal (ulong? Id, bool Ambiguous) FindDirectory(string fullPath, CancellationToken token = default)
+    {
+        if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return default;
+        var relative = fullPath.AsSpan(rootPath.Length).TrimEnd('\\');
+        var exact = FindDirectory(relative, StringComparison.Ordinal, token);
+        return exact.Id.HasValue || exact.Ambiguous ? exact : FindDirectory(relative, StringComparison.OrdinalIgnoreCase, token);
+    }
+
+    private (ulong? Id, bool Ambiguous) FindDirectory(ReadOnlySpan<char> path, StringComparison comparison, CancellationToken token)
+    {
+        var pending = new Stack<(Folder Folder, int Offset)>();
+        pending.Push((root, 0));
+        ulong? match = null;
+        while (pending.TryPop(out var next))
+        {
+            token.ThrowIfCancellationRequested();
+            if (next.Offset == path.Length)
+            {
+                if (match.HasValue) return (null, true);
+                match = next.Folder.Id;
+                continue;
+            }
+            var remaining = path[next.Offset..];
+            for (var child = next.Folder.FirstChild; child is not null; child = child.NextSibling)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!MatchesPathPrefix(remaining, child.Name.Span, comparison)) continue;
+                int end = next.Offset + child.Name.Length;
+                pending.Push((child, end == path.Length ? end : end + 1));
+            }
+        }
+        return (match, false);
+    }
+
     internal SpaceFolder Read(ulong reference, int limit, CancellationToken token = default)
     {
         var folder = reference == 0 ? root : folders[reference];
@@ -110,7 +163,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
             remainder -= size;
         }
         if (otherCount > 0) entries[^1] = new(null, "其他", null, remainder, otherCount);
-        return new(breadcrumbs, folder.Usage.Bytes, folder.Usage.Unknown,
+        return new(folder == root ? path : path[..^1], breadcrumbs, folder.Usage.Bytes, folder.Usage.Unknown,
             folder.DirectFiles == 0 && folder.FirstChild is null, entries);
     }
 
@@ -149,9 +202,9 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
             for (var child = parent.FirstChild; child is not null; child = child.NextSibling)
             {
                 int length = child.Name.Length;
-                if (length < remaining.Length && remaining.Span[length] == '\\'
+                if (length < remaining.Length
                     && (nearest is null || length > nearest.Name.Length)
-                    && remaining.Span.StartsWith(child.Name.Span, StringComparison.Ordinal))
+                    && MatchesPathPrefix(remaining.Span, child.Name.Span, StringComparison.Ordinal))
                     nearest = child;
             }
             if (nearest is null) break;
@@ -161,6 +214,10 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
         folder.Name = remaining;
         return parent;
     }
+
+    private static bool MatchesPathPrefix(ReadOnlySpan<char> path, ReadOnlySpan<char> name, StringComparison comparison)
+        => name.Length <= path.Length && (name.Length == path.Length || path[name.Length] == '\\')
+            && path.StartsWith(name, comparison);
 
     private void AttachAnchors(CancellationToken token, bool updateUsage)
     {

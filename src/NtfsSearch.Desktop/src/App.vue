@@ -31,6 +31,8 @@ const space = shallowRef<SpaceAnalysisResult>()
 const spaceRoot = ref('')
 const spacePending = ref(false)
 const spaceError = ref('')
+const spacePathPending = ref(false)
+const spacePathError = ref('')
 let requestId = Date.now()
 let spaceRequestId = requestId
 let unlisten: (() => void) | undefined
@@ -82,6 +84,12 @@ function receive(message: DesktopMessage) {
       spaceRoot.value = message.root ?? ''
       spaceError.value = message.error ?? ''
       spacePending.value = false
+      spacePathPending.value = false
+      break
+    case 'spacePathError':
+      if (!showingSpace.value || message.requestId !== spaceRequestId) return
+      spacePathError.value = message.message
+      spacePathPending.value = false
       break
     case 'error':
       if (message.scope === 'fatal') {
@@ -186,17 +194,27 @@ function handleShortcut(event: KeyboardEvent) {
   }
 }
 
-function viewSpace(root = '', directoryId = '') {
+function viewSpace(root = '', directoryId = '', path?: string) {
   if (!connected.value || saving.value) return
+  const byPath = path !== undefined
   showingSpace.value = true
-  spaceRoot.value = root
-  spacePending.value = true
+  spaceRoot.value = byPath ? space.value?.root ?? '' : root
+  spacePending.value = !byPath
   spaceError.value = ''
+  spacePathPending.value = byPath
+  spacePathError.value = ''
   const id = ++spaceRequestId
-  void sendRequest({ type: 'spaceAnalysis', requestId: id, root, directoryId }).catch(error => {
+  const displayed = space.value
+  void sendRequest(byPath ? {
+    type: 'spacePath', requestId: id, path, root: displayed?.root ?? '',
+    breadcrumbIds: displayed?.folder?.breadcrumbs.map(crumb => crumb.id) ?? [], volumeKey: displayed?.volumeKey ?? null,
+  }
+    : { type: 'spaceAnalysis', requestId: id, root, directoryId }).catch(error => {
     if (id !== spaceRequestId) return
     spacePending.value = false
-    spaceError.value = String(error)
+    spacePathPending.value = false
+    if (byPath) spacePathError.value = String(error)
+    else spaceError.value = String(error)
   })
 }
 
@@ -281,7 +299,8 @@ onBeforeUnmount(() => {
       <IndexStatusPanel :status="indexStatus" :connected="connected" @action="sendAction({ type: $event })" />
     </footer>
     <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
-      :error="fatal || spaceError" :index-status="indexStatus" @view="viewSpace" @close="closeSpace"
+      :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
+      :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
       @reveal="sendAction({ type: 'reveal', key: $event })" />
     <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>

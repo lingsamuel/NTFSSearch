@@ -187,6 +187,41 @@ try {
       await screenshot('space-analysis.png')
       await evaluate("document.querySelector('.space-breadcrumb button').click()")
       await until(() => evaluate("document.querySelector('.space-total')?.title === '511,488,000 B'"), '面包屑返回卷根')
+      const address = 'input[aria-label="目录路径"]'
+      const readAddress = () => evaluate(`document.querySelector(${JSON.stringify(address)}).value`)
+      const openAddress = (path, draft, pendingDrive) => evaluate(`(() => {
+        const input = document.querySelector(${JSON.stringify(address)});
+        const replaceAddress = value => {
+          input.value = value;
+          input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        };
+        const pendingDrive = ${JSON.stringify(pendingDrive ?? null)};
+        if (pendingDrive) {
+          const drive = document.querySelector('select[aria-label="分析磁盘"]');
+          drive.value = pendingDrive;
+          drive.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        replaceAddress(${JSON.stringify(path)});
+        input.form.requestSubmit();
+        const draft = ${JSON.stringify(draft ?? null)};
+        if (draft !== null) replaceAddress(draft);
+      })()`)
+      assert.equal(await readAddress(), 'C:\\')
+      await openAddress('"c:\\演示\\目录009\\"')
+      await until(() => evaluate("document.querySelector('.space-total')?.title === '97,228,800 B'"), '粘贴地址下钻')
+      assert.equal(await readAddress(), 'C:\\演示\\目录009')
+      await openAddress('C:\\演示\\不存在')
+      await until(() => evaluate("document.querySelector('.space-path-feedback')?.textContent.includes('找不到')"), '无效目录提示')
+      assert.equal(await readAddress(), 'C:\\演示\\不存在')
+      assert.equal(await evaluate("document.querySelector('.space-total').title"), '97,228,800 B')
+      await openAddress('无效地址', undefined, 'D:\\')
+      await until(() => evaluate("document.querySelector('.space-path-feedback')?.textContent.includes('绝对目录路径')"), '处理切卷期间的无效地址')
+      assert.equal(await evaluate("document.querySelector('select[aria-label=分析磁盘]').value"), 'C:\\')
+      await openAddress('D:', 'C:\\下一条输入')
+      await until(() => evaluate("document.querySelector('.space-message')?.textContent.includes('当前目录为空')"), '跨卷进入空目录')
+      assert.equal(await readAddress(), 'C:\\下一条输入')
+      await openAddress('D:')
+      await until(async () => await readAddress() === 'D:\\', '确认后同步地址栏')
       await evaluate("document.querySelector('button[aria-label=返回搜索]').click()")
       assert.equal(await evaluate(`(${resultCount})() === ${JSON.stringify(expected(total))}`), true)
       assert.equal(await evaluate("document.querySelector('.results-scroll').scrollTop"), scrollBeforeAnalysis)

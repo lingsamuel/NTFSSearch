@@ -55,8 +55,10 @@ export interface SpaceAnalysisResult {
   requestId: number
   roots: string[]
   root: string | null
+  volumeKey: string | null
   error: string | null
   folder: {
+    path: string
     breadcrumbs: { id: string; name: string }[]
     bytes: string
     sizeText: string
@@ -71,6 +73,7 @@ export type DesktopMessage =
   | SearchResult
   | IndexStatus
   | SpaceAnalysisResult
+  | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
   | { type: 'saving'; written: number; total: number }
   | { type: 'quit-complete'; error?: string }
@@ -80,6 +83,7 @@ export type DesktopMessage =
 export type DesktopRequest =
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
+  | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }
   | { type: 'closeSpaceAnalysis'; requestId: number }
   | { type: 'rescan' | 'cancel' }
   | { type: 'fileTypeIcons'; extensions: string[] }

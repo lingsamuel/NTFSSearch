@@ -76,9 +76,11 @@ internal sealed class SearchHost
     {
         if (windowsBackend is { } backend)
             return backend.CapturePublishedViews().Select(view => (view.Volume, view.Layers)).ToArray();
-        if (demo is not null && catalog.PublishedLayers(VolumeCache.Key(SmokeBackend.Volume)) is { } layers)
-            return [(SmokeBackend.Volume, layers)];
-        return [];
+        if (demo is null) return [];
+        var views = new List<(NtfsVolume, IReadOnlyList<SearchIndex>)>();
+        foreach (var volume in SmokeBackend.Volumes)
+            if (catalog.PublishedLayers(VolumeCache.Key(volume)) is { } layers) views.Add((volume, layers));
+        return views.ToArray();
     }
 
     /// <summary>正常关闭且采集循环退出后保存，冻结每个卷的已发布视图与水位。</summary>
@@ -195,10 +197,12 @@ internal sealed class SearchHost
 
     private sealed class SmokeBackend(int count) : IAutomaticVolumeBackend
     {
-        internal static readonly NtfsVolume Volume = new("smoke-volume", @"C:\", 100, "测试");
-        public IReadOnlyList<NtfsVolume> Discover() => [Volume];
+        internal static readonly NtfsVolume[] Volumes =
+            [new("smoke-volume", @"C:\", 100, "测试"), new("smoke-empty", @"D:\", 100, "空卷")];
+        public IReadOnlyList<NtfsVolume> Discover() => count == 1000 ? Volumes : [Volumes[0]];
         public string CacheRevision(NtfsVolume volume) => "v1";
-        public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) => Task.FromResult<CachedVolume?>(new(DemoData.Create(count), false));
+        public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) =>
+            Task.FromResult<CachedVolume?>(new(volume == Volumes[0] ? DemoData.Create(count) : new IndexBuilder().Build(token), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;
         public string ReadStatus(NtfsVolume volume) => "测试磁盘已发现";
     }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatCount, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry } from './desktop'
 
 const props = defineProps<{
@@ -7,10 +7,13 @@ const props = defineProps<{
   root: string
   pending: boolean
   error: string
+  pathPending: boolean
+  pathError: string
   indexStatus?: IndexStatus
 }>()
 const emit = defineEmits<{
   view: [root: string, directoryId?: string]
+  path: [value: string]
   close: []
   reveal: [key: string]
 }>()
@@ -26,14 +29,33 @@ interface Tile {
 
 const map = ref<HTMLDivElement>()
 const back = ref<HTMLButtonElement>()
+const address = ref('')
+const addressEdited = ref(false)
 const width = ref(0)
 const height = ref(0)
 const hovered = ref<string>()
 const focused = ref<string>()
 const formatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 })
 const folder = computed(() => props.result?.folder)
+const selectedRoot = computed({
+  get: () => props.root,
+  set: root => emit('view', root),
+})
 const active = computed(() => tiles.value.find(tile => itemKey(tile.item) === (hovered.value ?? focused.value)))
 let observer: ResizeObserver | undefined
+
+watch(() => props.pending, pending => {
+  if (pending) addressEdited.value = false
+})
+watch([() => props.result?.requestId, () => folder.value?.path], ([, path]) => {
+  if (props.pathError || addressEdited.value) return
+  address.value = path ?? ''
+}, { immediate: true })
+
+function openAddress() {
+  addressEdited.value = false
+  emit('path', address.value)
+}
 
 const tiles = computed(() => {
   const current = folder.value
@@ -116,13 +138,23 @@ onBeforeUnmount(() => observer?.disconnect())
   <section class="space-workspace" aria-label="空间分析">
     <header class="space-toolbar">
       <button ref="back" type="button" class="outlined-button" aria-label="返回搜索" @click="emit('close')">返回搜索</button>
-      <select class="scope-select" aria-label="分析磁盘" :value="root" :disabled="!result?.roots.length"
-        @change="emit('view', ($event.target as HTMLSelectElement).value)">
+      <select v-model="selectedRoot" class="scope-select" aria-label="分析磁盘" :disabled="!result?.roots.length">
         <option v-if="!result?.roots.length" value="">等待索引</option>
         <option v-for="drive in result?.roots" :key="drive" :value="drive">{{ drive }}</option>
       </select>
       <span v-if="folder && !pending" class="space-total" :title="folder.sizeBytesText">逻辑大小 <strong>{{ folder.sizeText }}</strong></span>
     </header>
+    <form class="space-address" @submit.prevent="openAddress">
+      <div class="space-address-field">
+        <input v-model="address" type="text" aria-label="目录路径" placeholder="输入本地目录路径"
+          autocomplete="off" spellcheck="false" :aria-invalid="!!pathError"
+          :aria-describedby="pathError || pathPending ? 'space-path-feedback' : undefined" @input="addressEdited = true">
+        <button type="submit" class="outlined-button" :disabled="!address.trim()">打开</button>
+      </div>
+      <div v-if="pathError || pathPending" id="space-path-feedback" class="space-path-feedback" :role="pathError ? 'alert' : 'status'">
+        {{ pathError || '正在定位目录…' }}
+      </div>
+    </form>
     <nav class="space-breadcrumb" aria-label="当前目录">
       <template v-for="(crumb, position) in pending ? [] : folder?.breadcrumbs" :key="crumb.id">
         <span v-if="position > 0" aria-hidden="true">›</span>
@@ -163,7 +195,7 @@ onBeforeUnmount(() => observer?.disconnect())
 .space-workspace {
   grid-row: 1 / -1;
   display: grid;
-  grid-template-rows: auto 36px minmax(0, 1fr) 34px;
+  grid-template-rows: auto auto 36px minmax(0, 1fr) 34px;
   min-width: 0;
   min-height: 0;
 }
@@ -179,6 +211,21 @@ onBeforeUnmount(() => observer?.disconnect())
 .space-toolbar button { height: 39px; white-space: nowrap; }
 .space-total { margin-left: auto; white-space: nowrap; color: var(--muted); }
 .space-total strong { margin-left: 6px; color: #192538; font-variant-numeric: tabular-nums; }
+
+.space-address { padding: 8px 16px 0; }
+.space-address-field { display: flex; gap: 8px; }
+.space-address-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid #c2ccdc;
+  border-radius: 6px;
+  background: var(--surface);
+}
+.space-address-field input:focus { outline: 1px solid var(--accent); }
+.space-address-field button { flex: none; }
+.space-path-feedback { margin-top: 4px; color: var(--muted); }
+.space-path-feedback[role="alert"] { color: var(--warning); }
 
 .space-breadcrumb {
   display: flex;

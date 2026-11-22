@@ -122,6 +122,63 @@ public sealed class SpaceUsageTests
         Assert.Equal(@"outer\inner", Assert.Single(usage.Read(0, 200).Children).Name);
     }
 
+    [Fact]
+    public void AddressFindsEmptyDirectoriesAndFollowsRenames()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "Games", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(@"C:\Games\", "Empty Folder", isDirectory: true, fileReference: 11, parentReference: 10);
+        builder.Add(@"C:\Games\", "file.txt", 3, fileReference: 12, parentReference: 10);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+
+        Assert.Equal((0UL, false), usage.FindDirectory(Root));
+        Assert.Equal((11UL, false), usage.FindDirectory(@"c:\games\empty folder\"));
+        Assert.Null(usage.FindDirectory(@"C:\Games\file.txt").Id);
+        Assert.Null(usage.FindDirectory(@"D:\Games").Id);
+        Assert.True(usage.Read(11, 200).IsEmpty);
+
+        live.Apply(Change(0, new IndexedFileState(10, true, [new(5, Root, "Renamed")])));
+        usage = usage.Update(live.Layers);
+        Assert.Null(usage.FindDirectory(@"C:\Games\Empty Folder").Id);
+        Assert.Equal((11UL, false), usage.FindDirectory(@"C:\Renamed\Empty Folder"));
+    }
+
+    [Fact]
+    public void AddressPrefersExactCaseAndChecksTheEntirePathForAmbiguity()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "Case", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "case", isDirectory: true, fileReference: 11, parentReference: 5);
+        builder.Add(@"C:\case\", "Only", isDirectory: true, fileReference: 12, parentReference: 11);
+        builder.Add(@"C:\Case\Missing\Child\", "visible.txt", 1, fileReference: 14, parentReference: 13);
+        var usage = SpaceUsageIndex.Create(Root, [builder.Build()]);
+
+        Assert.Equal((10UL, false), usage.FindDirectory(@"C:\Case"));
+        Assert.Equal((11UL, false), usage.FindDirectory(@"C:\case"));
+        Assert.Equal((null, true), usage.FindDirectory(@"C:\CASE"));
+        Assert.Equal((12UL, false), usage.FindDirectory(@"C:\CASE\Only"));
+        Assert.Equal((13UL, false), usage.FindDirectory(@"C:\Case\Missing\Child"));
+        Assert.Null(usage.FindDirectory(@"C:\Case\Missing").Id);
+    }
+
+    [Fact]
+    public void LocalAddressPreservesIndexedNamesWithTrailingDotsAndSpaces()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "Game", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "Game.", isDirectory: true, fileReference: 11, parentReference: 5);
+        builder.Add(Root, "Game ", isDirectory: true, fileReference: 12, parentReference: 5);
+        var usage = SpaceUsageIndex.Create(Root, [builder.Build()]);
+
+        string dotted = Assert.IsType<string>(SpaceUsageIndex.NormalizeLocalPath(@"\\?\C:\Game."));
+        string spaced = Assert.IsType<string>(SpaceUsageIndex.NormalizeLocalPath("  \"C:/Game \"  "));
+        Assert.Equal((11UL, false), usage.FindDirectory(dotted));
+        Assert.Equal((12UL, false), usage.FindDirectory(spaced));
+        Assert.Null(SpaceUsageIndex.NormalizeLocalPath(@"\\host\Shared"));
+        Assert.Null(SpaceUsageIndex.NormalizeLocalPath("C:Game"));
+    }
+
     private static LiveTransaction Change(long from, params IndexedFileState[] files) =>
         new(new(1, from), new(1, from + 1), files);
 }
