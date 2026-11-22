@@ -76,6 +76,11 @@ public static class ExitSnapshotStore
 
     /// <summary>逐卷返回完整且已重新排序的索引。并行恢复时按完成顺序返回。</summary>
     public static IEnumerable<ExitSnapshotVolume> LoadVolumes(string path, CancellationToken token = default, int maxConcurrency = 1)
+        => LoadVolumes(path, token, maxConcurrency, null);
+
+    // 回调在实际读取卷的线程上执行，卷身份经过快照校验后才报告。
+    internal static IEnumerable<ExitSnapshotVolume> LoadVolumes(string path, CancellationToken token, int maxConcurrency,
+        Action<NtfsVolume, bool, int>? progress)
     {
         RequireLittleEndian();
         ArgumentOutOfRangeException.ThrowIfLessThan(maxConcurrency, 1);
@@ -85,7 +90,7 @@ public static class ExitSnapshotStore
         long length = file.Length;
         if (maxConcurrency > 1 && entries.Length > 1)
         {
-            foreach (var volume in LoadConcurrently(file.SafeFileHandle, entries.TakeWhile(entry => entry.End <= length), maxConcurrency, token))
+            foreach (var volume in LoadConcurrently(file.SafeFileHandle, entries.TakeWhile(entry => entry.End <= length), maxConcurrency, token, progress))
                 yield return volume;
             yield break;
         }
@@ -93,12 +98,13 @@ public static class ExitSnapshotStore
         {
             token.ThrowIfCancellationRequested();
             if (end > length) break;
-            if (LoadVolume(file, start, end, digest, token) is { } volume) yield return volume;
+            if (LoadVolume(file, start, end, digest, token, progress) is { } volume) yield return volume;
         }
     }
 
     private static IEnumerable<ExitSnapshotVolume> LoadConcurrently(SafeFileHandle file,
-        IEnumerable<(long Start, long End, byte[] Digest)> entries, int maxConcurrency, CancellationToken token)
+        IEnumerable<(long Start, long End, byte[] Digest)> entries, int maxConcurrency, CancellationToken token,
+        Action<NtfsVolume, bool, int>? progress)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         using var remaining = entries.GetEnumerator();
@@ -131,20 +137,21 @@ public static class ExitSnapshotStore
             pending.Add(Task.Run(() =>
             {
                 using var stream = new BufferedStream(new VolumeStream(file, start, end - start), 1 << 20);
-                return LoadVolume(stream, 0, end - start, digest, lifetime.Token);
+                return LoadVolume(stream, 0, end - start, digest, lifetime.Token, progress);
             }, lifetime.Token));
             return true;
         }
     }
 
-    private static ExitSnapshotVolume? LoadVolume(Stream stream, long start, long end, byte[] digest, CancellationToken token)
+    private static ExitSnapshotVolume? LoadVolume(Stream stream, long start, long end, byte[] digest, CancellationToken token,
+        Action<NtfsVolume, bool, int>? progress)
     {
         try
         {
             stream.Position = start;
             if (!ChecksumMatches(stream, end, digest, token)) return null;
             stream.Position = start;
-            return ReadVolume(stream, end, token);
+            return ReadVolume(stream, end, token, progress);
         }
         catch (Exception error) when (error is InvalidDataException or EndOfStreamException or ArgumentException or FormatException)
         {
@@ -281,7 +288,8 @@ public static class ExitSnapshotStore
         return row;
     }
 
-    private static ExitSnapshotVolume ReadVolume(Stream file, long end, CancellationToken token)
+    private static ExitSnapshotVolume ReadVolume(Stream file, long end, CancellationToken token,
+        Action<NtfsVolume, bool, int>? progress)
     {
         using var reader = new BinaryReader(file, Encoding.UTF8, leaveOpen: true);
         string id = ReadString(reader, end);
@@ -298,6 +306,8 @@ public static class ExitSnapshotStore
         int rowCount = reader.ReadInt32();
         if (rowCount < 0 || rowCount > (end - file.Position) / MinimumRowBytes)
             throw new InvalidDataException("退出快照记录数无效。");
+        var volume = new NtfsVolume(id, root, totalBytes, label, disks);
+        progress?.Invoke(volume, false, rowCount);
         var builder = new IndexBuilder(rowCount, fixedSize: true);
         Span<char> scratch = stackalloc char[255];
         Span<byte> bytes = stackalloc byte[1024];
@@ -332,7 +342,8 @@ public static class ExitSnapshotStore
             builder.AddRecord(directoryId, name, size, modified, (flags & 1) != 0, reference);
         }
         if (file.Position != end) throw new InvalidDataException("退出快照卷数据长度不符。");
-        return new(new(id, root, totalBytes, label, disks), position, [builder.Build(token)]);
+        progress?.Invoke(volume, true, rowCount);
+        return new(volume, position, [builder.Build(token)]);
     }
 
     private static void WriteText(BinaryWriter writer, ReadOnlySpan<char> text, Span<byte> buffer)

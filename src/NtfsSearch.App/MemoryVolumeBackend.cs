@@ -5,7 +5,8 @@ using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
 
-internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumerable<ExitSnapshotVolume> startup,
+internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
+    Func<CancellationToken, Action<NtfsVolume, bool, int>, IEnumerable<ExitSnapshotVolume>> startup,
     string? cacheDirectory = null)
 {
     private readonly object gate = new();
@@ -32,7 +33,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
         get
         {
             lock (gate) return volumes.Values.Select(v => collectorError is { } error
-                ? new VolumeStatus(v.Volume.Root, error) { HasError = true }
+                ? v.Status with { Message = $"{v.Status.Message} {error}", HasError = true }
                 : v.Status).ToArray();
         }
     }
@@ -103,6 +104,9 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
                 volume.Refresh = false;
                 Revise(volume, volume.View is null ? "采集已取消。" : "采集已取消，已有索引继续可用。");
             }
+            if (collector is null)
+                foreach (var volume in volumes.Values.Where(v => v.RestoredFromSnapshot && !v.NeedsScan && v.WatchStop is null))
+                    SetSnapshotReadyStatus(volume);
         }
         StatusChanged?.Invoke();
     }
@@ -158,7 +162,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
                     catch (Exception error) when (MemoryCollector.IsCollectionError(error))
                     {
                         SetCollectorStatus(error is Win32Exception { NativeErrorCode: 1223 }
-                            ? "管理员授权已取消，已有索引继续可用。"
+                            ? "管理员授权已取消。"
                             : "采集进程启动失败：" + error.Message);
                         if (error is Win32Exception { NativeErrorCode: 1223 }) attempts = 3;
                         nextLaunch = now.AddSeconds(2);
@@ -229,7 +233,9 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
                 string key = VolumeCache.Key(volume);
                 if (volumes.ContainsKey(key)) continue;
                 var estimate = VolumeResources.EstimateBuildBytes(volume.Root[0], 0);
-                volumes.Add(key, new(volume, key, ++revision, estimate));
+                var state = new VolumeState(volume, key, ++revision, estimate);
+                if (restored) state.Status = new(volume.Root, NoSnapshot);
+                volumes.Add(key, state);
                 changed = true;
             }
             if (changed) catalog.RemoveExcept(retained);
@@ -240,7 +246,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
 
     private void Restore(CancellationToken token)
     {
-        foreach (var view in startup)
+        foreach (var view in startup(token, ReportRestore))
         {
             token.ThrowIfCancellationRequested();
             lock (gate)
@@ -248,12 +254,38 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
                 if (!volumes.TryGetValue(VolumeCache.Key(view.Volume), out var volume) || volume.View is not null) continue;
                 volume.View = view with { Volume = volume.Volume };
                 volume.NeedsScan = false;
-                volume.Status = new(volume.Volume.Root, "已加载退出快照，正在检查USN变化…");
+                volume.RestoredFromSnapshot = true;
+                if (!volume.Refresh) SetSnapshotReadyStatus(volume);
                 catalog.PublishLayers(volume.Key, view.Layers);
             }
             StatusChanged?.Invoke();
         }
-        lock (gate) restored = true;
+        lock (gate)
+        {
+            restored = true;
+            if (!suspended)
+                foreach (var volume in volumes.Values.Where(v => v.View is null && !v.Refresh))
+                    volume.Status = new(volume.Volume.Root, NoSnapshot);
+        }
+        StatusChanged?.Invoke();
+    }
+
+    private const string NoSnapshot = "无可用退出快照，等待全卷采集…";
+
+    private void SetSnapshotReadyStatus(VolumeState volume)
+        => volume.Status = new(volume.Volume.Root, suspended && collector is null
+            ? "已加载退出快照，采集已取消，尚未接续 USN。"
+            : "已加载退出快照，等待检查 USN…");
+
+    private void ReportRestore(NtfsVolume source, bool sorting, int rows)
+    {
+        lock (gate)
+        {
+            if (suspended || !volumes.TryGetValue(VolumeCache.Key(source), out var volume)
+                || volume.Refresh || volume.View is not null) return;
+            string stage = sorting ? "正在重建快照的四列排序" : "正在加载退出快照";
+            volume.Status = new(volume.Volume.Root, $"{stage}，共 {rows:N0} 项…");
+        }
         StatusChanged?.Invoke();
     }
 
@@ -291,9 +323,10 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
         internal bool Refresh;
         internal bool Confirmed;
         internal bool Monitoring;
+        internal bool RestoredFromSnapshot;
         internal ExitSnapshotVolume? View;
         internal DirectoryGraph? Graph;
-        internal VolumeStatus Status = new(volume.Root, "等待后台采集");
+        internal VolumeStatus Status = new(volume.Root, "正在检查退出快照…");
         internal int? ScanPid;
         internal CancellationTokenSource? ScanStop;
         internal CancellationTokenSource? WatchStop;

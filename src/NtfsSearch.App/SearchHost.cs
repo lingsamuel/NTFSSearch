@@ -45,7 +45,7 @@ internal sealed class SearchHost
             return;
         }
 
-        var backend = new MemoryVolumeBackend(catalog, ReadStartup(token), cacheDirectory);
+        var backend = new MemoryVolumeBackend(catalog, ReadStartup, cacheDirectory);
         backend.StatusChanged += () => StatusChanged?.Invoke();
         backend.Progress += (message, failure) => Progress?.Invoke(message, failure);
         backend.FileActivity += (key, parents) => FileActivity?.Invoke(key, parents);
@@ -53,7 +53,7 @@ internal sealed class SearchHost
         await backend.RunAsync(token);
     }
 
-    private IEnumerable<ExitSnapshotVolume> ReadStartup(CancellationToken token)
+    private IEnumerable<ExitSnapshotVolume> ReadStartup(CancellationToken token, Action<NtfsVolume, bool, int> progress)
     {
         if (!File.Exists(snapshotPath)) yield break;
         Progress?.Invoke("正在加载上次退出保存的索引…", false);

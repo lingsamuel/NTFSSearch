@@ -50,6 +50,20 @@ public sealed class ExitSnapshotTests : IDisposable
     }
 
     [Fact]
+    public void ReportsLoadingAndSortingForEachRestoredVolume()
+    {
+        ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "first"), Volume("D", "second")]);
+        var stages = new System.Collections.Concurrent.ConcurrentQueue<(string VolumeId, bool Sorting, int Rows)>();
+        var restored = ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 2,
+            (volume, sorting, rows) => stages.Enqueue((volume.Id, sorting, rows))).ToArray();
+
+        Assert.Equal(2, restored.Length);
+        foreach (var volume in restored)
+            Assert.Equal(new[] { (volume.Volume.Id, false, 1), (volume.Volume.Id, true, 1) },
+                stages.Where(stage => stage.VolumeId == volume.Volume.Id));
+    }
+
+    [Fact]
     public void SkipsCorruptVolumeAndKeepsLaterIndependentVolume()
     {
         ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "healthy-before.txt"), Volume("D", "broken-middle-entry.txt"), Volume("E", "healthy-after.txt")]);

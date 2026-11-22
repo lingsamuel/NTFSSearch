@@ -25,7 +25,7 @@ internal sealed partial class MemoryVolumeBackend
         try
         {
             var connection = Volatile.Read(ref collector) ?? throw new IOException("采集进程的控制连接已关闭。");
-            Report(volume, generation, "准备读取 NTFS…");
+            Report(volume, generation, "开始全卷采集，正在准备读取 NTFS…");
             string journalName = MemoryCollectorPipe.NewName(), scanName = MemoryCollectorPipe.NewName();
             using var journal = MemoryCollectorPipe.CreateServer(journalName, acrossElevation: true);
             using var scan = MemoryCollectorPipe.CreateServer(scanName, acrossElevation: true);
@@ -67,7 +67,7 @@ internal sealed partial class MemoryVolumeBackend
                 string details = skipped > 0 ? $"；{skipped:N0} 条记录路径不可达，未纳入搜索" : "";
                 scanToken.ThrowIfCancellationRequested();
                 Publish(volume, generation, live, changed: true, scanned: true,
-                    status: $"已读取 {live.Layers.Sum(layer => (long)layer.VisibleCount):N0} 个对象" + details);
+                    status: $"全卷采集完成，已读取 {live.Layers.Sum(layer => (long)layer.VisibleCount):N0} 个对象，准备接续 USN" + details);
             }
             finally
             {
@@ -141,6 +141,7 @@ internal sealed partial class MemoryVolumeBackend
         CancellationToken token = lifetime.Token;
         try
         {
+            Report(volume, generation, "索引可用，正在检查 USN 水位…");
             string name = MemoryCollectorPipe.NewName();
             using var pipe = MemoryCollectorPipe.CreateServer(name, acrossElevation: true);
             await connection.RequestAsync(new(volume.Volume, dataDirectory, name, null, initial.Position, 0), token);
@@ -151,7 +152,8 @@ internal sealed partial class MemoryVolumeBackend
             var live = graph is not null ? new LiveVolumeIndex(initial.Layers.ToArray(), graph, 0, start)
                 : new LiveVolumeIndex(initial.Layers.Single(), start, token);
             bool ready = start == target;
-            if (ready) Publish(volume, generation, live, changed: false, monitoring: true, status: LiveStatus(live));
+            if (ready) Publish(volume, generation, live, changed: false, monitoring: true, status: LiveStatus(volume, live));
+            else Report(volume, generation, "索引可用，正在补读 USN 变化…");
             bool changed = false;
             HashSet<ulong>? fileParents = null;
             SpaceActivityObservation? batchObservation = null;
@@ -170,7 +172,7 @@ internal sealed partial class MemoryVolumeBackend
                 if (!final) continue;
                 changed |= live.CompactIfNeeded(token);
                 bool caughtUp = live.Position!.NextUsn >= target.NextUsn;
-                string? status = caughtUp && !ready ? LiveStatus(live) : null;
+                string? status = caughtUp && !ready ? LiveStatus(volume, live) : null;
                 // 一个原始USN批次可拆成多帧。跨帧补采完整后才同时发布视图和水位。
                 Publish(volume, generation, live, changed, monitoring: caughtUp, status: status,
                     observation: batchObservation, fileParents: fileParents);
@@ -270,7 +272,7 @@ internal sealed partial class MemoryVolumeBackend
             volume.View = new(volume.Volume, live.Position!, layers);
             volume.Graph = live.DirectoryGraph;
             if (scanned || monitoring) volume.Confirmed = true;
-            if (scanned) volume.NeedsScan = volume.Refresh = false;
+            if (scanned) volume.NeedsScan = volume.Refresh = volume.RestoredFromSnapshot = false;
             volume.Monitoring = monitoring;
             if (status is not null) volume.Status = new(volume.Volume.Root, status);
             if (changed) catalog.PublishLayers(volume.Key, layers);
@@ -279,8 +281,8 @@ internal sealed partial class MemoryVolumeBackend
         if (status is not null) StatusChanged?.Invoke();
     }
 
-    private static string LiveStatus(LiveVolumeIndex live)
-        => $"实时监控中，已索引 {live.Layers.Sum(layer => (long)layer.VisibleCount):N0} 个对象";
+    private static string LiveStatus(VolumeState volume, LiveVolumeIndex live)
+        => $"{(volume.RestoredFromSnapshot ? "已从退出快照恢复" : "已完成全卷采集")} · USN 已追平，实时监控中 · {live.Layers.Sum(layer => (long)layer.VisibleCount):N0} 项";
 
     private void Report(VolumeState volume, int generation, string message)
     {
