@@ -38,3 +38,7 @@ fallback只接受class46的87/50及按ID打开/父目录打开的访问或分享
 候选判断不直接使用MFT header的LinkCount，因为该计数包含DOS短名称属性。基础记录遍历同时无分配计数非DOS FILE_NAME；只有多个长名称，或出现ATTRIBUTE_LIST可能把其他名称放在扩展记录时，才进入按对象补链。namespace与长度校验复用raw fallback既有验证函数，避免另造名称解析器。原始卷读取失败会附盘符、物理偏移和请求长度，MFT记录读取亦包装UnauthorizedAccessException并保留FRN和内部异常，避免与软件Data目录权限失败混淆。
 
 0.5.0的旧快照转码使用框架`MemoryMappedFile`只读映射旧UTF16名称区，加载结束即释放；不映射原始卷或写入旧快照。常驻布局与排序压缩仅使用.NET内建API，无新增原生依赖；名称编码保留原始UTF16语义。
+
+## 退出快照压缩
+
+退出快照通过 `ZstdSharp.Port 0.8.8`（MIT）流式编码。该库是 Zstandard 的 C# 移植，便携包通过常规 .NET 发布带上库程序集。各卷依次以等级 3 编码，使用默认同步压缩，恢复仍按现有并行度独立解压各卷。

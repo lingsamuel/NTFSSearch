@@ -1,4 +1,6 @@
 using System.Text;
+using System.Buffers.Binary;
+using System.Security.Cryptography;
 using NtfsSearch.Core;
 using Xunit;
 
@@ -68,12 +70,26 @@ public sealed class ExitSnapshotTests : IDisposable
     {
         ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "healthy-before.txt"), Volume("D", "broken-middle-entry.txt"), Volume("E", "healthy-after.txt")]);
         var bytes = File.ReadAllBytes(SnapshotPath);
-        int changed = bytes.AsSpan().IndexOf(Encoding.ASCII.GetBytes("broken-middle-entry.txt"));
-        Assert.True(changed >= 0);
-        bytes[changed] ^= 0x01;
+        var (offset, length) = CompressedBlock(bytes, 1);
+        bytes[offset + length / 2] ^= 0x01;
         File.WriteAllBytes(SnapshotPath, bytes);
 
         Assert.Equal(new[] { "C", "E" }, ExitSnapshotStore.LoadVolumes(SnapshotPath, maxConcurrency: 2).Select(v => v.Volume.Id).Order());
+    }
+
+    [Fact]
+    public void InvalidZstdFrameIsIsolatedEvenWithAValidStoredChecksum()
+    {
+        ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "first"), Volume("D", "second")]);
+        byte[] bytes = File.ReadAllBytes(SnapshotPath);
+        var (offset, length) = CompressedBlock(bytes, 0);
+        bytes[offset] ^= 0x80;
+        SHA256.HashData(bytes.AsSpan(offset, length), bytes.AsSpan(12 + 16, 32));
+        int directoryEnd = 12 + 2 * 48;
+        SHA256.HashData(bytes.AsSpan(0, directoryEnd), bytes.AsSpan(directoryEnd, 32));
+        File.WriteAllBytes(SnapshotPath, bytes);
+
+        Assert.Equal("D", Assert.Single(ExitSnapshotStore.LoadVolumes(SnapshotPath, maxConcurrency: 2)).Volume.Id);
     }
 
     [Fact]
@@ -126,7 +142,7 @@ public sealed class ExitSnapshotTests : IDisposable
         b.Add(parent, "c.txt", fileReference: 12, parentReference: 99);
         ExitSnapshotStore.Save(SnapshotPath, [new(new("C", @"C:\", 0, ""), new(2, 5), [a.Build(), b.Build()])]);
 
-        byte[] bytes = File.ReadAllBytes(SnapshotPath);
+        byte[] bytes = ReadPayload(File.ReadAllBytes(SnapshotPath));
         byte[] encodedParent = Encoding.ASCII.GetBytes(parent);
         int first = bytes.AsSpan().IndexOf(encodedParent);
         Assert.True(first >= 0);
@@ -159,7 +175,9 @@ public sealed class ExitSnapshotTests : IDisposable
                 fileReference: sequence | (i + 100), parentReference: 5);
         ExitSnapshotStore.Save(SnapshotPath, [new(new("C", @"C:\", 0, ""), new(2, 5), [builder.Build()])]);
 
-        Assert.InRange(new FileInfo(SnapshotPath).Length, 19000, 23000);
+        byte[] bytes = File.ReadAllBytes(SnapshotPath);
+        Assert.InRange(ReadPayload(bytes).Length, 19000, 23000);
+        Assert.True(bytes.Length < 5000, $"压缩快照长度为 {bytes.Length} 字节。");
         var restored = Assert.Single(Assert.Single(ExitSnapshotStore.Load(SnapshotPath)).Layers);
         Assert.Equal(rows, restored.Count);
         Assert.Null(restored.GetRow(Assert.Single(restored.FindFileRows(sequence | 100))).Size);
@@ -183,6 +201,26 @@ public sealed class ExitSnapshotTests : IDisposable
 
         Assert.Equal(new[] { "previous-c", "previous-d", "previous-e" }, names.Order());
         Assert.Equal("current", Assert.Single(Assert.Single(ExitSnapshotStore.Load(SnapshotPath)).Layers[0].Search("").Rows).Name);
+    }
+
+    private static (int Offset, int Length) CompressedBlock(byte[] file, int volume)
+    {
+        int count = BinaryPrimitives.ReadInt32LittleEndian(file.AsSpan(8));
+        int offset = 12 + count * 48 + 32;
+        for (int index = 0; index < volume; index++)
+            offset += checked((int)BinaryPrimitives.ReadInt64LittleEndian(file.AsSpan(12 + index * 48)));
+        int length = checked((int)BinaryPrimitives.ReadInt64LittleEndian(file.AsSpan(12 + volume * 48)));
+        return (offset, length);
+    }
+
+    private static byte[] ReadPayload(byte[] bytes)
+    {
+        var (offset, length) = CompressedBlock(bytes, 0);
+        using var input = new MemoryStream(bytes, offset, length);
+        using var decompressed = new ZstdSharp.DecompressionStream(input);
+        using var output = new MemoryStream();
+        decompressed.CopyTo(output);
+        return output.ToArray();
     }
 
     private static ExitSnapshotVolume Volume(string id, string name)

@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
+using ZstdSharp;
 
 namespace NtfsSearch.Core;
 
@@ -12,9 +13,10 @@ public sealed record ExitSnapshotVolume(NtfsVolume Volume, JournalPosition Posit
 public static class ExitSnapshotStore
 {
     public const string FileName = "index.ntsnap";
-    private static ReadOnlySpan<byte> Magic => "NTSEXIT2"u8;
+    private static ReadOnlySpan<byte> Magic => "NTSEXIT3"u8;
+    private const int CompressionLevel = 3;
     private const int DigestBytes = 32;
-    private const int DirectoryEntryBytes = sizeof(long) + DigestBytes;
+    private const int DirectoryEntryBytes = sizeof(long) * 2 + DigestBytes;
     private const int MinimumVolumeBytes = 3 + sizeof(int) * 2 + sizeof(long) * 3;
     private const int MinimumRowBytes = 6;
     private const ulong RecordNumberMask = (1UL << 48) - 1;
@@ -37,26 +39,33 @@ public static class ExitSnapshotStore
                 // 卷目录置于文件开头，尾部损坏时仍能定位并恢复其余卷。
                 long directoryEnd = Magic.Length + sizeof(int) + (long)volumes.Count * DirectoryEntryBytes;
                 file.Position = directoryEnd + DigestBytes;
-                var entries = new (long Length, byte[] Digest)[volumes.Count];
+                var entries = new (long Length, long PayloadLength, byte[] Digest)[volumes.Count];
                 for (int i = 0; i < volumes.Count; i++)
                 {
                     token.ThrowIfCancellationRequested();
                     long start = file.Position;
                     using var hash = SHA256.Create();
+                    PayloadStream payloadStream;
                     using (var crypto = new CryptoStream(file, hash, CryptoStreamMode.Write, leaveOpen: true))
-                    using (var buffered = new BufferedStream(crypto, 64 * 1024))
-                    using (var payload = new BinaryWriter(buffered, Encoding.UTF8, leaveOpen: true))
+                    // 每卷结束一个独立压缩帧，哈希覆盖已经落到该卷块的压缩字节。
+                    using (var compressed = new CompressionStream(crypto, level: CompressionLevel, leaveOpen: true))
+                    {
+                        payloadStream = new PayloadStream(compressed);
+                        using var buffered = new BufferedStream(payloadStream, 64 * 1024);
+                        using var payload = new BinaryWriter(buffered, Encoding.UTF8, leaveOpen: true);
                         WriteVolume(payload, volumes[i], token);
-                    entries[i] = (file.Position - start, hash.Hash!);
+                    }
+                    entries[i] = (file.Position - start, payloadStream.Position, hash.Hash!);
                     progress?.Invoke(i + 1, volumes.Count);
                 }
                 token.ThrowIfCancellationRequested();
                 file.Position = 0;
                 writer.Write(Magic);
                 writer.Write(entries.Length);
-                foreach (var (length, digest) in entries)
+                foreach (var (length, payloadLength, digest) in entries)
                 {
                     writer.Write(length);
+                    writer.Write(payloadLength);
                     writer.Write(digest);
                 }
                 file.Position = 0;
@@ -67,6 +76,7 @@ public static class ExitSnapshotStore
             }
             AtomicFile.Publish(temporary, path, token: token);
         }
+        catch (ZstdException error) { throw new IOException("退出快照压缩失败。", error); }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
@@ -94,16 +104,17 @@ public static class ExitSnapshotStore
                 yield return volume;
             yield break;
         }
-        foreach (var (start, end, digest) in entries)
+        foreach (var (start, end, payloadLength, digest) in entries)
         {
             token.ThrowIfCancellationRequested();
             if (end > length) break;
-            if (LoadVolume(file, start, end, digest, token, progress) is { } volume) yield return volume;
+            if (LoadVolume(file.SafeFileHandle, start, end, payloadLength, digest, token, progress) is { } volume)
+                yield return volume;
         }
     }
 
     private static IEnumerable<ExitSnapshotVolume> LoadConcurrently(SafeFileHandle file,
-        IEnumerable<(long Start, long End, byte[] Digest)> entries, int maxConcurrency, CancellationToken token,
+        IEnumerable<(long Start, long End, long PayloadLength, byte[] Digest)> entries, int maxConcurrency, CancellationToken token,
         Action<NtfsVolume, bool, int>? progress)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -133,34 +144,35 @@ public static class ExitSnapshotStore
         bool StartNext()
         {
             if (!remaining.MoveNext()) return false;
-            var (start, end, digest) = remaining.Current;
-            pending.Add(Task.Run(() =>
-            {
-                using var stream = new BufferedStream(new VolumeStream(file, start, end - start), 1 << 20);
-                return LoadVolume(stream, 0, end - start, digest, lifetime.Token, progress);
-            }, lifetime.Token));
+            var (start, end, payloadLength, digest) = remaining.Current;
+            pending.Add(Task.Run(() => LoadVolume(file, start, end, payloadLength, digest, lifetime.Token, progress), lifetime.Token));
             return true;
         }
     }
 
-    private static ExitSnapshotVolume? LoadVolume(Stream stream, long start, long end, byte[] digest, CancellationToken token,
+    private static ExitSnapshotVolume? LoadVolume(SafeFileHandle file, long start, long end, long payloadLength, byte[] digest,
+        CancellationToken token,
         Action<NtfsVolume, bool, int>? progress)
     {
         try
         {
-            stream.Position = start;
-            if (!ChecksumMatches(stream, end, digest, token)) return null;
-            stream.Position = start;
-            return ReadVolume(stream, end, token, progress);
+            // 串行读取也要限制卷块边界，解码器可以继续预读当前帧之后的字节。
+            using var stored = new BufferedStream(new VolumeStream(file, start, end - start), 1 << 20);
+            if (!ChecksumMatches(stored, end - start, digest, token)) return null;
+            stored.Position = 0;
+            using var decompressed = new DecompressionStream(stored, leaveOpen: true);
+            using var buffered = new BufferedStream(decompressed, 128 * 1024);
+            using var payload = new PayloadStream(buffered);
+            return ReadVolume(payload, payloadLength, token, progress);
         }
-        catch (Exception error) when (error is InvalidDataException or EndOfStreamException or ArgumentException or FormatException)
+        catch (Exception error) when (error is InvalidDataException or EndOfStreamException or ArgumentException or FormatException or ZstdException)
         {
             // 卷目录可信，其余卷按各自的偏移和校验值继续恢复。
             return null;
         }
     }
 
-    private static (long Start, long End, byte[] Digest)[] ReadDirectory(FileStream file, CancellationToken token)
+    private static (long Start, long End, long PayloadLength, byte[] Digest)[] ReadDirectory(FileStream file, CancellationToken token)
     {
         using var reader = new BinaryReader(file, Encoding.UTF8, leaveOpen: true);
         int prefixBytes = Magic.Length + sizeof(int);
@@ -175,15 +187,16 @@ public static class ExitSnapshotStore
         file.Position = 0;
         if (!ChecksumMatches(file, directoryEnd, expected, token)) throw new InvalidDataException("退出快照卷目录校验失败。");
         file.Position = prefixBytes;
-        var entries = new (long Start, long End, byte[] Digest)[count];
+        var entries = new (long Start, long End, long PayloadLength, byte[] Digest)[count];
         for (int i = 0; i < count; i++)
         {
             token.ThrowIfCancellationRequested();
             long length = reader.ReadInt64();
-            if (length < MinimumVolumeBytes || length > long.MaxValue - start)
+            long payloadLength = reader.ReadInt64();
+            if (length <= 0 || length > long.MaxValue - start || payloadLength < MinimumVolumeBytes)
                 throw new InvalidDataException("退出快照卷数据长度无效。");
             long end = start + length;
-            entries[i] = (start, end, reader.ReadBytes(DigestBytes));
+            entries[i] = (start, end, payloadLength, reader.ReadBytes(DigestBytes));
             start = end;
         }
         return entries;
@@ -341,7 +354,7 @@ public static class ExitSnapshotStore
             ReadText(file, name, utf16, bytes);
             builder.AddRecord(directoryId, name, size, modified, (flags & 1) != 0, reference);
         }
-        if (file.Position != end) throw new InvalidDataException("退出快照卷数据长度不符。");
+        if (file.Position != end || file.ReadByte() != -1) throw new InvalidDataException("退出快照卷解压长度不符。");
         progress?.Invoke(volume, true, rowCount);
         return new(volume, position, [builder.Build(token)]);
     }
@@ -405,6 +418,40 @@ public static class ExitSnapshotStore
     private static void RequireLittleEndian()
     {
         if (!BitConverter.IsLittleEndian) throw new PlatformNotSupportedException("退出快照要求小端平台。");
+    }
+
+    // 复用原记录编码中的长度检查；统计的是解压后实际消费的字节，底层预读不计入。
+    private sealed class PayloadStream(Stream stream) : Stream
+    {
+        private long position;
+        public override bool CanRead => stream.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => stream.CanWrite;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => position; set => throw new NotSupportedException(); }
+        public override void Flush() => stream.Flush();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+        public override int Read(Span<byte> buffer)
+        {
+            int read = stream.Read(buffer);
+            position += read;
+            return read;
+        }
+        public override int ReadByte()
+        {
+            int value = stream.ReadByte();
+            if (value >= 0) position++;
+            return value;
+        }
+        public override void Write(byte[] buffer, int offset, int count) => Write(buffer.AsSpan(offset, count));
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            stream.Write(buffer);
+            position += buffer.Length;
+        }
     }
 
     // 每个读取任务维护独立偏移，所有任务共享同一个已打开的快照句柄。
