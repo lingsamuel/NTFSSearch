@@ -6,6 +6,24 @@ namespace NtfsSearch.Tests;
 public sealed class DesktopSettingsTests
 {
     [Fact]
+    public void LegacySettingsEnableFolderSizesAndExplicitDisablePersists()
+    {
+        string directory = Path.Combine(AppContext.BaseDirectory, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "settings.json"), """{"SkipExitIndexSave":true}""");
+            var legacy = DesktopSettings.Load(directory);
+            Assert.True(legacy.SearchDirectorySizes);
+            (legacy with { SearchDirectorySizes = false }).Save(directory);
+            var saved = DesktopSettings.Load(directory);
+            Assert.False(saved.SearchDirectorySizes);
+            Assert.True(saved.SkipExitIndexSave);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
     public void ExitSavePreferenceSurvivesRestartAlongsideTheExistingSnapshot()
     {
         string directory = Path.Combine(AppContext.BaseDirectory, Guid.NewGuid().ToString("N"));

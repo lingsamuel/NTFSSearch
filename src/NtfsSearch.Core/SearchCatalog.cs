@@ -68,8 +68,8 @@ public sealed class SearchCatalog
         => Search(text, sort, descending, matchPath, offset, limit, cancellationToken, filter, includeDirectorySizes: false);
 
     internal SearchResult SearchDesktop(string text, SortField sort, bool descending,
-        bool matchPath, int offset, int limit, CancellationToken cancellationToken)
-        => Search(text, sort, descending, matchPath, offset, limit, cancellationToken, null, includeDirectorySizes: true);
+        bool matchPath, int offset, int limit, CancellationToken cancellationToken, bool includeDirectorySizes = true)
+        => Search(text, sort, descending, matchPath, offset, limit, cancellationToken, null, includeDirectorySizes);
 
     private SearchResult Search(string text, SortField sort, bool descending, bool matchPath, int offset, int limit,
         CancellationToken cancellationToken, SearchFilter? filter, bool includeDirectorySizes)

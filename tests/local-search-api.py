@@ -162,12 +162,12 @@ def check_port_collision(process, receive):
 
 
 def service_status(receive):
-    return receive(lambda event: event["type"] == "searchServiceStatus" and not event["busy"])
+    return receive(lambda event: event["type"] == "settingsStatus" and not event["busy"])
 
 
 def change_service(process, receive, action, **values):
     send(process, dict(type=action, **values))
-    pending = receive(lambda event: event["type"] == "searchServiceStatus")
+    pending = receive(lambda event: event["type"] == "settingsStatus")
     assert pending["busy"], pending
     return service_status(receive)
 
@@ -210,26 +210,38 @@ def check_settings(backend, cli, sandbox):
         first.close()
         second.close()
 
-        def apply(process, receive, port, enabled=True):
-            return change_service(process, receive, "applySearchServiceSettings", enabled=enabled, port=port)
+        def apply(process, receive, port, enabled=True, sizes=True, skip=True):
+            return change_service(process, receive, "applySettings", enabled=enabled, port=port,
+                                  searchDirectorySizes=sizes, skipExitIndexSave=skip)
 
-        def assert_status(status, port, enabled, running, error=False, override=None):
-            assert status == dict(type="searchServiceStatus", enabled=enabled, port=port,
+        def assert_status(status, port, enabled, running, error=False, override=None, sizes=True, skip=True):
+            assert status == dict(type="settingsStatus", enabled=enabled, port=port,
                                   address=f"http://127.0.0.1:{override or port}", portOverridden=override is not None,
+                                  searchDirectorySizes=sizes, skipExitIndexSave=skip,
                                   running=running, busy=False, error=status["error"] if error else None), status
             assert bool(status["error"]) == error, status
+
+        def check_directory(process, receive, request_id, known):
+            send(process, dict(type="query", requestId=request_id, text="深层1", matchPath=False,
+                               sort=2, descending=True))
+            result = receive(lambda event: event["type"] == "result" and event["requestId"] == request_id
+                             and not event["directorySortPending"] and event["total"] == 1)
+            row, = result["rows"]
+            assert row["isDirectory"]
+            assert row["sizeBytesText"] == ("15,308,800 B" if known else None), row
+            assert row["sizeHint"] is None, row
 
         def configure(process, receive):
             assert_status(service_status(receive), 18791, False, False)
             receive(lambda event: event["type"] == "result" and event["total"] == 1000)
-            send(process, dict(type="getSearchServiceSettings"))
+            send(process, dict(type="getSettings"))
             assert_status(service_status(receive), 18791, False, False)
             assert_status(apply(process, receive, first_port), first_port, True, True)
             assert json.loads(run_cli("status").stdout)["indexed"] == 1000
             stored = settings.read_bytes()
 
             assert_status(apply(process, receive, 0), first_port, True, True, error=True)
-            assert_status(apply(process, receive, occupied_port), first_port, True, True, error=True)
+            assert_status(apply(process, receive, occupied_port, sizes=False, skip=False), first_port, True, True, error=True)
             assert settings.read_bytes() == stored and request(first_port, "status")["volumesReady"] == 2
 
             settings.unlink()
@@ -253,12 +265,24 @@ def check_settings(backend, cli, sandbox):
             send(process, dict(type="query", requestId=1, text='"hello world"'))
             receive(lambda event: event["type"] == "result" and event["requestId"] == 1 and event["total"] == 59)
             assert json.loads(settings.read_bytes())["SkipExitIndexSave"], "保存搜索服务设置覆盖了退出偏好"
+            check_directory(process, receive, 2, known=True)
+            assert_status(apply(process, receive, second_port, sizes=False, skip=False),
+                          second_port, True, True, sizes=False, skip=False)
+            check_directory(process, receive, 3, known=False)
+            assert request(second_port, "status")["indexed"] == 1000
 
         def restore(process, receive):
-            assert_status(service_status(receive), second_port, True, True)
+            assert (data / "index.ntsnap").read_bytes().startswith(b"NTSEXIT")
+            assert_status(service_status(receive), second_port, True, True, sizes=False, skip=False)
             receive(lambda event: event["type"] == "result" and event["total"] == 1000)
             assert json.loads(run_cli("status").stdout)["indexed"] == 1000
+            check_directory(process, receive, 1, known=False)
+            send(process, dict(type="setSkipExitIndexSave", skipExitIndexSave=True))
+            assert receive(lambda event: event["type"] == "exitSavePreference")["skipExitIndexSave"]
+            send(process, dict(type="getSettings"))
+            assert_status(service_status(receive), second_port, True, True, sizes=False, skip=True)
             assert_status(apply(process, receive, second_port, enabled=False), second_port, False, False)
+            check_directory(process, receive, 2, known=True)
             assert_unavailable(second_port)
 
         def check_disabled(process, receive):
@@ -277,15 +301,32 @@ def check_settings(backend, cli, sandbox):
             initial = service_status(receive)
             assert initial["address"] is None and "NTFS_SEARCH_PORT" in initial["error"], initial
             disabled = apply(process, receive, first_port, enabled=False)
-            assert disabled == dict(type="searchServiceStatus", enabled=False, port=first_port, address=None,
-                                    portOverridden=True, running=False, busy=False, error=None), disabled
+            assert disabled == dict(type="settingsStatus", enabled=False, port=first_port, address=None,
+                                    portOverridden=True, running=False, busy=False, error=None,
+                                    searchDirectorySizes=True, skipExitIndexSave=True), disabled
             assert json.loads(settings.read_bytes())["SearchServicePort"] == first_port
+
+        def queue_exit_settings(process, receive):
+            assert service_status(receive)["skipExitIndexSave"] is False
+            receive(lambda event: event["type"] == "result" and event["total"] == 1000)
+            # 在退出前送入一批即时保存，最后一次选择不写快照。
+            batch = [dict(type="setSkipExitIndexSave", skipExitIndexSave=bool(i % 2)) for i in range(32)]
+            process.stdin.write("".join(json.dumps(event) + "\n" for event in batch))
+            process.stdin.flush()
 
         desktop(backend, env, configure)
         desktop(backend, env, restore)
         desktop(backend, env, check_disabled)
         desktop(backend, env | {"NTFS_SEARCH_PORT": str(first_port)}, check_override)
+        # 无效环境变量只在启用监听时报告启动错误。
+        settings.write_text(json.dumps(json.loads(settings.read_bytes()) | {"SearchServiceEnabled": True}), encoding="utf-8")
         desktop(backend, env | {"NTFS_SEARCH_PORT": "invalid"}, check_invalid_override)
+        settings.write_text(json.dumps(json.loads(settings.read_bytes()) | {"SkipExitIndexSave": False}), encoding="utf-8")
+        snapshot = data / "index.ntsnap"
+        original_snapshot = snapshot.read_bytes()
+        desktop(backend, env, queue_exit_settings)
+        assert json.loads(settings.read_bytes())["SkipExitIndexSave"] is True, "退出时丢弃了已排队的设置"
+        assert snapshot.read_bytes() == original_snapshot, "退出没有遵守最新保存的偏好"
 
 
 def main(backend, cli):
@@ -327,6 +368,6 @@ if __name__ == "__main__":
         artifact_root.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=artifact_root) as sandbox:
             check_settings(backend, cli, sandbox)
-        print("搜索服务启停、端口切换、重启、失败恢复、配置持久化和 CLI 端口读取验证通过。")
+        print("全局设置、目录统计开关、退出偏好、HTTP 监听和 CLI 端口读取验证通过。")
     else:
         main(backend, cli)

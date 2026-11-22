@@ -208,7 +208,12 @@ async function verifySearchServiceSettings() {
     if (!button || button.disabled) throw new Error('缺少可操作的按钮：' + ${JSON.stringify(label)});
     button.click();
   })()`)
-  const enabled = '.settings-workspace input[type=checkbox]'
+  const enabled = '.settings-workspace input[name=search-service-enabled]'
+  const searchSizes = '.settings-workspace input[name=search-directory-sizes]'
+  const saveExit = '.settings-workspace input[name=save-exit-index]'
+  const quickSkip = '.index-exit-preference input[type=checkbox]'
+  const checked = selector => evaluate(`document.querySelector('${selector}').checked`)
+  const toggle = selector => evaluate(`document.querySelector('${selector}').click()`)
   const portInput = '.settings-workspace input[type=number]'
   const setPort = value => evaluate(`(() => {
     const field = document.querySelector('${portInput}');
@@ -224,6 +229,9 @@ async function verifySearchServiceSettings() {
   await until(() => status('运行中'), '设置页显示 HTTP 服务状态')
   assert.equal(await visible('.search-toolbar'), false)
   assert.equal(await evaluate(`document.querySelector('${enabled}').checked`), true)
+  assert.equal(await checked(searchSizes), true)
+  assert.equal(await checked(saveExit), false)
+  assert.equal(await evaluate("Boolean(document.querySelector('.settings-footer button[type=submit]'))"), true)
   assert.equal(await evaluate(`document.querySelector('${portInput}').value`), '18791')
   assert.match(await evaluate("document.querySelector('.settings-workspace').textContent"), /NTFS_SEARCH_PORT/)
   assert.equal(await evaluate("document.querySelector('.settings-command code').textContent"), curl)
@@ -239,17 +247,37 @@ async function verifySearchServiceSettings() {
   await evaluate(`document.querySelector('${enabled}').click()`)
   await click('保存并应用')
   await until(() => status('运行中'), '应用后启动 HTTP 服务')
+  await toggle(searchSizes)
+  await toggle(saveExit)
   await click('重启服务')
   await until(() => status('运行中'), '重启后恢复 HTTP 服务')
+  assert.equal(await checked(searchSizes), false)
+  assert.equal(await checked(saveExit), true)
   assert.equal((await fetch(`${address}/v1/search`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text: 'HELLO 000901', limit: 1 }), signal: AbortSignal.timeout(5000),
   })).status, 200)
+  await click('保存并应用')
+  await until(async () => {
+    const settings = JSON.parse(await readFile(settingsPath, 'utf8'))
+    return await status('运行中') && settings.SearchDirectorySizes === false && settings.SkipExitIndexSave === false
+  }, '全局保存搜索与索引设置')
 
   await click('返回')
   assert.equal(await visible('.settings-workspace'), false)
   assert.equal(await evaluate("document.querySelector('.search-field input').value"), 'HELLO 000901')
   assert.equal(await evaluate(`(${resultCount})()`), expected(1))
+  await click('索引状态')
+  assert.equal(await checked(quickSkip), false)
+  await toggle(quickSkip)
+  await until(() => checked(quickSkip), '索引状态即时保存')
+  await click('关闭索引状态')
+  await click('设置')
+  await until(() => status('运行中'), '重新打开设置')
+  assert.equal(await checked(saveExit), false)
+  assert.equal(await checked(searchSizes), false)
+  await toggle(searchSizes)
+  await click('返回')
   await click('空间分析')
   await until(() => visible('.space-map'), '进入空间分析')
   await evaluate("const level = document.querySelector('.space-level'); level.value = '3'; level.dispatchEvent(new Event('change'))")
@@ -261,6 +289,7 @@ async function verifySearchServiceSettings() {
     window.__internal_unstable_listeners_function_id__({ event, payload: null }, ids);
   })()`)
   await until(() => status('运行中'), '托盘事件打开同一设置页')
+  assert.equal(await checked(searchSizes), false, '返回时丢弃未保存的目录设置')
   assert.equal(await visible('.space-map'), false)
   await click('返回')
   assert.equal(await visible('.space-map'), true)

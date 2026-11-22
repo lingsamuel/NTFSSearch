@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import type { SearchServiceRequest, SearchServiceStatus } from './desktop'
+import type { SettingsRequest, SettingsStatus } from './desktop'
 
 const props = defineProps<{
-  status?: SearchServiceStatus
+  status?: SettingsStatus
   pending: boolean
   connected: boolean
   error: string
 }>()
-const emit = defineEmits<{ close: []; request: [request: SearchServiceRequest] }>()
+const emit = defineEmits<{ close: []; request: [request: SettingsRequest] }>()
 
 const back = ref<HTMLButtonElement>()
 const enabled = ref(false)
 const port = ref<number | string>('')
+const searchDirectorySizes = ref(true)
+const saveExitIndex = ref(true)
 const portError = ref('')
 const copyFeedback = ref('')
+let saved: SettingsStatus | undefined
 const busy = computed(() => props.pending || props.status?.busy)
 const serviceState = computed(() => {
   if (!props.connected) return '无法获取'
@@ -28,11 +31,16 @@ const curl = computed(() => props.status?.address
   ? String.raw`curl -sS --json '{"text":"C:\\Windows\\explorer.exe","limit":1}' ${props.status.address}/v1/search`
   : '')
 
-// 操作失败时保留待修改的输入，实际地址和状态始终取自后端。
-watch(() => props.status, (status, previous) => {
-  if (!status || (previous && (status.busy || status.error))) return
-  enabled.value = status.enabled
-  port.value = status.port
+// 只同步实际配置有变化的字段，重启服务或保存失败时保留表单草稿。
+watch(() => props.status, status => {
+  if (!status || status.busy) return
+  if (!saved || status.enabled !== saved.enabled) enabled.value = status.enabled
+  if (!saved || status.port !== saved.port) port.value = status.port
+  if (!saved || status.searchDirectorySizes !== saved.searchDirectorySizes)
+    searchDirectorySizes.value = status.searchDirectorySizes
+  if (!saved || status.skipExitIndexSave !== saved.skipExitIndexSave)
+    saveExitIndex.value = !status.skipExitIndexSave
+  saved = status
 }, { immediate: true })
 watch(curl, () => { copyFeedback.value = '' })
 
@@ -43,7 +51,8 @@ function save() {
     return
   }
   portError.value = ''
-  emit('request', { type: 'applySearchServiceSettings', enabled: enabled.value, port: value })
+  emit('request', { type: 'applySettings', enabled: enabled.value, port: value,
+    searchDirectorySizes: searchDirectorySizes.value, skipExitIndexSave: !saveExitIndex.value })
 }
 
 function restart() {
@@ -70,29 +79,37 @@ onMounted(() => back.value?.focus())
       <h1 id="settings-title">设置</h1>
     </header>
     <div class="settings-scroll">
-      <div class="settings-content">
-        <h2>搜索服务</h2>
-        <form novalidate @submit.prevent="save">
-          <fieldset :disabled="!connected || !status || busy">
-            <label class="settings-toggle"><input v-model="enabled" type="checkbox">启用 HTTP 搜索服务</label>
+      <form id="desktop-settings" class="settings-content" novalidate @submit.prevent="save">
+        <fieldset :disabled="!connected || !status || busy">
+          <section aria-labelledby="search-settings-title">
+            <h2 id="search-settings-title">搜索</h2>
+            <label class="settings-toggle">
+              <input v-model="searchDirectorySizes" name="search-directory-sizes" type="checkbox">计算搜索结果中的文件夹大小
+            </label>
+          </section>
+          <section aria-labelledby="index-settings-title">
+            <h2 id="index-settings-title">索引</h2>
+            <label class="settings-toggle">
+              <input v-model="saveExitIndex" name="save-exit-index" type="checkbox">退出时保存索引
+            </label>
+          </section>
+          <section class="settings-service" aria-labelledby="service-settings-title">
+            <h2 id="service-settings-title">搜索服务</h2>
+            <label class="settings-toggle"><input v-model="enabled" name="search-service-enabled" type="checkbox">启用 HTTP 搜索服务</label>
             <label class="settings-port">
               端口
               <input v-model="port" type="number" min="1" max="65535" step="1" required
-                :aria-invalid="portError ? true : undefined" :aria-describedby="portError ? 'search-service-error' : undefined"
+                :aria-invalid="portError ? true : undefined" :aria-describedby="portError ? 'settings-error' : undefined"
                 @input="portError = ''">
             </label>
-            <div class="settings-actions">
-              <button type="submit" class="outlined-button">保存并应用</button>
-              <button type="button" class="outlined-button" :disabled="!status?.enabled" @click="restart">重启服务</button>
-            </div>
-          </fieldset>
-        </form>
-        <dl class="settings-status">
-          <dt>服务状态</dt><dd role="status">{{ serviceState }}</dd>
-          <dt>访问地址</dt><dd>{{ status?.address ?? '—' }}</dd>
-        </dl>
-        <p v-if="status?.portOverridden" class="settings-note">环境变量 NTFS_SEARCH_PORT 覆盖已保存的端口。</p>
-        <p v-if="error" id="search-service-error" class="settings-error" role="alert">{{ error }}</p>
+            <button type="button" class="outlined-button" :disabled="!status?.enabled" @click="restart">重启服务</button>
+            <dl class="settings-status">
+              <dt>服务状态</dt><dd role="status">{{ serviceState }}</dd>
+              <dt>访问地址</dt><dd>{{ status?.address ?? '—' }}</dd>
+            </dl>
+            <p v-if="status?.portOverridden" class="settings-note">环境变量 NTFS_SEARCH_PORT 覆盖已保存的端口。</p>
+          </section>
+        </fieldset>
 
         <section v-if="curl" class="settings-example" aria-labelledby="curl-example-title">
           <h3 id="curl-example-title">Linux / WSL 查询示例</h3>
@@ -103,8 +120,14 @@ onMounted(() => back.value?.focus())
           <p class="settings-note">Windows 系统卷索引就绪后，响应会返回匹配文件的完整路径。</p>
           <p v-if="copyFeedback" class="settings-note" role="status">{{ copyFeedback }}</p>
         </section>
-      </div>
+      </form>
     </div>
+    <footer class="settings-footer">
+      <p v-if="error" id="settings-error" class="settings-error" role="alert">{{ error }}</p>
+      <button type="submit" form="desktop-settings" class="outlined-button" :disabled="!connected || !status || busy">
+        保存并应用
+      </button>
+    </footer>
   </section>
 </template>
 
@@ -129,8 +152,9 @@ onMounted(() => back.value?.focus())
 .settings-scroll { flex: 1; overflow: auto; }
 .settings-content { max-width: 820px; padding: 20px 16px; }
 .settings-content h2 { margin: 0 0 12px; font-size: 16px; }
-.settings-content fieldset { display: grid; gap: 12px; margin: 0; padding: 0; border: 0; }
-.settings-toggle, .settings-port, .settings-actions { display: flex; align-items: center; gap: 8px; }
+.settings-content fieldset { display: grid; gap: 22px; margin: 0; padding: 0; border: 0; }
+.settings-toggle, .settings-port { display: flex; align-items: center; gap: 8px; }
+.settings-service .settings-port { margin: 12px 0; }
 .settings-toggle input { accent-color: var(--accent); }
 .settings-port input {
   width: 104px;
@@ -146,6 +170,16 @@ onMounted(() => back.value?.focus())
 .settings-status dd { margin: 0; font-variant-numeric: tabular-nums; }
 .settings-note, .settings-error { margin: 5px 0 0; }
 .settings-error { color: var(--warning); }
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--chrome);
+}
+.settings-footer button { flex: none; }
 .settings-example { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
 .settings-example h3 { margin: 0 0 7px; font-size: 13px; }
 .settings-command { display: flex; align-items: center; gap: 8px; }

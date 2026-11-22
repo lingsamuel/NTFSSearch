@@ -87,8 +87,10 @@ export interface SpaceAnalysisResult {
   } | null
 }
 
-export interface SearchServiceStatus {
-  type: 'searchServiceStatus'
+export interface SettingsStatus {
+  type: 'settingsStatus'
+  searchDirectorySizes: boolean
+  skipExitIndexSave: boolean
   enabled: boolean
   port: number
   address: string | null
@@ -98,15 +100,15 @@ export interface SearchServiceStatus {
   error: string | null
 }
 
-export type SearchServiceRequest =
-  | { type: 'getSearchServiceSettings' | 'restartSearchService' }
-  | { type: 'applySearchServiceSettings'; enabled: boolean; port: number }
+export type SettingsRequest =
+  | { type: 'getSettings' | 'restartSearchService' }
+  | { type: 'applySettings'; enabled: boolean; port: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean }
 
 export type DesktopMessage =
   | SearchResult
   | IndexStatus
   | SpaceAnalysisResult
-  | SearchServiceStatus
+  | SettingsStatus
   | { type: 'directorySizes'; requestId: number; rows: Pick<SearchRow, 'key' | 'sizeText' | 'sizeBytesText' | 'sizeHint'>[] }
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
@@ -117,7 +119,7 @@ export type DesktopMessage =
   | { type: 'notice'; message: string }
 
 export type DesktopRequest =
-  | SearchServiceRequest
+  | SettingsRequest
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }

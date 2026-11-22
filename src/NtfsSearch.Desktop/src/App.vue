@@ -8,7 +8,7 @@ import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
   formatCount, listenToBackend, listenToOpenSettings, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
-  type SearchServiceRequest, type SearchServiceStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
+  type SettingsRequest, type SettingsStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
 } from './desktop'
 
 const queryInput = ref<HTMLInputElement>()
@@ -36,9 +36,9 @@ const spaceError = ref('')
 const spacePathPending = ref(false)
 const spacePathError = ref('')
 const showingSettings = ref(false)
-const searchServiceStatus = shallowRef<SearchServiceStatus>()
-const searchServicePending = ref(false)
-const searchServiceError = ref('')
+const settingsStatus = shallowRef<SettingsStatus>()
+const settingsPending = ref(false)
+const settingsError = ref('')
 let requestId = Date.now()
 let spaceRequestId = requestId
 let spaceDetailId = 0
@@ -97,9 +97,10 @@ function receive(message: DesktopMessage) {
     case 'status':
       indexStatus.value = message
       break
-    case 'searchServiceStatus':
-      searchServiceStatus.value = message
-      searchServicePending.value = message.busy
+    case 'settingsStatus':
+      settingsStatus.value = message
+      settingsPending.value = message.busy
+      if (indexStatus.value) indexStatus.value = { ...indexStatus.value, skipExitIndexSave: message.skipExitIndexSave }
       break
     case 'spaceAnalysis':
       if (!showingSpace.value || message.requestId !== spaceRequestId) return
@@ -123,8 +124,8 @@ function receive(message: DesktopMessage) {
         resetFileTypeIconRequest()
         saving.value = undefined
         preferencePending.value = false
-        searchServiceStatus.value = undefined
-        searchServicePending.value = false
+        settingsStatus.value = undefined
+        settingsPending.value = false
         connected.value = false
         pending.value = false
         fatal.value = message.message
@@ -147,6 +148,7 @@ function receive(message: DesktopMessage) {
       break
     case 'exitSavePreference':
       if (indexStatus.value) indexStatus.value = { ...indexStatus.value, skipExitIndexSave: message.skipExitIndexSave }
+      if (settingsStatus.value) settingsStatus.value = { ...settingsStatus.value, skipExitIndexSave: message.skipExitIndexSave }
       preferencePending.value = false
       if (message.error) showFeedback(message.error, true)
       break
@@ -168,7 +170,7 @@ async function connect() {
     if (fatal.value) return
     connected.value = true
     query()
-    if (showingSettings.value) requestSearchService({ type: 'getSearchServiceSettings' })
+    if (showingSettings.value) requestSettings({ type: 'getSettings' })
   } catch (error) {
     fatal.value ||= String(error)
     connected.value = false
@@ -235,7 +237,7 @@ function openSettings() {
   if (showingSettings.value) return
   if (document.activeElement instanceof HTMLElement) focusBeforeSettings = document.activeElement
   showingSettings.value = true
-  requestSearchService({ type: 'getSearchServiceSettings' })
+  requestSettings({ type: 'getSettings' })
 }
 
 function closeSettings() {
@@ -248,13 +250,14 @@ function closeSettings() {
   })
 }
 
-function requestSearchService(request: SearchServiceRequest) {
-  if (!connected.value || saving.value || searchServicePending.value) return
-  searchServiceError.value = ''
-  searchServicePending.value = true
+function requestSettings(request: SettingsRequest) {
+  if (!connected.value || saving.value || settingsPending.value
+      || (preferencePending.value && request.type !== 'getSettings')) return
+  settingsError.value = ''
+  settingsPending.value = true
   void sendRequest(request).catch(error => {
-    searchServicePending.value = false
-    searchServiceError.value = String(error)
+    settingsPending.value = false
+    settingsError.value = String(error)
   })
 }
 
@@ -315,7 +318,7 @@ function sendAction(request: DesktopRequest) {
 }
 
 function updateSavePreference(skipExitIndexSave: boolean) {
-  if (!connected.value || saving.value || preferencePending.value) return
+  if (!connected.value || saving.value || preferencePending.value || settingsPending.value) return
   showFeedback('')
   preferencePending.value = true
   void sendRequest({ type: 'setSkipExitIndexSave', skipExitIndexSave }).catch(error => {
@@ -397,7 +400,7 @@ onBeforeUnmount(() => {
             <span class="chevron right" aria-hidden="true"></span>
           </button>
         </div>
-        <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending"
+        <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending || settingsPending"
           @save-preference="updateSavePreference" @action="sendAction({ type: $event })" />
       </footer>
       <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
@@ -407,8 +410,8 @@ onBeforeUnmount(() => {
         @details="requestSpaceDetails"
         @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
     </div>
-    <Settings v-if="showingSettings" :status="searchServiceStatus" :pending="searchServicePending"
-      :connected="connected" :error="fatal || searchServiceError" @close="closeSettings" @request="requestSearchService" />
+    <Settings v-if="showingSettings" :status="settingsStatus" :pending="settingsPending || preferencePending"
+      :connected="connected" :error="fatal || settingsError" @close="closeSettings" @request="requestSettings" />
     <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>
       <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>
