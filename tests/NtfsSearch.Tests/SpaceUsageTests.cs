@@ -193,15 +193,18 @@ public sealed class SpaceUsageTests
         var write = Change(0, new IndexedFileState(15, false, [new(11, @"C:\left\nested\", "item")], 7));
         live.CollectFileParents(write, parents);
         Assert.False(live.Apply(write));
-        Assert.Equal(new[] { 10UL }, usage.ActivityFolders(0, parents));
+        Assert.Equal(new[] { 10UL, 11UL }, Assert.Single(usage.ActivityPaths(0, parents)));
 
         var move = Change(1, new IndexedFileState(15, false, [new(20, @"C:\right\", "item")], 7),
             new IndexedFileState(16, false, [new(11, @"C:\left\nested\", "new")], 9));
         live.CollectFileParents(move, parents);
         Assert.True(live.Apply(move));
         usage = usage.Update(live.Layers);
-        Assert.Equal(new[] { 10UL, 20UL }, usage.ActivityFolders(0, parents).Order());
-        Assert.Equal(new[] { 11UL }, usage.ActivityFolders(10, parents));
+        Assert.Collection(usage.ActivityPaths(0, parents).OrderBy(path => path[0]),
+            path => Assert.Equal(new[] { 10UL, 11UL }, path),
+            path => Assert.Equal(new[] { 20UL }, path));
+        Assert.Equal(new[] { 11UL }, Assert.Single(usage.ActivityPaths(10, parents)));
+        Assert.Empty(usage.ActivityPaths(11, parents));
     }
 
     [Fact]

@@ -8,7 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -18,6 +18,7 @@ const searchServiceSettingsTest = mode === '--search-service-settings'
 const withoutHttpTest = mode === '--without-http'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
 const exitSaveSkipTest = mode === '--exit-save-skip'
+const spaceFlashTest = mode === '--space-flash'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
   : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
@@ -40,7 +41,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -340,6 +341,64 @@ async function waitForDesktop(total) {
   assert.equal(await evaluate("document.querySelectorAll('tbody tr').length"), 200)
 }
 
+async function verifySpaceFlash() {
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
+  await evaluate(`(async () => {
+    const event = 'backend-message';
+    const listeners = window.__internal_unstable_listeners_object_id__[event];
+    const ids = Object.getOwnPropertyNames(listeners).map(Number);
+    const tauri = window.__TAURI_INTERNALS__;
+    const handler = tauri.transformCallback(({ payload }) => {
+      if (payload.type === 'spaceAnalysis') window.lastSpaceResult = payload;
+    });
+    await tauri.invoke('plugin:event|listen', { event, target: { kind: 'Any' }, handler });
+    // 真实演示索引提供布局。通过现有事件入口注入一批文件变更，避免依赖实盘写入时机。
+    window.sendSpaceActivity = activityPaths => {
+      const payload = { ...window.lastSpaceResult, activityPaths };
+      window.__internal_unstable_listeners_function_id__({ event, payload }, ids);
+    };
+  })()`)
+  await click('空间分析')
+  await until(() => visible('.space-map'), '打开空间分析')
+
+  const setLevel = level => evaluate(`(() => {
+    const select = document.querySelector('.space-level');
+    select.value = '${level}';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  })()`)
+  const folderTile = name => `Array.from(document.querySelectorAll('.space-tile.directory'))
+    .find(tile => tile.title.split(' · ', 1)[0].endsWith(${JSON.stringify(name)}))`
+  const folderKey = name => until(() => evaluate(`${folderTile(name)}?.dataset.tileKey`), '显示' + name)
+  const expectFlashes = async (paths, keys, label) => {
+    const flashed = await evaluate(`(async () => {
+      window.sendSpaceActivity(${JSON.stringify(paths)});
+      await Promise.resolve();
+      const folders = new Map(Array.from(document.querySelectorAll('.space-tile.directory'),
+        tile => [tile.style.cssText, tile.dataset.tileKey]));
+      return Array.from(document.querySelectorAll('.space-flash'), overlay => folders.get(overlay.style.cssText)).sort();
+    })()`)
+    assert.deepEqual(flashed, keys.sort(), label)
+    await until(() => evaluate("document.querySelector('.space-flash') === null"), '闪烁结束')
+  }
+
+  await setLevel(3)
+  const automatic = await folderKey('深层2')
+  const other = await folderKey('目录008')
+  const path = automatic.split('/')
+  assert.equal(path.length, 3)
+  await expectFlashes([path, path, [other]], [automatic, other], '自动展开、多分支与同批去重')
+
+  await evaluate(`${folderTile('深层2')}.click()`)
+  const manual = await folderKey('深层3')
+  const manualPath = manual.split('/')
+  await expectFlashes([manualPath, path], [manual, automatic], '手动展开与同一分支的两处独立变化')
+
+  await evaluate(`${folderTile('目录001')}.click(); ${folderTile('目录001')}.click()`)
+  await setLevel(1)
+  await until(() => evaluate("document.querySelector('.space-tile.nested') === null"), '收起子目录')
+  await expectFlashes([manualPath], [path[0]], '子目录收起时高亮最近的可见上级')
+}
+
 async function verifyIndexMemorySettings(total) {
   const switches = {
     PrecomputeSort: 'precompute-sort', IndexCreationTime: 'index-creation-time',
@@ -534,6 +593,8 @@ try {
     await verifySearchResults()
   } else if (searchServiceSettingsTest) {
     await verifySearchServiceSettings()
+  } else if (spaceFlashTest) {
+    await verifySpaceFlash()
   } else if (withoutHttpTest) {
     await click('设置')
     const settingsReady = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
@@ -903,6 +964,7 @@ try {
   else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
   else if (indexMemorySettingsTest) console.log('Windows 预计算排序即时切换、元数据列重启生效和文件夹大小偏好通过。')
   else if (exitSaveSkipTest) console.log('Windows 退出保存按钮、状态、旧快照保留及再次退出保存通过。')
+  else if (spaceFlashTest) console.log('Windows 空间分析自动及手动展开、同批多处闪烁、收起回退通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

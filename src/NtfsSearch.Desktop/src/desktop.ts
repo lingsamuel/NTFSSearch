@@ -75,7 +75,7 @@ export interface SpaceAnalysisResult {
   doubleClickHeight: number
   detailId: number
   details: Record<string, SpaceEntry[] | null>
-  flashes: string[]
+  activityPaths: string[][]
   exclusionRevision: number
   exclusions: SpaceExclusion[]
   folder: {

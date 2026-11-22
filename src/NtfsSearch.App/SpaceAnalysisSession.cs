@@ -21,7 +21,6 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private readonly Dictionary<(string Volume, string Path), SpaceExclusion> exclusions = [];
     private long exclusionRevision;
     private SpaceActivityObservation? observation;
-    private HashSet<ulong> visibleFolders = [];
     private ulong[] detailDirectories = [];
     private ulong[] detailBranch = [];
     private long detailId, lastDetailId;
@@ -158,7 +157,6 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         selection = null;
         exclusions.Clear();
         Observe(null);
-        visibleFolders.Clear();
         trail = [];
         displayedVolumeKey = null;
         work.Cancel();
@@ -222,7 +220,6 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
             trail = [];
             displayedVolumeKey = null;
             Observe(null);
-            visibleFolders.Clear();
             Publish(target.RequestId, roots, null, null, null, 0, [], []);
             return;
         }
@@ -247,14 +244,15 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         SpaceFolder? result = null;
         string? error = null;
         Dictionary<ulong, SpaceItem[]?> details = [];
-        HashSet<ulong> affected = [];
+        List<ulong[]> activityPaths = [];
         try
         {
             (updated, result, error) = await Task.Run<(SpaceUsageIndex, SpaceFolder?, string?)>(() =>
             {
                 var token = source.Token;
-                if (changedParents.Length > 0 && previous is not null)
-                    affected = previous.ActivityFolders(directory, changedParents);
+                // Update 可原地更新目录树。先保留变更前的目录链，移动或删除后仍可定位原分支。
+                if (!request.UserInitiated && changedParents.Length > 0 && previous is not null)
+                    activityPaths = previous.ActivityPaths(directory, changedParents);
                 var index = previous?.Update(layers, token) ?? SpaceUsageIndex.Create(root, layers, token);
                 var filter = index.CreateFilter(excluded, token);
                 if (path is not null)
@@ -273,7 +271,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 else if (!IsVisible(directory))
                     directory = fallback.Reverse().FirstOrDefault(IsVisible);
                 var folder = index.Read(directory, VisibleItems, token, filter);
-                if (changedParents.Length > 0) affected.UnionWith(index.ActivityFolders(directory, changedParents));
+                if (!request.UserInitiated && changedParents.Length > 0)
+                    activityPaths.AddRange(index.ActivityPaths(directory, changedParents));
                 foreach (ulong id in detailsRequested)
                     if (id != directory) details.Add(id, IsVisible(id) ? index.Read(id, VisibleItems, token, filter).Children : null);
                 if (index.FindBrokenBranch(directory, branch) is { } broken) details[broken] = null;
@@ -303,27 +302,18 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 if (path is not null && error is not null) ReportPathError(requestId, error);
                 else
                 {
-                    ulong[] flashes = [];
+                    bool sameScene = false;
                     if (result is not null)
                     {
                         ulong previousDirectory = trail.LastOrDefault();
-                        var nextFolders = result.Children.Where(item => item.DirectoryId.HasValue)
-                            .Select(item => item.DirectoryId!.Value).ToHashSet();
-                        bool sameScene = displayedVolumeKey == volumeKey && previousDirectory == directory;
-                        if (!request.UserInitiated && sameScene)
-                        {
-                            affected.IntersectWith(visibleFolders);
-                            affected.IntersectWith(nextFolders);
-                            flashes = affected.ToArray();
-                        }
+                        sameScene = displayedVolumeKey == volumeKey && previousDirectory == directory;
                         if (!sameScene) Observe(null);
-                        visibleFolders = nextFolders;
                         trail = result.Breadcrumbs.Select(crumb => crumb.Id).ToArray();
                         displayedVolumeKey = volumeKey;
                         selection = (requestId, root, directory, null, volumeKey);
                         Observe(volumeKey);
                     }
-                    Publish(requestId, roots, root, result, error, detailsRevision, details, flashes);
+                    Publish(requestId, roots, root, result, error, detailsRevision, details, sameScene ? activityPaths : []);
                 }
             }
             TryStart();
@@ -343,7 +333,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     }
 
     private void Publish(long requestId, string[] roots, string? root, SpaceFolder? folder, string? error,
-        long detailsRevision, Dictionary<ulong, SpaceItem[]?> details, ulong[] flashes)
+        long detailsRevision, Dictionary<ulong, SpaceItem[]?> details, List<ulong[]> activityPaths)
         => publish(new
         {
             Type = "spaceAnalysis", RequestId = requestId, Roots = roots, Root = root, VolumeKey = volumeKey, Error = error,
@@ -351,7 +341,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
             DoubleClickHeight = doubleClickHeight, DetailId = detailsRevision,
             Details = details.ToDictionary(pair => pair.Key.ToString("X16"),
                 pair => pair.Value is { } items ? SerializeItems(items) : null),
-            Flashes = flashes.Select(id => id.ToString("X16")), ExclusionRevision = exclusionRevision,
+            ActivityPaths = activityPaths.Select(path => path.Select(id => id.ToString("X16"))), ExclusionRevision = exclusionRevision,
             Exclusions = exclusions.Select(entry => new
             {
                 VolumeKey = entry.Key.Volume, entry.Value.Path, Key = DesktopFileActions.EncodePath(entry.Value.Path)

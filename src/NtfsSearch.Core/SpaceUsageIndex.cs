@@ -106,18 +106,24 @@ internal sealed partial class SpaceUsageIndex(string rootPath, bool includeFileR
         return null;
     }
 
-    /// <summary>将发生文件变更的父目录归到指定视图根的直接子目录。</summary>
-    internal HashSet<ulong> ActivityFolders(ulong viewRoot, IEnumerable<ulong> parents)
+    /// <summary>返回视图根下每个变更父目录的完整目录链，从根的直接子目录到文件的父目录。</summary>
+    internal List<ulong[]> ActivityPaths(ulong viewRoot, IEnumerable<ulong> parents)
     {
-        var affected = new HashSet<ulong>();
+        var paths = new List<ulong[]>();
+        var path = new List<ulong>();
         foreach (ulong parent in parents)
-            for (var folder = folders.GetValueOrDefault(parent); folder is not null && folder.Id != viewRoot; folder = folder.Parent)
-                if (folder.Parent?.Id == viewRoot)
-                {
-                    affected.Add(folder.Id);
-                    break;
-                }
-        return affected;
+        {
+            path.Clear();
+            var folder = folders.GetValueOrDefault(parent);
+            for (; folder is not null && folder.Id != viewRoot; folder = folder.Parent)
+                path.Add(folder.Id);
+            if (folder is not null && path.Count > 0)
+            {
+                path.Reverse();
+                paths.Add(path.ToArray());
+            }
+        }
+        return paths;
     }
 
     /// <summary>接受盘符、资源管理器复制的绝对路径和扩展路径，保留实际索引名称。</summary>

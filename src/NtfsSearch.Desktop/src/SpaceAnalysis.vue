@@ -148,13 +148,27 @@ watch([() => props.result?.requestId, () => drawing.value.ids.join(','), () => d
   if (requestId !== undefined && (ids || manualIds || requestId === previousId && (previousIds || previousManualIds)))
     emit('details', requestId, ids ? ids.split(',') : [], manualIds ? manualIds.split(',') : [], branchIds ? branchIds.split(',') : [])
 })
-watch(() => props.result, result => {
-  for (const id of result?.flashes ?? []) {
-    clearTimeout(flashTimers.get(id))
-    flashTokens.value[id] = ++flashSequence
-    flashTimers.set(id, setTimeout(() => {
-      delete flashTokens.value[id]
-      flashTimers.delete(id)
+watch([() => props.result, () => drawing.value.tiles], ([result, tiles], [previousResult, previousTiles]) => {
+  if (result === previousResult || !result?.activityPaths.length) return
+  const previousKeys = new Set(previousTiles.map(tile => tile.key))
+  const visibleKeys = new Set(tiles.map(tile => tile.key))
+  const targets = new Set<string>()
+  for (const path of result.activityPaths) {
+    let target = ''
+    // 按树图中的路径匹配，目录移动后，原位置的变更仍能在原分支高亮。
+    for (const id of path) {
+      const key = target ? target + '/' + id : id
+      if (!previousKeys.has(key) || !visibleKeys.has(key)) break
+      target = key
+    }
+    if (target) targets.add(target)
+  }
+  for (const key of targets) {
+    clearTimeout(flashTimers.get(key))
+    flashTokens.value[key] = ++flashSequence
+    flashTimers.set(key, setTimeout(() => {
+      delete flashTokens.value[key]
+      flashTimers.delete(key)
     }, 450))
   }
 })
@@ -356,8 +370,8 @@ onBeforeUnmount(() => {
           </template>
         </button>
         <template v-for="tile in drawing.tiles" :key="'flash/' + tile.key">
-          <div v-if="tile.level === 1 && tile.item.directoryId && flashTokens[tile.item.directoryId]"
-            :key="flashTokens[tile.item.directoryId]" class="space-flash" aria-hidden="true"
+          <div v-if="flashTokens[tile.key]"
+            :key="flashTokens[tile.key]" class="space-flash" aria-hidden="true"
             :style="{ left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px' }"></div>
         </template>
       </template>
