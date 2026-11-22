@@ -1,2 +1,2 @@
 @echo off
-start "" "%~dp0app\NtfsSearch.App.exe"
+start "" "%~dp0NtfsSearch.App.exe"

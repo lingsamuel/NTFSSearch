@@ -30,7 +30,7 @@ Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索�
 
 - 程序发现本机 NTFS 磁盘，管理员采集进程通过本地管道向普通权限搜索进程传输初扫数据和 USN 变更。卷完成后即可搜索。
 - 运行时索引、排序、采集状态和增量均留在内存。搜索使用已发布的卷视图，过时记录按卷后台合并。日志丢失或手工重扫时重新读取对应卷。
-- 正常退出时把各卷当前有效的文件元数据与 USN 水位写成一份快照 `app/Data/index.ntsnap`。下次启动在内存重建排序，按 USN 接续停机期间的变化。
+- 正常退出时把各卷当前有效的文件元数据与 USN 水位写成一份快照 `Data/index.ntsnap`。下次启动在内存重建排序，按 USN 接续停机期间的变化。
 - 0.9.0 可直接读取 0.7.0 至 0.8.1 的退出快照。明确启动开发诊断时按诊断说明使用其报告目录。
 - 卷身份、硬链接和目录层级按完整 NTFS 文件引用记录。界面显示卷处理进度和错误原因。
 
@@ -56,10 +56,10 @@ dotnet run --project src/NtfsSearch.Cli -c Release -- bench 1000000 report.json 
 
 Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
-诊断参数可传给 `app/NtfsSearch.App.exe` 或 `app/NtfsSearch.Backend.exe`。`--smoke-test report.txt` 执行后端自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离数据目录等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
+诊断参数可传给便携版顶层的 `NtfsSearch.App.exe` 或 `NtfsSearch.Backend.exe`。`--smoke-test report.txt` 执行后端自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离数据目录等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
 
-便携版构建后，可运行 `node tests/desktop-window.mjs artifacts/windows/app/NtfsSearch.App.exe artifacts/desktop-window`，在 Windows 窗口中验证搜索交互和退出。该自检使用独立的演示索引。
+便携版构建后，可运行 `node tests/desktop-window.mjs artifacts/windows/NtfsSearch.App.exe artifacts/desktop-window`，在 Windows 窗口中验证搜索交互和退出。该自检使用独立的演示索引。
 
-便携版的 `app/NtfsSearch.Cli.exe` 提供 EFU 导入、快照查询和显式扫描等开发诊断能力，与桌面后端共用同目录的程序集。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
+便携版顶层的 `NtfsSearch.Cli.exe` 提供 EFU 导入、快照查询和显式扫描等开发诊断能力，与桌面后端共用同目录的程序集。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
 
 参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。NTFS 数据流读取复用 DiscUtils，依赖与许可见 `docs/native-dependencies.md`。
