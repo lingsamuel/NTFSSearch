@@ -14,6 +14,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private const int DetailDirectoryLimit = 32;
     private readonly QueryRefreshState work = new();
     private readonly uint doubleClickMilliseconds = OperatingSystem.IsWindows() ? GetDoubleClickTime() : 500;
+    private readonly int doubleClickWidth = OperatingSystem.IsWindows() ? GetSystemMetricsForDpi(36, 96) : 4;
+    private readonly int doubleClickHeight = OperatingSystem.IsWindows() ? GetSystemMetricsForDpi(37, 96) : 4;
     private readonly object activityGate = new();
     private readonly HashSet<ulong> pendingParents = [];
     private SpaceActivityObservation? observation;
@@ -309,7 +311,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         => publish(new
         {
             Type = "spaceAnalysis", RequestId = requestId, Roots = roots, Root = root, VolumeKey = volumeKey, Error = error,
-            DoubleClickMilliseconds = doubleClickMilliseconds, DetailId = detailsRevision,
+            DoubleClickMilliseconds = doubleClickMilliseconds, DoubleClickWidth = doubleClickWidth,
+            DoubleClickHeight = doubleClickHeight, DetailId = detailsRevision,
             Details = details.ToDictionary(pair => pair.Key.ToString("X16"),
                 pair => pair.Value is { } items ? SerializeItems(items) : null),
             Flashes = flashes.Select(id => id.ToString("X16")),
@@ -333,6 +336,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         });
 
     [DllImport("user32")] private static extern uint GetDoubleClickTime();
+    // 96 DPI 对应 WebView 默认 CSS 坐标，36/37 是系统双击矩形的宽和高。
+    [DllImport("user32")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
 
     private bool ContainsVolume((NtfsVolume Volume, IReadOnlyList<SearchIndex> Layers)[] views)
         => views.Any(view => VolumeCache.Key(view.Volume) == volumeKey);

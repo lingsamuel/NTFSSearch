@@ -59,6 +59,8 @@ export interface SpaceAnalysisResult {
   volumeKey: string | null
   error: string | null
   doubleClickMilliseconds: number
+  doubleClickWidth: number
+  doubleClickHeight: number
   detailId: number
   details: Record<string, SpaceEntry[] | null>
   flashes: string[]

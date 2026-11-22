@@ -48,7 +48,7 @@ const folderHeaderHeight = 24
 const flashTokens = ref<Record<string, number>>({})
 const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let flashSequence = 0
-let clickTimer: ReturnType<typeof setTimeout> | undefined
+let previousClick: { item: SpaceEntry; x: number; y: number; time: number } | undefined
 const formatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 })
 const folder = computed(() => props.result?.folder)
 const selectedRoot = computed({
@@ -117,33 +117,9 @@ const drawing = computed(() => {
   }
 })
 
-const overflowPreview = computed(() => {
-  const id = preview.value?.directoryId
-  if (!id) return []
-  const children = props.result?.details[id]
-  if (!children?.length) return []
-  const rendered = new Set(drawing.value.tiles.filter(tile => tile.ancestors.at(-1)?.directoryId === id)
-    .map(tile => itemKey(tile.item)))
-  // 原块放不下子目录时，在当前视图内保留继续单击下探的入口。
-  return children.filter(item => rendered.size === 0 || item.directoryId && !rendered.has(itemKey(item)))
-})
-
-const overflowPlacement = computed(() => {
-  const tile = drawing.value.tiles.find(entry => entry.item.directoryId === preview.value?.directoryId)
-  if (!tile) return undefined
-  // 子项列表放到标题另一侧，第一击展开时仍能在同一位置识别第二击。
-  const above = tile.top
-  const below = height.value - tile.top - Math.min(tile.height, folderHeaderHeight)
-  return {
-    top: above > below ? '8px' : 'auto',
-    bottom: above > below ? 'auto' : '8px',
-    maxHeight: Math.max(0, Math.min(230, Math.max(above, below) - 12)) + 'px',
-  }
-})
-
 const scene = computed(() => (props.result?.volumeKey ?? '') + '/' + (folder.value?.breadcrumbs.at(-1)?.id ?? ''))
 watch(scene, () => {
-  clearTimeout(clickTimer)
+  previousClick = undefined
   branch.value = []
   hovered.value = focused.value = undefined
   clearFlashes()
@@ -199,41 +175,49 @@ function itemKey(item: SpaceEntry) {
   return item.directoryId ?? item.key ?? 'other'
 }
 
-function title(tile: Tile) {
+function title(tile: Tile, size = tile.item.sizeText) {
   const { item, fraction } = tile
   const name = item.key ? item.name : '其他 ' + formatCount(item.count) + ' 项'
-  return name + ' · ' + item.sizeBytesText + ' · ' + formatter.format(fraction)
+  return name + ' · ' + size + ' · ' + formatter.format(fraction)
 }
 
 function clickTile(tile: Tile, event: MouseEvent) {
-  const tileTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top
-  clickEntry(tile.item, tile.ancestors, event, event.clientY - tileTop < folderHeaderHeight)
-}
-
-function clickEntry(item: SpaceEntry, ancestors: SpaceEntry[], event: MouseEvent, stableTarget = false) {
+  const { item, ancestors } = tile
   if (!item.directoryId) {
     if (item.key) emit('reveal', item.key)
     return
   }
-  if (event.detail > 1) return
-  clearTimeout(clickTimer)
-  const toggle = () => {
-    branch.value = preview.value?.directoryId === item.directoryId ? ancestors : [...ancestors, item]
+  branch.value = preview.value?.directoryId === item.directoryId ? ancestors : [...ancestors, item]
+  if (event.detail > 0)
+    previousClick = { item, x: event.clientX, y: event.clientY, time: event.timeStamp }
+}
+
+function completeDoubleClick(event: MouseEvent) {
+  const first = previousClick
+  previousClick = undefined
+  if (!first || event.detail === 0 || !(event.target instanceof Element)) return
+  const key = event.target.closest<HTMLElement>('button[data-tile-key]')?.dataset.tileKey
+  if (!key) return
+  const tile = drawing.value.tiles.find(entry => entry.key === key)
+  if (!tile) return
+  const sameDirectory = tile.item.directoryId === first.item.directoryId
+  const width = props.result?.doubleClickWidth ?? 4
+  const height = props.result?.doubleClickHeight ?? 4
+  const withinDoubleClick = event.timeStamp - first.time <= (props.result?.doubleClickMilliseconds ?? 500)
+    && Math.abs(event.clientX - first.x) <= width / 2
+    && Math.abs(event.clientY - first.y) <= height / 2
+  // 首击已经展开，第二击可能落在刚显示的子项。只把原位置、原分支内的第二击归给父目录。
+  if (sameDirectory ? event.detail > 1
+    : withinDoubleClick && tile.ancestors.some(item => item.directoryId === first.item.directoryId)) {
+    event.stopPropagation()
+    enterFolder(first.item)
   }
-  // 标题区始终留给父目录。点击内部空白时等待双击，防止新子块盖住第二次点击。
-  if (event.detail === 0 || stableTarget) toggle()
-  else clickTimer = setTimeout(toggle, (props.result?.doubleClickMilliseconds ?? 500) + 16)
 }
 
 function enterFolder(item: SpaceEntry) {
   if (!item.directoryId) return
-  clearTimeout(clickTimer)
+  previousClick = undefined
   emit('view', props.root, item.directoryId)
-}
-
-function collapsePreview() {
-  clearTimeout(clickTimer)
-  branch.value = branch.value.slice(0, -1)
 }
 
 function detailShortcut(event: KeyboardEvent) {
@@ -253,7 +237,6 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   observer?.disconnect()
-  clearTimeout(clickTimer)
   clearFlashes()
 })
 </script>
@@ -289,7 +272,7 @@ onBeforeUnmount(() => {
         <button v-else type="button" :title="crumb.name" @click="emit('view', root, crumb.id)">{{ crumb.name }}</button>
       </template>
     </nav>
-    <div ref="map" class="space-map" :aria-busy="pending">
+    <div ref="map" class="space-map" :aria-busy="pending" @click.capture="completeDoubleClick">
       <div v-if="message" class="space-message" :role="error ? 'alert' : 'status'">
         <span>{{ message }}</span>
         <button v-if="error && root" type="button" class="outlined-button"
@@ -297,14 +280,15 @@ onBeforeUnmount(() => {
       </div>
       <template v-else>
         <button v-for="tile in drawing.tiles" :key="tile.key" type="button" class="space-tile"
+          :data-tile-key="tile.key"
           :class="{ directory: tile.item.directoryId, others: !tile.item.key, nested: tile.level > 1, preview: tile.preview,
             expanded: tile.item.directoryId && expandedIds.has(tile.item.directoryId) }"
           :aria-disabled="!tile.item.key"
           :aria-expanded="tile.item.directoryId ? expandedIds.has(tile.item.directoryId) : undefined"
-          :title="title(tile)" :aria-label="title(tile)" :style="{
+          :title="title(tile, tile.item.sizeBytesText)" :aria-label="title(tile)" :style="{
             left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px',
           }" @mouseenter="hovered = tile.key" @mouseleave="hovered = undefined"
-          @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)" @dblclick="enterFolder(tile.item)"
+          @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)"
           @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterFolder(tile.item))">
           <template v-if="tile.width >= 32 && tile.height >= 23">
             <span class="space-tile-name">
@@ -318,26 +302,10 @@ onBeforeUnmount(() => {
             :key="flashTokens[tile.item.directoryId]" class="space-flash" aria-hidden="true"
             :style="{ left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px' }"></div>
         </template>
-        <section v-if="preview && overflowPreview.length" class="space-preview-overflow" :aria-label="preview.name"
-          :style="overflowPlacement">
-          <header>
-            <strong>{{ preview.name }}</strong>
-            <button type="button" class="outlined-button" @click="collapsePreview">收起一层</button>
-          </header>
-          <button v-for="item in overflowPreview" :key="itemKey(item)" type="button" class="space-preview-entry"
-            :data-directory-id="item.directoryId" :disabled="!item.key" :title="item.name"
-            @click="clickEntry(item, branch, $event)" @dblclick="enterFolder(item)"
-            @keydown.enter="item.directoryId && ($event.preventDefault(), enterFolder(item))">
-            <span>{{ item.name }}</span><small>{{ item.sizeText }}</small>
-          </button>
-        </section>
       </template>
     </div>
     <footer class="space-details">
-      <span v-if="preview && !pending && !error" class="space-preview-status" role="status" :title="preview.name">
-        临时展开 · {{ preview.name }}
-      </span>
-      <span v-if="active && !pending && !error" :title="title(active)">{{ title(active) }}</span>
+      <span v-if="active && !pending && !error" :title="title(active, active.item.sizeBytesText)">{{ title(active) }}</span>
       <span v-if="folder?.unknownFiles && !pending" class="space-unknown">
         {{ formatCount(folder.unknownFiles) }} 个文件的大小未知
       </span>
@@ -434,22 +402,7 @@ onBeforeUnmount(() => {
 .space-tile span, .space-tile small, .space-details span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .space-tile-name, .space-tile small { margin: 0 6px; pointer-events: none; }
 .space-tile-name { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
-.space-preview-overflow {
-  position: absolute; right: 8px; bottom: 8px; z-index: 3;
-  width: min(360px, calc(100% - 16px)); max-height: min(60%, 230px); overflow: auto;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-  box-shadow: 0 2px 10px #19253833;
-}
-.space-preview-overflow header, .space-preview-entry {
-  display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 5px 8px;
-}
-.space-preview-overflow header { position: sticky; top: 0; background: var(--chrome); }
-.space-preview-overflow strong, .space-preview-entry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.space-preview-overflow header button, .space-preview-entry small { flex: none; }
-.space-preview-entry { width: 100%; border: 0; background: var(--surface); text-align: left; }
-.space-preview-entry:hover { background: var(--accent-quiet); }
 .space-tile small { font-weight: 400; font-variant-numeric: tabular-nums; }
 .space-details { display: flex; align-items: center; gap: 10px; padding: 0 16px; min-width: 0; color: var(--muted); }
-.space-preview-status { flex: 0 1 auto; max-width: 55%; padding: 2px 7px; border-radius: 4px; background: var(--accent-quiet); color: var(--accent); }
 .space-unknown { margin-left: auto; color: var(--warning); }
 </style>

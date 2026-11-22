@@ -196,21 +196,20 @@ try {
       })()`), '多个目录自动显示内部结构')
       assert.equal(automatic, true)
       assert.equal(await evaluate("document.querySelectorAll('.space-flash').length"), 0)
-      const clickFolderHeader = name => evaluate(`(async () => {
+      const clickFolder = (name, inside = false) => evaluate(`(async () => {
         const tile = ${topFolder(name)};
         const rect = tile.getBoundingClientRect();
-        tile.dispatchEvent(new MouseEvent('click', { detail: 1, clientY: rect.top + 10, bubbles: true }));
+        const clientY = rect.top + (${inside} ? rect.height / 2 : 10);
+        tile.dispatchEvent(new MouseEvent('click', { detail: 1, clientY, clientX: rect.left + rect.width / 2, bubbles: true }));
         await Promise.resolve();
-        return { expanded: tile.getAttribute('aria-expanded'), preview: document.querySelector('.space-preview-status')?.textContent };
+        return tile.getAttribute('aria-expanded');
       })()`)
-      const preview = await clickFolderHeader('目录009')
-      assert.equal(preview.expanded, 'true', '默认两层时单击目录标题立即展开')
-      assert.ok(preview.preview?.includes('目录009'), '内容已自动展示时仍有明确的临时展开提示')
-      const nextPreview = await clickFolderHeader('目录008')
-      assert.equal(nextPreview.expanded, 'true')
-      assert.ok(nextPreview.preview?.includes('目录008'))
+      await evaluate(`${topFolder('目录009')}.dispatchEvent(new MouseEvent('mouseenter'))`)
+      assert.ok(await evaluate("document.querySelector('.space-details').textContent.includes('92.72 MB')"), '底栏自动选用容量单位')
+      assert.equal(await clickFolder('目录009'), 'true', '默认两层时单击目录标题立即展开')
+      assert.equal(await clickFolder('目录008'), 'true')
       assert.equal(await evaluate(`${topFolder('目录009')}.getAttribute('aria-expanded')`), 'false')
-      assert.equal((await clickFolderHeader('目录008')).expanded, 'false')
+      assert.equal(await clickFolder('目录008'), 'false')
       await cdp('Emulation.setDeviceMetricsOverride', { width: 480, height: 170, deviceScaleFactor: 1, mobile: false })
       await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '狭小空间自动收起细节')
       await cdp('Emulation.clearDeviceMetricsOverride')
@@ -220,7 +219,7 @@ try {
         level.value = '1'; level.dispatchEvent(new Event('change', { bubbles: true }));
       })()`)
       await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '细节降到一层')
-      await evaluate(`${topFolder('目录009')}.click()`)
+      assert.equal(await clickFolder('目录009', true), 'true', '点目录内部也立即响应')
       await until(() => evaluate(`${topFolder('目录009')}.getAttribute('aria-expanded') === 'true' &&
         document.querySelectorAll('.space-tile.nested').length > 0`), '单击临时展开')
       assert.equal(await evaluate("document.querySelector('.space-total').title"), '511,488,000 B')
@@ -229,28 +228,46 @@ try {
         ${topFolder('目录009')}.getAttribute('aria-expanded') === 'false'`), '切换时收起原目录')
       await evaluate(`${topFolder('目录008')}.click()`)
       await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '再次单击收起')
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1120, deviceScaleFactor: 1, mobile: false })
       await evaluate(`${topFolder('目录001')}.click()`)
       for (let depth = 1; depth <= 5; depth++) {
-        const subfolder = `[...document.querySelectorAll('.space-tile.directory.nested, .space-preview-entry[data-directory-id]')]
+        const subfolder = `[...document.querySelectorAll('.space-tile.directory.nested')]
           .find(tile => tile.title.startsWith(${JSON.stringify('深层' + depth)}))`
         await until(() => evaluate(`Boolean(${subfolder})`), '为单击显示第 ' + depth + ' 层目录')
         await evaluate(`${subfolder}.click()`)
-        await until(() => evaluate(`document.querySelector('.space-preview-status')?.textContent.includes('深层${depth}')`),
+        await until(() => evaluate(`${subfolder}?.getAttribute('aria-expanded') === 'true'`),
           '在原视图单击展开第 ' + depth + ' 层目录')
       }
       assert.equal(await evaluate("document.querySelector('.space-total').title"), '511,488,000 B')
       assert.equal(await evaluate("document.querySelector('select[aria-label=细节层级]').value"), '1')
       await evaluate(`${topFolder('目录008')}.click()`)
       await until(() => evaluate(`${topFolder('目录008')}.getAttribute('aria-expanded') === 'true' &&
-        ${topFolder('目录001')}.getAttribute('aria-expanded') === 'false' &&
-        !document.querySelector('.space-preview-status')?.textContent.includes('深层')`), '切换后收起整条旧分支')
-      const { x, y } = await evaluate(`(() => {
-        const rect = ${topFolder('目录009')}.getBoundingClientRect();
-        return { x: Math.floor(rect.left + 12), y: Math.floor(rect.top + 10) };
-      })()`)
+        ${topFolder('目录001')}.getAttribute('aria-expanded') === 'false'`), '切换后收起整条旧分支')
+      await cdp('Emulation.clearDeviceMetricsOverride')
+      const { x, y } = await until(() => evaluate(`(() => {
+        const area = document.querySelector('.space-map').getBoundingClientRect();
+        const tiles = [...document.querySelectorAll('.space-tile:not(.nested)')].map(tile => tile.getBoundingClientRect());
+        if (Math.abs(Math.max(...tiles.map(r => r.right)) - area.right) > 1 ||
+            Math.abs(Math.max(...tiles.map(r => r.bottom)) - area.bottom) > 1) return null;
+        const tile = ${topFolder('目录009')};
+        const rect = tile.getBoundingClientRect();
+        const x = Math.floor(rect.left + rect.width / 2), y = Math.floor(rect.top + rect.height / 2);
+        return document.elementFromPoint(x, y) === tile ? { x, y } : null;
+      })()`), '窗口尺寸恢复后定位双击测试目录')
       for (let clickCount = 1; clickCount <= 2; clickCount++) {
         await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount })
         await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount })
+        if (clickCount === 1) {
+          await until(() => evaluate(`(() => {
+            const tile = ${topFolder('目录009')};
+            const bounds = tile.getBoundingClientRect();
+            return tile.getAttribute('aria-expanded') === 'true' &&
+              [...document.querySelectorAll('.space-tile.nested')].some(child => {
+                const r = child.getBoundingClientRect();
+                return r.left > bounds.left && r.top > bounds.top && r.right < bounds.right && r.bottom < bounds.bottom;
+              }) && document.elementFromPoint(${x}, ${y})?.closest('.space-tile.nested');
+          })()`), '首击展开后，在同一位置点击会命中新子块')
+        }
       }
       await until(() => evaluate("document.querySelector('.space-total')?.title === '97,228,800 B'"), '下钻目录逻辑大小')
       await until(() => evaluate("document.querySelectorAll('.space-tile').length === 100"), '下钻文件矩形')

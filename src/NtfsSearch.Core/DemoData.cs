@@ -28,9 +28,9 @@ public static class DemoData
         {
             if (includeDeepBranch && i is >= firstFolder and < fileInBranch) continue;
             string name = i % 17 == 0 ? $"hello world {i:D6}.txt" : $"文件 report {i:D6}.{extensions[i % extensions.Length]}";
-            bool withinBranch = includeDeepBranch && i == fileInBranch;
+            bool withinBranch = includeDeepBranch && i / 100 == firstFolder / 100;
             b.Add(withinBranch ? branchPath : $"C:\\演示\\目录{i / 100:D3}\\", name,
-                i * 1024L + (withinBranch ? movedBytes : 0),
+                i * 1024L + (includeDeepBranch && i == fileInBranch ? movedBytes : 0),
                 new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(i).Ticks,
                 fileReference: (1UL << 32) + (ulong)i, parentReference: withinBranch ? branchParent : 100 + (ulong)i / 100);
         }
