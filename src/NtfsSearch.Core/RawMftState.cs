@@ -9,11 +9,13 @@ namespace NtfsSearch.Core;
 // 句柄分享限制或特殊元文件不支持class46时，复用DiscUtils的只读属性/ATTRIBUTE_LIST解析。
 internal static class RawMftState
 {
+    private static readonly DateTime FileTimeEpoch = DateTime.FromFileTimeUtc(0);
+
     internal sealed record Name(int AttributeId, ulong ParentReference, byte Namespace, string Text);
     internal sealed record NameReference(ulong RecordReference, int AttributeId);
     internal sealed record Record(ulong Reference, ulong BaseReference, bool InUse, bool IsDirectory,
         IReadOnlyList<Name> Names, IReadOnlyList<NameReference> NameReferences, bool HasAttributeList,
-        long? Size, long? ModifiedUtcTicks);
+        long? Size, long? ModifiedUtcTicks, long? CreatedUtcTicks = null);
 
     internal static IndexedFileState Read(char drive, ulong reference)
     {
@@ -33,7 +35,7 @@ internal static class RawMftState
             var entry = table[(long)(id & 0x0000ffffffffffffUL)];
             if (entry is null) return cache[id] = new(id, 0, false, false, [], [], false, null, null);
             var names = new List<Name>(); var references = new List<NameReference>();
-            bool hasList = false; long? size = null, modified = null;
+            bool hasList = false; long? size = null, modified = null, created = null;
             foreach (var attribute in entry.Attributes)
             {
                 if (attribute is FileNameAttribute)
@@ -57,7 +59,10 @@ internal static class RawMftState
                             references.Add(new(Reference(item.MasterFileTableEntry), item.AttributeIdentifier));
                 }
                 else if (attribute is StandardInformationAttribute standard)
-                    modified = standard.ModificationTime.ToFileTimeUtc() > 0 ? standard.ModificationTime.Ticks : null;
+                {
+                    created = standard.CreationTime > FileTimeEpoch ? standard.CreationTime.Ticks : null;
+                    modified = standard.ModificationTime > FileTimeEpoch ? standard.ModificationTime.Ticks : null;
+                }
                 else if (attribute.AttributeType == AttributeType.Data && string.IsNullOrEmpty(attribute.Name))
                     size = Math.Max(size.GetValueOrDefault(), attribute.ContentLength);
             }
@@ -68,7 +73,7 @@ internal static class RawMftState
             return cache[id] = new(actual, baseReference,
                 inUse,
                 (entry.Flags & MasterFileTableEntryFlags.IsDirectory) != 0,
-                names, references, hasList, size, modified);
+                names, references, hasList, size, modified, created);
         }
         return BuildState(drive, reference, Load);
     }
@@ -105,7 +110,7 @@ internal static class RawMftState
                 ?? throw new InvalidDataException($"原始MFT父目录链无法解析：0x{link.ParentReference:X16}。");
             result.Add(new(link.ParentReference, parent, link.Name));
         }
-        return new(reference, file.IsDirectory, result, file.IsDirectory ? null : file.Size, file.ModifiedUtcTicks);
+        return new(reference, file.IsDirectory, result, file.IsDirectory ? null : file.Size, file.ModifiedUtcTicks, file.CreatedUtcTicks);
     }
 
     internal static IReadOnlyList<(ulong ParentReference, string Name)> Links(Func<ulong, Record> load, Record file)

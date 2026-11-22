@@ -17,8 +17,8 @@ public sealed class ExitSnapshotTests : IDisposable
         var builder = new IndexBuilder();
         builder.Add(@"C:\", "old", isDirectory: true, fileReference: 10, parentReference: 5);
         builder.Add(@"C:\old\", "nested", isDirectory: true, fileReference: 11, parentReference: 10);
-        builder.Add(@"C:\old\nested\", "报告\ud800.txt", 4_000_000_000, 0, fileReference: 12, parentReference: 11);
-        builder.Add(@"C:\", "LINK.TXT", 4_000_000_000, 0, fileReference: 12, parentReference: 5);
+        builder.Add(@"C:\old\nested\", "报告\ud800.txt", 4_000_000_000, 0, fileReference: 12, parentReference: 11, createdUtcTicks: 638999999999999997);
+        builder.Add(@"C:\", "LINK.TXT", 4_000_000_000, 0, fileReference: 12, parentReference: 5, createdUtcTicks: 638999999999999997);
         builder.Add(@"C:\", "deleted.txt", 9, 51, fileReference: 21, parentReference: 5);
         var live = new LiveVolumeIndex(builder.Build(), new(7, 100));
         live.Apply(new LiveTransaction(new(7, 100), new(7, 200),
@@ -32,6 +32,8 @@ public sealed class ExitSnapshotTests : IDisposable
         Assert.Equal(volume with { PhysicalDisks = null }, restored.Volume with { PhysicalDisks = null });
         Assert.Equal(volume.PhysicalDisks, restored.Volume.PhysicalDisks);
         Assert.Equal(live.Position, restored.Position);
+        Assert.True(restored.HasCreationMetadata);
+        Assert.All(index.FindFileRows(12), id => Assert.Equal(638999999999999997, index.GetRow(id).CreatedUtcTicks));
         Assert.Equal(5, index.Count);
         Assert.True(index.HasIdentity);
         Assert.Equal(2, index.FindFileRows(12).Count);
@@ -52,12 +54,30 @@ public sealed class ExitSnapshotTests : IDisposable
     }
 
     [Fact]
+    public void LegacySnapshotIsReadableAndIdentifiedForRescan()
+    {
+        ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "old.txt")]);
+        byte[] bytes = File.ReadAllBytes(SnapshotPath);
+        "NTSEXIT3"u8.CopyTo(bytes);
+        const int directoryEnd = 12 + 48;
+        SHA256.HashData(bytes.AsSpan(0, directoryEnd), bytes.AsSpan(directoryEnd, 32));
+        File.WriteAllBytes(SnapshotPath, bytes);
+
+        var restored = Assert.Single(ExitSnapshotStore.Load(SnapshotPath));
+        Assert.False(restored.HasCreationMetadata);
+        Assert.Equal(new(7, 100), restored.Position);
+        Assert.Null(Assert.Single(restored.Layers).GetRow(0).CreatedUtcTicks);
+        Assert.Empty(ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 1,
+            (_, _, _) => throw new InvalidOperationException("旧格式进入了复原流程。"), requireCreationMetadata: true));
+    }
+
+    [Fact]
     public void ReportsLoadingAndSortingForEachRestoredVolume()
     {
         ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "first"), Volume("D", "second")]);
         var stages = new System.Collections.Concurrent.ConcurrentQueue<(string VolumeId, bool Sorting, int Rows)>();
         var restored = ExitSnapshotStore.LoadVolumes(SnapshotPath, default, 2,
-            (volume, sorting, rows) => stages.Enqueue((volume.Id, sorting, rows))).ToArray();
+            (volume, sorting, rows) => stages.Enqueue((volume.Id, sorting, rows)), requireCreationMetadata: true).ToArray();
 
         Assert.Equal(2, restored.Length);
         foreach (var volume in restored)

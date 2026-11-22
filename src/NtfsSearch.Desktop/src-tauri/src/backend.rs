@@ -11,9 +11,25 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tauri::{Emitter, WebviewWindow};
+use tauri::{Emitter, Manager, WebviewWindow};
 
 const EVENT: &str = "backend-message";
+
+pub fn show_quit_error(window: &WebviewWindow, message: String) {
+    crate::show_window(window);
+    let _ = window.emit(EVENT, json!({ "type": "quit-complete", "error": message }));
+}
+
+fn report_failure(window: &WebviewWindow, quitting: bool, message: String) {
+    if quitting {
+        show_quit_error(window, message);
+    } else {
+        let _ = window.emit(
+            EVENT,
+            json!({ "type": "error", "scope": "fatal", "message": message }),
+        );
+    }
+}
 
 fn backend_command() -> io::Result<Command> {
     let executable = env::current_exe()?.with_file_name("NtfsSearch.Backend.exe");
@@ -108,6 +124,7 @@ impl Backend {
         let reader_failed = failed.clone();
         thread::spawn(move || {
             let mut reported_fatal = false;
+            let mut saving = false;
             for line in BufReader::new(output).lines() {
                 if reader_stopping.load(Ordering::Acquire) {
                     return;
@@ -118,27 +135,35 @@ impl Backend {
                     Ok(message) => {
                         if message["type"] == "quit-complete" {
                             reader_failed.store(true, Ordering::Release);
-                            let succeeded = message["error"].is_null();
-                            let _ = window.emit(EVENT, &message);
-                            if succeeded {
-                                let _ = window.destroy();
+                            if let Some(error) = message["error"].as_str() {
+                                show_quit_error(&window, error.to_owned());
+                            } else {
+                                window.app_handle().exit(0);
                             }
                             return;
                         }
+                        if message["type"] == "saving" && !saving {
+                            saving = true;
+                            // 从托盘退出时窗口可能隐藏，只在首次收到进度时恢复窗口。
+                            crate::show_window(&window);
+                        }
                         if message["scope"] == "fatal" {
-                            reported_fatal = true;
                             reader_failed.store(true, Ordering::Release);
+                            if reader_quitting.load(Ordering::Acquire) {
+                                let error = message["message"].as_str().unwrap_or("搜索服务异常");
+                                show_quit_error(&window, error.to_owned());
+                                return;
+                            }
+                            reported_fatal = true;
                         }
                         let _ = window.emit(EVENT, message);
                     }
                     Err(error) => {
                         reader_failed.store(true, Ordering::Release);
-                        let _ = window.emit(
-                            EVENT,
-                            json!({
-                                "type": "error", "scope": "fatal",
-                                "message": format!("无法读取搜索后端响应：{error}")
-                            }),
+                        report_failure(
+                            &window,
+                            reader_quitting.load(Ordering::Acquire),
+                            format!("无法读取搜索后端响应：{error}"),
                         );
                         return;
                     }
@@ -150,19 +175,15 @@ impl Backend {
                     return;
                 }
                 reader_failed.store(true, Ordering::Release);
-                let message = if reader_quitting.load(Ordering::Acquire) {
+                let quitting = reader_quitting.load(Ordering::Acquire);
+                let message = if quitting {
                     "搜索后端在完成退出保存前已停止".to_owned()
                 } else if reason.is_empty() {
                     "搜索后端已退出。".to_owned()
                 } else {
                     format!("无法运行搜索后端。\n{reason}")
                 };
-                let event = if reader_quitting.load(Ordering::Acquire) {
-                    json!({ "type": "quit-complete", "error": message })
-                } else {
-                    json!({ "type": "error", "scope": "fatal", "message": message })
-                };
-                let _ = window.emit(EVENT, event);
+                report_failure(&window, quitting, message);
             }
         });
         *process = Some(Process {

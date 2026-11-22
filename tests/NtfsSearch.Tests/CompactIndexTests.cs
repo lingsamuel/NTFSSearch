@@ -56,6 +56,31 @@ public class CompactIndexTests
     }
 
     [Fact]
+    public void CreationColumnFollowsIdentitySortingAndSurvivesSnapshots()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, $"compact-creation-{Guid.NewGuid():N}.ntidx");
+        try
+        {
+            var builder = new IndexBuilder();
+            builder.Add(@"C:\", "file", fileReference: 20, parentReference: 5, createdUtcTicks: long.MaxValue);
+            builder.Add(@"C:\", "folder", isDirectory: true, fileReference: 10, parentReference: 5, createdUtcTicks: long.MinValue);
+            builder.Add(@"C:\", "missing", fileReference: 15, parentReference: 5);
+            builder.Add(@"C:\", "zero", fileReference: 25, parentReference: 5, createdUtcTicks: 0);
+            var index = builder.Build();
+            Assert.Equal(new ulong[] { 10, 15, 20, 25 }, index.FileReferences);
+            long?[] expected = [long.MinValue, null, long.MaxValue, 0];
+            Assert.Equal(expected, Enumerable.Range(0, index.Count).Select(id => index.GetRow(id).CreatedUtcTicks));
+
+            SnapshotStore.Save(index, path);
+            Assert.True(SnapshotStore.IsCurrentFormat(path));
+            SnapshotStore.ValidateChecksum(path);
+            var restored = SnapshotStore.Load(path);
+            Assert.Equal(expected, Enumerable.Range(0, restored.Count).Select(id => restored.GetRow(id).CreatedUtcTicks));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void SmallAndOverflowSizesSurviveSnapshotsAndSortTogether()
     {
         string path = Path.Combine(Path.GetTempPath(), $"compact-sizes-{Guid.NewGuid():N}.ntidx");

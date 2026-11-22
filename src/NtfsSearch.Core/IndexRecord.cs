@@ -29,9 +29,15 @@ internal readonly struct IndexRecord
 public enum SortField { Name, Path, Size, Modified }
 
 public sealed record SearchRow(int Id, string Name, string FullPath, long? Size,
-    long? ModifiedUtcTicks, bool IsDirectory);
+    long? ModifiedUtcTicks, bool IsDirectory)
+{
+    public long? CreatedUtcTicks { get; init; }
+}
 
-public sealed record SearchResult(long TotalCount, IReadOnlyList<SearchRow> Rows, TimeSpan Elapsed);
+public sealed record SearchResult(long TotalCount, IReadOnlyList<SearchRow> Rows, TimeSpan Elapsed)
+{
+    public int VolumesReady { get; init; }
+}
 
 public sealed record IndexStatistics(int Entries, int Directories, long NameBytes,
     long RecordBytes, long SortBytes, long EstimatedDirectoryBytes)

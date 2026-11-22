@@ -75,6 +75,32 @@ public class NativeJournalTests
         Assert.Throws<InvalidDataException>(() => MftMetadata.Parse(record, 77));
     }
 
+    [Theory]
+    [InlineData(133444736000000013, 133444736000000029)]
+    [InlineData(0, 133444736000000029)]
+    [InlineData(133444736000000013, 0)]
+    public void StandardInformationKeepsCreationAndModificationIndependent(long creation, long modification)
+    {
+        byte[] record = new byte[1024];
+        "FILE"u8.CopyTo(record);
+        BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(4), 48);
+        BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(6), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(20), 56);
+        BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(22), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(24), 104);
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(56), 0x10);
+        BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(60), 40);
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(72), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(record.AsSpan(76), 24);
+        BinaryPrimitives.WriteInt64LittleEndian(record.AsSpan(80), creation);
+        BinaryPrimitives.WriteInt64LittleEndian(record.AsSpan(88), modification);
+        BinaryPrimitives.WriteUInt32LittleEndian(record.AsSpan(96), uint.MaxValue);
+
+        var metadata = MftMetadata.Parse(record, 42)!.Value;
+        Assert.Equal(creation == 0 ? (long?)null : DateTime.FromFileTimeUtc(creation).Ticks, metadata.CreatedUtcTicks);
+        Assert.Equal(modification == 0 ? (long?)null : DateTime.FromFileTimeUtc(modification).Ticks, metadata.ModifiedUtcTicks);
+    }
+
     [Fact]
     public void RejectsTruncatedResidentDataAndInvalidJournalRanges()
     {
@@ -177,11 +203,15 @@ public class NativeJournalTests
         const ulong file = 0x1000000000042, extension = 0x2000000000043, parent = 0x3000000000005;
         var first = new RawMftState.Record(file, 0, true, false,
             [new(1, parent, 1, "主\ud800.txt"), new(2, parent, 2, "SHORT~1.TXT")],
-            [new(file, 1), new(file, 2), new(extension, 7)], true, 100, 200);
+            [new(file, 1), new(file, 2), new(extension, 7)], true, 100, 200, 173);
         var second = new RawMftState.Record(extension, file, true, false,
             [new(7, parent, 0, "另一链接.txt")], [], false, null, null);
-        RawMftState.Record Load(ulong id) => id == file ? first : second;
-        var links = RawMftState.Links(Load, first);
+        var root = new RawMftState.Record(parent, 0, true, true, [], [], false, null, null);
+        RawMftState.Record Load(ulong id) => id == file ? first : id == extension ? second : root;
+        var state = RawMftState.BuildState('C', file, Load);
+        Assert.Equal(173, state.CreatedUtcTicks);
+        Assert.Equal(200, state.ModifiedUtcTicks);
+        var links = state.Links;
         Assert.Equal(new[] { "主\ud800.txt", "另一链接.txt" }, links.Select(l => l.Name));
         Assert.All(links, link => Assert.Equal(parent, link.ParentReference));
         Assert.Throws<InvalidDataException>(() => RawMftState.Links(_ => second with { Reference = extension + (1UL << 48) }, first));

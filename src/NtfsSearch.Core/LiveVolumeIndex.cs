@@ -160,7 +160,7 @@ public sealed class LiveVolumeIndex
                 token.ThrowIfCancellationRequested();
                 string? parent = Resolve(link.ParentReference);
                 if (parent is null) continue;
-                builder.Add(parent, link.Name, file.Size, file.ModifiedUtcTicks, file.IsDirectory, file.FileReference, link.ParentReference);
+                builder.Add(parent, link.Name, file.Size, file.ModifiedUtcTicks, file.IsDirectory, file.FileReference, link.ParentReference, file.CreatedUtcTicks);
                 added++;
             }
         if (added > 0)
@@ -194,7 +194,8 @@ public sealed class LiveVolumeIndex
         {
             var r = index.Records[id];
             if (r.IsDirectory != file.IsDirectory || (r.HasSize ? index.Size(id) : (long?)null) != (file.IsDirectory ? null : file.Size)
-                || (r.HasModified ? r.Modified : (long?)null) != file.ModifiedUtcTicks) return false;
+                || (r.HasModified ? r.Modified : (long?)null) != file.ModifiedUtcTicks
+                || index.CreatedUtcTicks(id) != file.CreatedUtcTicks) return false;
             int found = -1;
             var name = index.Name(id, scratch);
             for (int link = 0; link < remaining.Count; link++)
@@ -272,7 +273,7 @@ public sealed class LiveVolumeIndex
                     mapped[row.Directory] = directory;
                 }
                 builder.AddRecord(directory, index.Name(id, scratch), row.HasSize ? index.Size(id) : null,
-                    row.HasModified ? row.Modified : null, row.IsDirectory, index.FileReferences![id]);
+                    row.HasModified ? row.Modified : null, row.IsDirectory, index.FileReferences![id], index.CreatedUtcTicks(id));
             }
         }
         return builder.Build(token);

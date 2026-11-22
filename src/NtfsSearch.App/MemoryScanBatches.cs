@@ -16,7 +16,7 @@ internal sealed class MemoryScanWriter(Stream stream, CancellationToken token)
         => frames.WriteAsync(CollectorFrameKind.ScanStart, writer => writer.Write(capacity), token).GetAwaiter().GetResult();
 
     internal void Add(string parent, ReadOnlySpan<char> name, long? size, long? modified,
-        bool directory, ulong file, ulong parentReference)
+        bool directory, ulong file, ulong parentReference, long? created = null)
     {
         if (rows.Length >= BlockBytes) Finish();
         rowWriter ??= new(rows);
@@ -31,10 +31,11 @@ internal sealed class MemoryScanWriter(Stream stream, CancellationToken token)
             rowWriter.Write(parentReference);
         }
         rowWriter.Write(file);
-        byte flags = (byte)((directory ? 1 : 0) | (size.HasValue ? 2 : 0) | (modified.HasValue ? 4 : 0));
+        byte flags = (byte)((directory ? 1 : 0) | (size.HasValue ? 2 : 0) | (modified.HasValue ? 4 : 0) | (created.HasValue ? 8 : 0));
         rowWriter.Write(flags);
         if (size is { } bytes) rowWriter.Write(bytes);
         if (modified is { } ticks) rowWriter.Write(ticks);
+        if (created is { } creationTicks) rowWriter.Write(creationTicks);
         CollectorWire.WriteName(rowWriter, name);
     }
 
@@ -89,7 +90,8 @@ internal sealed class MemoryScanReader(int capacity)
             byte flags = reader.ReadByte();
             long? size = (flags & 2) != 0 ? reader.ReadInt64() : null;
             long? modified = (flags & 4) != 0 ? reader.ReadInt64() : null;
-            builder.AddRecord(parents[directoryId], CollectorWire.ReadName(reader, frame.Payload), size, modified, (flags & 1) != 0, file);
+            long? created = (flags & 8) != 0 ? reader.ReadInt64() : null;
+            builder.AddRecord(parents[directoryId], CollectorWire.ReadName(reader, frame.Payload), size, modified, (flags & 1) != 0, file, created);
         }
     }
 }

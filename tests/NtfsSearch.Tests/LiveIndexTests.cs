@@ -5,6 +5,26 @@ namespace NtfsSearch.Tests;
 
 public class LiveIndexTests
 {
+    [Fact]
+    public void CreationOnlyChangesReachEveryHardLinkThroughCompaction()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", "first", 12, 50, fileReference: 15, parentReference: 5, createdUtcTicks: 37);
+        builder.Add(@"C:\", "second", 12, 50, fileReference: 15, parentReference: 5, createdUtcTicks: 37);
+        var position = new JournalPosition(7, 100);
+        var live = new LiveVolumeIndex(builder.Build(), position);
+        var resolver = new JournalChangeResolver(@"D:\Data", id =>
+            new(id, false, [new(5, @"C:\", "first"), new(5, @"C:\", "second")], 12, 50, 38));
+        var transaction = resolver.Resolve(new(position, new(7, 101), [new(15, 5, 100, 0x8000, 0, "first")]), position);
+        var committed = ChangeLogStore.Decode(ChangeLogStore.Encode(new(1, transaction)));
+
+        Assert.True(live.Apply(committed));
+        Assert.True(live.CompactIfNeeded());
+        var index = Assert.Single(live.Layers);
+        Assert.Equal(2, index.FindFileRows(15).Count);
+        Assert.All(index.FindFileRows(15), id => Assert.Equal(38, index.GetRow(id).CreatedUtcTicks));
+    }
+
     private static SearchIndex Baseline()
     {
         var b = new IndexBuilder();

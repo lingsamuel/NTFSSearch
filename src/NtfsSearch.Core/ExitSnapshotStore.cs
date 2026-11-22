@@ -8,12 +8,16 @@ using ZstdSharp;
 namespace NtfsSearch.Core;
 
 /// <summary>可查询的单卷索引视图及其已应用的 USN 水位。</summary>
-public sealed record ExitSnapshotVolume(NtfsVolume Volume, JournalPosition Position, IReadOnlyList<SearchIndex> Layers);
+public sealed record ExitSnapshotVolume(NtfsVolume Volume, JournalPosition Position, IReadOnlyList<SearchIndex> Layers)
+{
+    internal bool HasCreationMetadata { get; init; } = true;
+}
 
 public static class ExitSnapshotStore
 {
     public const string FileName = "index.ntsnap";
-    private static ReadOnlySpan<byte> Magic => "NTSEXIT3"u8;
+    private static ReadOnlySpan<byte> Magic => "NTSEXIT4"u8;
+    private static ReadOnlySpan<byte> LegacyMagic => "NTSEXIT3"u8;
     private const int CompressionLevel = 3;
     private const int DigestBytes = 32;
     private const int DirectoryEntryBytes = sizeof(long) * 2 + DigestBytes;
@@ -90,17 +94,19 @@ public static class ExitSnapshotStore
 
     // 回调在实际读取卷的线程上执行，卷身份经过快照校验后才报告。
     internal static IEnumerable<ExitSnapshotVolume> LoadVolumes(string path, CancellationToken token, int maxConcurrency,
-        Action<NtfsVolume, bool, int>? progress)
+        Action<NtfsVolume, bool, int>? progress, bool requireCreationMetadata = false)
     {
         RequireLittleEndian();
         ArgumentOutOfRangeException.ThrowIfLessThan(maxConcurrency, 1);
         token.ThrowIfCancellationRequested();
         using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1 << 20);
-        var entries = ReadDirectory(file, token);
+        var entries = ReadDirectory(file, token, out bool hasCreationMetadata);
+        // 旧快照以原本逐卷采集流程补齐创建时间，避免先为缺少该列的行重建排序。
+        if (requireCreationMetadata && !hasCreationMetadata) yield break;
         long length = file.Length;
         if (maxConcurrency > 1 && entries.Length > 1)
         {
-            foreach (var volume in LoadConcurrently(file.SafeFileHandle, entries.TakeWhile(entry => entry.End <= length), maxConcurrency, token, progress))
+            foreach (var volume in LoadConcurrently(file.SafeFileHandle, entries.TakeWhile(entry => entry.End <= length), maxConcurrency, token, progress, hasCreationMetadata))
                 yield return volume;
             yield break;
         }
@@ -108,14 +114,14 @@ public static class ExitSnapshotStore
         {
             token.ThrowIfCancellationRequested();
             if (end > length) break;
-            if (LoadVolume(file.SafeFileHandle, start, end, payloadLength, digest, token, progress) is { } volume)
+            if (LoadVolume(file.SafeFileHandle, start, end, payloadLength, digest, token, progress, hasCreationMetadata) is { } volume)
                 yield return volume;
         }
     }
 
     private static IEnumerable<ExitSnapshotVolume> LoadConcurrently(SafeFileHandle file,
         IEnumerable<(long Start, long End, long PayloadLength, byte[] Digest)> entries, int maxConcurrency, CancellationToken token,
-        Action<NtfsVolume, bool, int>? progress)
+        Action<NtfsVolume, bool, int>? progress, bool hasCreationMetadata)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
         using var remaining = entries.GetEnumerator();
@@ -145,14 +151,14 @@ public static class ExitSnapshotStore
         {
             if (!remaining.MoveNext()) return false;
             var (start, end, payloadLength, digest) = remaining.Current;
-            pending.Add(Task.Run(() => LoadVolume(file, start, end, payloadLength, digest, lifetime.Token, progress), lifetime.Token));
+            pending.Add(Task.Run(() => LoadVolume(file, start, end, payloadLength, digest, lifetime.Token, progress, hasCreationMetadata), lifetime.Token));
             return true;
         }
     }
 
     private static ExitSnapshotVolume? LoadVolume(SafeFileHandle file, long start, long end, long payloadLength, byte[] digest,
         CancellationToken token,
-        Action<NtfsVolume, bool, int>? progress)
+        Action<NtfsVolume, bool, int>? progress, bool hasCreationMetadata)
     {
         try
         {
@@ -163,7 +169,7 @@ public static class ExitSnapshotStore
             using var decompressed = new DecompressionStream(stored, leaveOpen: true);
             using var buffered = new BufferedStream(decompressed, 128 * 1024);
             using var payload = new PayloadStream(buffered);
-            return ReadVolume(payload, payloadLength, token, progress);
+            return ReadVolume(payload, payloadLength, token, progress, hasCreationMetadata);
         }
         catch (Exception error) when (error is InvalidDataException or EndOfStreamException or ArgumentException or FormatException or ZstdException)
         {
@@ -172,11 +178,13 @@ public static class ExitSnapshotStore
         }
     }
 
-    private static (long Start, long End, long PayloadLength, byte[] Digest)[] ReadDirectory(FileStream file, CancellationToken token)
+    private static (long Start, long End, long PayloadLength, byte[] Digest)[] ReadDirectory(FileStream file, CancellationToken token, out bool hasCreationMetadata)
     {
         using var reader = new BinaryReader(file, Encoding.UTF8, leaveOpen: true);
         int prefixBytes = Magic.Length + sizeof(int);
-        if (file.Length < prefixBytes + DigestBytes || !reader.ReadBytes(Magic.Length).AsSpan().SequenceEqual(Magic))
+        ReadOnlySpan<byte> magic = reader.ReadBytes(Magic.Length);
+        hasCreationMetadata = magic.SequenceEqual(Magic);
+        if (file.Length < prefixBytes + DigestBytes || !hasCreationMetadata && !magic.SequenceEqual(LegacyMagic))
             throw new InvalidDataException("退出快照标头无效。");
         int count = reader.ReadInt32();
         long directoryEnd = prefixBytes + (long)count * DirectoryEntryBytes;
@@ -256,10 +264,13 @@ public static class ExitSnapshotStore
             writer.Write7BitEncodedInt((int)(reference >> 48));
             recordNumber = nextRecordNumber;
 
-            byte flags = (byte)((record.IsDirectory ? 1 : 0) | (record.HasModified ? 2 : 0) | (record.HasSize ? 4 : 0));
+            long? created = layer.CreatedUtcTicks(row);
+            byte flags = (byte)((record.IsDirectory ? 1 : 0) | (record.HasModified ? 2 : 0) | (record.HasSize ? 4 : 0)
+                | (created.HasValue ? 8 : 0));
             writer.Write(flags);
             if (record.HasSize) writer.Write7BitEncodedInt64(layer.Size(row));
             if (record.HasModified) writer.Write(record.Modified);
+            if (created is long ticks) writer.Write(ticks);
             WriteText(writer, layer.Name(row, scratch), ascii);
         }
     }
@@ -302,7 +313,7 @@ public static class ExitSnapshotStore
     }
 
     private static ExitSnapshotVolume ReadVolume(Stream file, long end, CancellationToken token,
-        Action<NtfsVolume, bool, int>? progress)
+        Action<NtfsVolume, bool, int>? progress, bool hasCreationMetadata)
     {
         using var reader = new BinaryReader(file, Encoding.UTF8, leaveOpen: true);
         string id = ReadString(reader, end);
@@ -345,18 +356,20 @@ public static class ExitSnapshotStore
             ulong reference = ((ulong)sequence << 48) | recordNumber;
 
             byte flags = reader.ReadByte();
+            if (flags > (hasCreationMetadata ? 15 : 7)) throw new InvalidDataException("退出快照文件标志无效。");
             long? size = (flags & 4) != 0 ? reader.Read7BitEncodedInt64() : null;
             long? modified = (flags & 2) != 0 ? reader.ReadInt64() : null;
+            long? created = (flags & 8) != 0 ? reader.ReadInt64() : null;
             var (chars, utf16) = ReadTextHeader(reader, end);
-            if (flags > 7 || size < 0 || chars is 0 or > ushort.MaxValue)
+            if (size < 0 || chars is 0 or > ushort.MaxValue)
                 throw new InvalidDataException("退出快照文件记录无效。");
             scoped Span<char> name = chars <= scratch.Length ? scratch[..chars] : (longNameBuffer ??= new char[ushort.MaxValue]).AsSpan(0, chars);
             ReadText(file, name, utf16, bytes);
-            builder.AddRecord(directoryId, name, size, modified, (flags & 1) != 0, reference);
+            builder.AddRecord(directoryId, name, size, modified, (flags & 1) != 0, reference, created);
         }
         if (file.Position != end || file.ReadByte() != -1) throw new InvalidDataException("退出快照卷解压长度不符。");
         progress?.Invoke(volume, true, rowCount);
-        return new(volume, position, [builder.Build(token)]);
+        return new(volume, position, [builder.Build(token)]) { HasCreationMetadata = hasCreationMetadata };
     }
 
     private static void WriteText(BinaryWriter writer, ReadOnlySpan<char> text, Span<byte> buffer)

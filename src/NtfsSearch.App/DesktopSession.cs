@@ -36,7 +36,7 @@ internal sealed class DesktopSession
         spaceAnalysis = new(host, publish, Post);
     }
 
-    internal async Task RunAsync(TextReader input)
+    internal async Task RunAsync(TextReader input, string? apiPort)
     {
         using var lifetime = new CancellationTokenSource();
         host.Catalog.Changed += QueueCatalogRefresh;
@@ -60,6 +60,11 @@ internal sealed class DesktopSession
             try { settings = DesktopSettings.Load(settingsDirectory); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
             { PublishError("action", "无法读取应用设置：" + error.Message); }
+        LocalSearchApi? api = null;
+        if (apiPort is not null)
+            try { api = await LocalSearchApi.StartAsync(host, apiPort); }
+            catch (Exception error) when (error is ArgumentException or IOException or System.Net.Sockets.SocketException or InvalidOperationException)
+            { PublishError("action", "本机 HTTP 接口启动失败：" + error.Message); }
         PublishStatus();
         RunQuery();
         _ = ReadInputAsync(input, lifetime.Token);
@@ -78,7 +83,8 @@ internal sealed class DesktopSession
             var activeSearch = search;
             activeSearch?.Cancel();
             await lifetime.CancelAsync();
-            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask, spaceAnalysis.StopAsync());
+            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask, spaceAnalysis.StopAsync(),
+                api?.DisposeAsync().AsTask() ?? Task.CompletedTask);
             activeSearch?.Dispose();
         }
 
@@ -328,7 +334,7 @@ internal sealed class DesktopSession
             Type = "result", RequestId = requestId, UserInitiated = userInitiated,
             Offset = offset, Total = result.TotalCount, PageSize,
             UserMilliseconds = queryState.UserElapsed?.TotalMilliseconds,
-            VolumesReady = host.Catalog.VolumeCount,
+            result.VolumesReady,
             Rows = result.Rows.Select(row => new
             {
                 Key = DesktopFileActions.EncodePath(row.FullPath),

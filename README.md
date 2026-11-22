@@ -1,10 +1,12 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.11.1。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
+Windows NTFS 文件搜索工具，版本 0.12.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
 
 ## 使用
 
 Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索引状态和升级步骤见[使用说明](manual/README.md)。
+
+关闭搜索窗口后，程序留在托盘继续更新索引。左键点击托盘图标恢复窗口，右键选择「退出」结束程序。
 
 ## 搜索
 
@@ -17,6 +19,8 @@ Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索�
 - 打开文件与所在目录、复制路径均使用当前桌面用户权限。
 
 支持名称、路径、文件大小和修改时间排序；大小和时间从真实 NTFS 元数据读取，增量更新也保持相同语义。USN 事件时间不会冒充文件修改时间。
+
+本机 HTTP 接口与 CLI 使用同一份实时索引，支持创建时间、修改时间和文件大小的组合筛选。默认地址为 `http://127.0.0.1:18791`，接口和命令用法见[使用说明](manual/README.md#通过-http-和-cli-查询)。
 
 ## 空间分析
 
@@ -32,7 +36,7 @@ Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索�
 - 运行时索引、排序、采集状态和增量均留在内存。搜索使用已发布的卷视图，过时记录按卷后台合并。日志丢失或手工重扫时重新读取对应卷。
 - 正常退出时把各卷当前有效的文件元数据与 USN 水位逐卷用 Zstd 等级 3 单线程压缩，写成一份快照 `Data/index.ntsnap`。下次启动按卷解压并重建排序，按 USN 接续停机期间的变化。
 - 可在「索引状态」启用「退出时不保存索引」。程序将偏好保存到 `Data/settings.json`，下次启动沿用。
-- 0.10.0 启用压缩快照格式，升级后的首次启动从 NTFS 重建索引，正常保存后下次启动沿用压缩快照。明确启动开发诊断时按诊断说明使用其报告目录。
+- 0.12.0 升级时从 NTFS 重新采集卷，以补齐旧退出快照缺少的创建时间。成功保存新版快照后，下次正常启动可恢复索引并补读 USN。
 - 「索引状态」逐卷显示检查快照、加载、重建排序、USN 补读和全卷采集阶段。进入实时监控后仍显示该卷是从快照恢复还是经过全卷采集。
 - 卷身份、硬链接和目录层级按完整 NTFS 文件引用记录。界面显示卷处理进度和错误原因。
 
@@ -62,6 +66,6 @@ Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
 便携版构建后，可运行 `node tests/desktop-window.mjs artifacts/windows/NtfsSearch.App.exe artifacts/desktop-window`，在 Windows 窗口中验证搜索交互和退出。该自检使用独立的演示索引。
 
-便携版顶层的 `NtfsSearch.Cli.exe` 提供 EFU 导入、快照查询和显式扫描等开发诊断能力，与桌面后端共用同目录的程序集。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
+便携版顶层的 `NtfsSearch.Cli.exe` 可查询实时索引。EFU 导入、静态快照查询和显式扫描也可用于开发诊断。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
 
 参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。NTFS 数据流读取复用 DiscUtils，依赖与许可见 `docs/native-dependencies.md`。

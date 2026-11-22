@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Text.Json;
 using NtfsSearch.Core;
+using NtfsSearch.Cli;
 
 using var cancellation = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
@@ -25,7 +27,9 @@ try
             SnapshotStore.Save(scanned, args[2], cancellation.Token);
             Console.WriteLine($"已保存 {scanned.Count:N0} 条目录项，含硬链接与可用大小/修改时间；静态诊断命令不启动实时监控。");
             break;
-        case "search" when args.Length >= 3:
+        case "search" or "status":
+            await LocalSearchClient.RunAsync(args, cancellation.Token); break;
+        case "search-snapshot" when args.Length >= 3:
             var loaded = SnapshotStore.Load(args[1], cancellation.Token);
             var sort = args.Length > 3 ? Enum.Parse<SortField>(args[3], true) : SortField.Name;
             bool descending = args.Length > 4 && args[4].Equals("desc", StringComparison.OrdinalIgnoreCase);
@@ -39,7 +43,26 @@ try
         case "bench":
             Benchmark.Run(args.Skip(1).ToArray(), cancellation.Token); break;
         default:
-            Console.WriteLine("NtfsSearch 0.11.1\n\n桌面程序自动发现并读取 NTFS 磁盘，无需输入索引。\n高级命令：\n  drives\n  demo <snapshot.ntidx>\n  import <file.efu> <snapshot.ntidx>\n  scan <C:> <snapshot.ntidx>\n  search <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]\n  bench [count] [report.json] [ordered|shuffled] [repetitions]\n  bench-exit <旧版 Data 目录> <测试退出快照>");
+            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            Console.WriteLine($"""
+                NtfsSearch {version?.ToString(3)}
+
+                实时索引查询，需先启动桌面程序
+                  search [query] [--name-only|--match-path] [--sort name|path|size|modified] [--descending]
+                         [--offset N] [--limit N] [--min-size-bytes N] [--max-size-bytes N]
+                         [--created-from ISO8601] [--created-before ISO8601]
+                         [--modified-from ISO8601] [--modified-before ISO8601]
+                  status
+
+                诊断命令
+                  drives
+                  demo <snapshot.ntidx>
+                  import <file.efu> <snapshot.ntidx>
+                  scan <C:> <snapshot.ntidx>
+                  search-snapshot <snapshot.ntidx> <query> [Name|Path|Size|Modified] [desc]
+                  bench [count] [report.json] [ordered|shuffled] [repetitions]
+                  bench-exit <旧版 Data 目录> <测试退出快照>
+                """);
             break;
     }
 }

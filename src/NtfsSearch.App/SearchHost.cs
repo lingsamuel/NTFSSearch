@@ -19,6 +19,28 @@ internal sealed class SearchHost
     internal event Action<string, bool>? Progress;
     internal event Action<SpaceActivityObservation, IReadOnlyCollection<ulong>>? FileActivity;
 
+    /// <summary>读取已发布卷的覆盖范围及当前采集状态，供本机查询客户端使用。</summary>
+    internal object ReadApiStatus()
+    {
+        var volumes = windowsBackend?.CaptureSearchStatus();
+        if (volumes is null)
+        {
+            var counts = CaptureAnalysisVolumes().ToDictionary(view => view.Volume.Root,
+                view => view.Layers.Sum(layer => (long)layer.VisibleCount), StringComparer.OrdinalIgnoreCase);
+            volumes = (demo?.Statuses ?? []).Select(status => (status,
+                counts.TryGetValue(status.Root, out long count) ? (long?)count : null)).ToArray();
+        }
+        return new
+        {
+            Indexed = volumes.Sum(volume => volume.Indexed.GetValueOrDefault()),
+            VolumesReady = volumes.Count(volume => volume.Indexed.HasValue),
+            Volumes = volumes.Select(volume => new
+            {
+                volume.Status.Root, volume.Status.Message, volume.Status.HasError, IsReady = volume.Indexed.HasValue
+            }).ToArray()
+        };
+    }
+
     internal void ObserveAnalysisVolume(SpaceActivityObservation? observation)
     {
         if (windowsBackend is { } backend) backend.AnalysisObservation = observation;
@@ -59,7 +81,8 @@ internal sealed class SearchHost
         Progress?.Invoke("正在加载上次退出保存的索引…", false);
         int parallelism = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount,
             VolumeResources.AvailableMemoryBytes()).CacheLoadLimit;
-        using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, parallelism, progress).GetEnumerator();
+        using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, parallelism, progress,
+            requireCreationMetadata: true).GetEnumerator();
         while (true)
         {
             ExitSnapshotVolume current;

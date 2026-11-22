@@ -7,9 +7,16 @@ ZstdSharp.Port 0.8.8
 https://github.com/oleg-st/ZstdSharp
 Copyright (c) 2021 Oleg Stepanischev
 
-Tauri / @tauri-apps/api
+Tauri / @tauri-apps/api / tauri-plugin-single-instance
 https://tauri.app/
 Copyright (c) 2017 - Present Tauri Apps Contributors
+
+sha2 0.11.1
+https://github.com/RustCrypto/hashes
+Copyright (c) 2016-2026 The RustCrypto Project Developers
+Copyright (c) 2016 Artyom Pavlov
+Copyright (c) 2009-2013 Mozilla Foundation
+Copyright (c) 2006-2009 Graydon Hoare
 
 Vue
 https://vuejs.org/
@@ -18,6 +25,10 @@ Copyright (c) 2018-present, Yuxi (Evan) You
 System.Drawing.Common / Microsoft.Win32.SystemEvents 10.0.15
 https://github.com/dotnet/winforms
 https://github.com/dotnet/runtime
+Copyright (c) .NET Foundation and Contributors
+
+ASP.NET Core
+https://github.com/dotnet/aspnetcore
 Copyright (c) .NET Foundation and Contributors
 
 MIT License

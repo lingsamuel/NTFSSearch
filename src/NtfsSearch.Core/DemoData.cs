@@ -13,6 +13,7 @@ public static class DemoData
         string branchPath = @"C:\演示\目录001\";
         ulong branchParent = 101;
         long movedBytes = 0;
+        var firstModified = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         // 桌面演示用同一份数据验证多层操作，保留既有的总条数、总大小和查询样本。
         if (includeDeepBranch)
             for (int i = firstFolder; i < fileInBranch; i++)
@@ -29,10 +30,12 @@ public static class DemoData
             if (includeDeepBranch && i is >= firstFolder and < fileInBranch) continue;
             string name = i % 17 == 0 ? $"hello world {i:D6}.txt" : $"文件 report {i:D6}.{extensions[i % extensions.Length]}";
             bool withinBranch = includeDeepBranch && i / 100 == firstFolder / 100;
+            var modified = firstModified.AddMinutes(i);
             b.Add(withinBranch ? branchPath : $"C:\\演示\\目录{i / 100:D3}\\", name,
                 i * 1024L + (includeDeepBranch && i == fileInBranch ? movedBytes : 0),
-                new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddMinutes(i).Ticks,
-                fileReference: (1UL << 32) + (ulong)i, parentReference: withinBranch ? branchParent : 100 + (ulong)i / 100);
+                modified.Ticks, fileReference: (1UL << 32) + (ulong)i,
+                parentReference: withinBranch ? branchParent : 100 + (ulong)i / 100,
+                createdUtcTicks: modified.AddDays(-1).Ticks);
         }
         return b.Build();
     }

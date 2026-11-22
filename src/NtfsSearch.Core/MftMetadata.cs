@@ -5,9 +5,12 @@ using Microsoft.Win32.SafeHandles;
 namespace NtfsSearch.Core;
 
 internal readonly record struct MftMetadata(ulong FileReference, ushort LinkCount, long? Size, long? ModifiedUtcTicks,
-    int LongNameCount, bool HasAttributeList)
+    int LongNameCount, bool HasAttributeList, long? CreatedUtcTicks)
 {
     internal bool RequiresLinkEnumeration => LongNameCount > 1 || HasAttributeList;
+    internal static long? UtcTicksFromFileTime(long fileTime) =>
+        fileTime is > 0 and <= 2650467743999999999L ? DateTime.FromFileTimeUtc(fileTime).Ticks : null;
+
     internal static MftMetadata? Parse(ReadOnlySpan<byte> source, ulong slot)
     {
         byte[] storage = source.ToArray();
@@ -34,7 +37,7 @@ internal readonly record struct MftMetadata(ulong FileReference, ushort LinkCoun
         int used = BinaryPrimitives.ReadInt32LittleEndian(record[24..]);
         int offset = BinaryPrimitives.ReadUInt16LittleEndian(record[20..]);
         if (used < 48 || used > record.Length || offset < 48 || offset > used - 4) throw new InvalidDataException("MFT 属性边界无效。");
-        long? size = null, modified = null;
+        long? size = null, modified = null, created = null;
         int longNames = 0; bool hasAttributeList = false;
         while (offset <= used - 4)
         {
@@ -61,8 +64,8 @@ internal readonly record struct MftMetadata(ulong FileReference, ushort LinkCoun
                 int content = BinaryPrimitives.ReadUInt16LittleEndian(attribute[20..]);
                 uint contentLength = BinaryPrimitives.ReadUInt32LittleEndian(attribute[16..]);
                 if (content < 24 || contentLength < 16 || content > length - 16 || contentLength > length - content) throw new InvalidDataException("MFT 标准信息越界。");
-                long filetime = BinaryPrimitives.ReadInt64LittleEndian(attribute[(content + 8)..]);
-                if (filetime > 0 && filetime <= 2650467743999999999L) modified = DateTime.FromFileTimeUtc(filetime).Ticks;
+                created = UtcTicksFromFileTime(BinaryPrimitives.ReadInt64LittleEndian(attribute[content..]));
+                modified = UtcTicksFromFileTime(BinaryPrimitives.ReadInt64LittleEndian(attribute[(content + 8)..]));
             }
             if (type == 0x80 && attribute[9] == 0)
             {
@@ -83,7 +86,7 @@ internal readonly record struct MftMetadata(ulong FileReference, ushort LinkCoun
             offset += length;
         }
         return new(((ulong)BinaryPrimitives.ReadUInt16LittleEndian(record[16..]) << 48) | slot,
-            BinaryPrimitives.ReadUInt16LittleEndian(record[18..]), size, modified, longNames, hasAttributeList);
+            BinaryPrimitives.ReadUInt16LittleEndian(record[18..]), size, modified, longNames, hasAttributeList, created);
     }
 }
 

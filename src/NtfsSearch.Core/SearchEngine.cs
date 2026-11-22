@@ -8,11 +8,13 @@ namespace NtfsSearch.Core;
 public sealed partial class SearchIndex
 {
     public SearchResult Search(string text, SortField sort = SortField.Name, bool descending = false,
-        bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default)
+        bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default,
+        SearchFilter? filter = null)
     {
         ValidateRequest(text, sort, offset, limit, cancellationToken);
+        filter?.Validate();
         var timer = Stopwatch.StartNew();
-        using var query = Prepare(text, matchPath, cancellationToken);
+        using var query = Prepare(text, matchPath, cancellationToken, filter);
         var rows = new List<SearchRow>(Math.Min(limit, Math.Min(Count, 1024)));
         if (query.TotalCount == Count && !HasOrderCorrections)
         {
@@ -37,12 +39,13 @@ public sealed partial class SearchIndex
         return new(query.TotalCount, rows, timer.Elapsed);
     }
 
-    internal PreparedSearch Prepare(string text, bool matchPath, CancellationToken cancellationToken)
+    internal PreparedSearch Prepare(string text, bool matchPath, CancellationToken cancellationToken, SearchFilter? filter = null)
     {
         ValidateRequest(text, SortField.Name, 0, 0, cancellationToken);
         var terms = SearchQuery.Parse(text);
         if (terms.Length > 64) throw new ArgumentException("查询最多 64 个条件。", nameof(text));
-        if (terms.Length == 0) return new(this, null, VisibleCount);
+        if (filter?.IsEmpty == true) filter = null;
+        if (terms.Length == 0 && filter is null) return new(this, null, VisibleCount);
         var states = new byte[terms.Length][];
         var suffixes = new string[terms.Length];
         for (int t = 0; t < terms.Length; t++)
@@ -69,9 +72,12 @@ public sealed partial class SearchIndex
         byte[]? memo = null;
         try
         {
-            bool prefixPredicate = terms[0].Contains('\\');
-            if (!prefixPredicate || suffixes[0].Length != 0)
-                memo = Names.TryRentWorkspace(prefixPredicate ? suffixes[0] : terms[0], prefixPredicate);
+            if (terms.Length > 0)
+            {
+                bool prefixPredicate = terms[0].Contains('\\');
+                if (!prefixPredicate || suffixes[0].Length != 0)
+                    memo = Names.TryRentWorkspace(prefixPredicate ? suffixes[0] : terms[0], prefixPredicate);
+            }
             void Scan(int from, int to)
             {
                 Span<char> scratch = stackalloc char[255];
@@ -85,6 +91,7 @@ public sealed partial class SearchIndex
                     {
                         if (!IsVisible(id)) continue;
                         ref readonly var record = ref Records[id];
+                        if (filter is not null && !filter.Matches(this, id, in record)) continue;
                         bool matches = true;
                         for (int t = 0; t < terms.Length; t++)
                         {

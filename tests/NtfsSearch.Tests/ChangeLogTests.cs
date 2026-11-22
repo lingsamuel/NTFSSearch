@@ -17,16 +17,34 @@ public class ChangeLogTests
             var initial = new JournalPosition(7, 100);
             using (var writer = new ChangeLogStore(root, "base.ntidx", initial, writable: true))
             {
-                writer.Append(new(initial, new(7, 200), [new(99, false, [new(5, @"C:\", "name\ud800.txt")], 12, 50)]));
+                writer.Append(new(initial, new(7, 200), [new(99, false, [new(5, @"C:\", "name\ud800.txt")], 12, 50, 37)]));
                 writer.Append(new(new(7, 200), new(7, 300), [new(99, false, [])]));
             }
             using var reader = new ChangeLogStore(root, "base.ntidx", initial);
             Assert.Equal(2, reader.Checkpoint.Sequence); Assert.Equal(300, reader.Checkpoint.Position.NextUsn);
             var rows = reader.ReadAfter(0).ToArray();
             Assert.Equal("name\ud800.txt", rows[0].Transaction.Files[0].Links[0].Name);
-            Assert.Single(reader.ReadAfter(1));
+            Assert.Equal(37, rows[0].Transaction.Files[0].CreatedUtcTicks);
+            Assert.Null(Assert.Single(reader.ReadAfter(1)).Transaction.Files[0].CreatedUtcTicks);
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void LegacyTransactionPayloadStillDecodes()
+    {
+        using var bytes = new MemoryStream();
+        using var writer = new BinaryWriter(bytes);
+        writer.Write(1L); writer.Write(7UL); writer.Write(100L); writer.Write(101L);
+        writer.Write(1); writer.Write(99UL); writer.Write(false);
+        writer.Write(true); writer.Write(12L); writer.Write(true); writer.Write(50L);
+        writer.Write(0);
+
+        var transaction = ChangeLogStore.Decode(bytes.ToArray()).Transaction;
+        Assert.Equal(new(7, 101), transaction.To);
+        var file = Assert.Single(transaction.Files);
+        Assert.Equal(50, file.ModifiedUtcTicks);
+        Assert.Null(file.CreatedUtcTicks);
     }
 
     [Fact]

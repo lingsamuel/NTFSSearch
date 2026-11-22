@@ -10,7 +10,7 @@ namespace NtfsSearch.Core;
 public sealed record NtfsScanResult(SearchIndex Index, JournalPosition Position, JournalCapture Capture);
 
 internal delegate void NtfsRowVisitor(string parentPath, ReadOnlySpan<char> name,
-    long? size, long? modifiedUtcTicks, bool directory, ulong reference, ulong parentReference);
+    long? size, long? modifiedUtcTicks, bool directory, ulong reference, ulong parentReference, long? createdUtcTicks);
 
 public static class NtfsEnumerator
 {
@@ -43,7 +43,8 @@ public static class NtfsEnumerator
     {
         IndexBuilder builder = null!;
         ReadRows(drive, count => builder = new(count),
-            (parent, name, size, modified, directory, file, directoryId) => builder.Add(parent, name, size, modified, directory, file, directoryId),
+            (parent, name, size, modified, directory, file, directoryId, created) =>
+                builder.Add(parent, name, size, modified, directory, file, directoryId, created),
             token, progress, unreachableRecords, excludeDirectory);
         progress?.Report("建立排序索引…");
         return builder.Build(token, progress);
@@ -101,7 +102,7 @@ public static class NtfsEnumerator
                 {
                     if (NativePathExclusion.Contains(excludeDirectory, link.ParentPath, link.Name)) continue;
                     add(link.ParentPath, link.Name, state.Size, state.ModifiedUtcTicks, false,
-                        frn, link.ParentReference);
+                        frn, link.ParentReference, state.CreatedUtcTicks ?? information.Value.CreatedUtcTicks);
                 }
             }
             else
@@ -110,7 +111,7 @@ public static class NtfsEnumerator
                 if (parentPath is null) { skipped++; return; }
                 if (NativePathExclusion.Contains(excludeDirectory, parentPath, name)) return;
                 add(parentPath, name, directory ? null : information?.Size,
-                information?.ModifiedUtcTicks, directory, frn, parent);
+                information?.ModifiedUtcTicks, directory, frn, parent, information?.CreatedUtcTicks);
             }
             if ((++added & 262143) == 0) progress?.Report($"已索引 {added:N0} 条记录…");
         });

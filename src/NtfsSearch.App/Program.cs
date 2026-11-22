@@ -24,7 +24,9 @@ internal static class Program
                 string? settingsDirectory = demoCount.HasValue
                     ? Environment.GetEnvironmentVariable("NTFS_SEARCH_TEST_DATA")
                     : PortableDataDirectory.Resolve();
-                await new DesktopSession(new SearchHost(demoCount, settingsDirectory), Publish, settingsDirectory).RunAsync(input);
+                string? apiPort = Environment.GetEnvironmentVariable(LocalSearchEndpoint.PortVariable);
+                if (string.IsNullOrWhiteSpace(apiPort)) apiPort = demoCount.HasValue ? null : "";
+                await new DesktopSession(new SearchHost(demoCount, settingsDirectory), Publish, settingsDirectory).RunAsync(input, apiPort);
                 return 0;
             }
             catch (Exception error)

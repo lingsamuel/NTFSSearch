@@ -289,12 +289,19 @@ public sealed class ChangeLogStore : IDisposable
         using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
         var transaction = change.Transaction;
         writer.Write(change.Sequence); writer.Write(transaction.From.JournalId); writer.Write(transaction.From.NextUsn); writer.Write(transaction.To.NextUsn);
-        writer.Write(transaction.Files.Count);
+        // 旧事务在此写非负的文件数。用反码区分带创建时间的事务，可在同一日志继续追加。
+        bool hasCreation = transaction.Files.Any(file => file.CreatedUtcTicks.HasValue);
+        writer.Write(hasCreation ? ~transaction.Files.Count : transaction.Files.Count);
         foreach (var file in transaction.Files)
         {
             writer.Write(file.FileReference); writer.Write(file.IsDirectory);
             writer.Write(file.Size.HasValue); if (file.Size is long size) writer.Write(size);
             writer.Write(file.ModifiedUtcTicks.HasValue); if (file.ModifiedUtcTicks is long ticks) writer.Write(ticks);
+            if (hasCreation)
+            {
+                writer.Write(file.CreatedUtcTicks.HasValue);
+                if (file.CreatedUtcTicks is long creation) writer.Write(creation);
+            }
             writer.Write(file.Links.Count);
             foreach (var link in file.Links) { writer.Write(link.ParentReference); WriteText(writer, link.ParentPath); WriteText(writer, link.Name); }
         }
@@ -304,14 +311,18 @@ public sealed class ChangeLogStore : IDisposable
     {
         using var stream = new MemoryStream(payload); using var reader = new BinaryReader(stream);
         long sequence = reader.ReadInt64(); ulong id = reader.ReadUInt64(); long from = reader.ReadInt64(), to = reader.ReadInt64();
-        int count = ReadCount(reader, 65536); var files = new IndexedFileState[count];
+        int encodedCount = reader.ReadInt32();
+        bool hasCreation = encodedCount < 0;
+        int count = ValidateCount(hasCreation ? ~encodedCount : encodedCount, 65536);
+        var files = new IndexedFileState[count];
         for (int i = 0; i < count; i++)
         {
             ulong reference = reader.ReadUInt64(); bool directory = reader.ReadBoolean();
             long? size = reader.ReadBoolean() ? reader.ReadInt64() : null, ticks = reader.ReadBoolean() ? reader.ReadInt64() : null;
+            long? created = hasCreation && reader.ReadBoolean() ? reader.ReadInt64() : null;
             int links = ReadCount(reader, 4096); var names = new IndexedLink[links];
             for (int n = 0; n < links; n++) names[n] = new(reader.ReadUInt64(), ReadText(reader), ReadText(reader));
-            files[i] = new(reference, directory, names, size, ticks);
+            files[i] = new(reference, directory, names, size, ticks, created);
         }
         if (sequence < 1 || from < 0 || to < from || stream.Position != stream.Length) throw new InvalidDataException("变化事务内容无效。");
         return new(sequence, new(new(id, from), new(id, to), files));
@@ -324,7 +335,8 @@ public sealed class ChangeLogStore : IDisposable
         if (reader.BaseStream.Length - reader.BaseStream.Position < count * 2L) throw new InvalidDataException("变化事务字符串越界。");
         char[] text = new char[count]; reader.BaseStream.ReadExactly(MemoryMarshal.AsBytes(text.AsSpan())); return new(text);
     }
-    private static int ReadCount(BinaryReader reader, int maximum)
-    { int count = reader.ReadInt32(); if (count < 0 || count > maximum) throw new InvalidDataException("变化事务数量越界。"); return count; }
+    private static int ReadCount(BinaryReader reader, int maximum) => ValidateCount(reader.ReadInt32(), maximum);
+    private static int ValidateCount(int count, int maximum)
+    { if (count < 0 || count > maximum) throw new InvalidDataException("变化事务数量越界。"); return count; }
     private sealed record Header(string BaseId, string LogId, string Epoch, long Anchor, JournalPosition Position, long Bytes);
 }

@@ -131,7 +131,7 @@ function receive(message: DesktopMessage) {
       if (message.error) {
         saving.value = undefined
         connected.value = false
-        showFeedback(message.error + '。可再次关闭窗口退出。', true)
+        showFeedback(message.error + '。可从托盘菜单再次选择「退出」。', true)
       }
       break
   }

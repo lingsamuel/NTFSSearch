@@ -8,7 +8,11 @@ namespace NtfsSearch.Core;
 
 public static class SnapshotStore
 {
-    private static readonly byte[] Magic = "NTSIDX04"u8.ToArray();
+    private static ReadOnlySpan<byte> CompactMagic => "NTSIDX04"u8;
+    private static ReadOnlySpan<byte> CreationMagic => "NTSIDX05"u8;
+
+    private static bool IsCompactFormat(ReadOnlySpan<byte> magic)
+        => magic.SequenceEqual(CompactMagic) || magic.SequenceEqual(CreationMagic);
 
     // 调用方已加载并验证正文后，用头部探测决定是否需要进行同代编码迁移。
     internal static bool IsCurrentFormat(string path, CancellationToken cancellationToken = default)
@@ -18,14 +22,14 @@ public static class SnapshotStore
         Span<byte> header = stackalloc byte[8];
         int read = stream.ReadAtLeast(header, header.Length, throwOnEndOfStream: false);
         cancellationToken.ThrowIfCancellationRequested();
-        return read == header.Length && header.SequenceEqual(Magic);
+        return read == header.Length && IsCompactFormat(header);
     }
 
     public static void Save(SearchIndex index, string path, CancellationToken cancellationToken = default)
     {
         SaveChecked(path, (writer, crypto) =>
         {
-            writer.Write(Magic);
+            writer.Write(index.CreationTimes is null ? CompactMagic : CreationMagic);
             writer.Write(index.Count); writer.Write(index.Directories.Length);
             writer.Write(index.Names.Chunks.Count); writer.Write(index.Names.LastUsed);
             writer.Write(index.Names.Count);
@@ -89,6 +93,11 @@ public static class SnapshotStore
             byte[]? legacyFingerprint = index.CheckpointFingerprint;
             writer.Write(legacyFingerprint is not null);
             if (legacyFingerprint is not null) writer.Write(legacyFingerprint);
+            if (index.CreationTimes is { } times)
+            {
+                WriteArray<long>(crypto, times, cancellationToken);
+                WriteArray<ulong>(crypto, index.KnownCreationTimes!, cancellationToken);
+            }
         }, cancellationToken);
     }
 
@@ -126,17 +135,18 @@ public static class SnapshotStore
         stream.Position = 0;
         using var reader = new BinaryReader(stream);
         var magic = reader.ReadBytes(8);
-        bool v4 = magic.AsSpan().SequenceEqual(Magic);
-        bool v3 = v4 || magic.AsSpan().SequenceEqual("NTSIDX03"u8);
-        bool hasOrders = v3 || magic.AsSpan().SequenceEqual("NTSIDX02"u8);
+        bool hasCreation = magic.AsSpan().SequenceEqual(CreationMagic);
+        bool compact = hasCreation || magic.AsSpan().SequenceEqual(CompactMagic);
+        bool hasIdentityField = compact || magic.AsSpan().SequenceEqual("NTSIDX03"u8);
+        bool hasOrders = hasIdentityField || magic.AsSpan().SequenceEqual("NTSIDX02"u8);
         if (!hasOrders && !magic.AsSpan().SequenceEqual("NTSIDX01"u8)) throw new InvalidDataException("未知快照格式。");
-        int recordSize = v4 ? 20 : 32;
+        int recordSize = compact ? 20 : 32;
         int count = ReadCount(reader, payload, recordSize), directoryCount = ReadCount(reader, payload, 4);
         int chunks = ReadCount(reader, payload, 4), lastUsed = ReadCount(reader, NameArena.ChunkChars, 1);
-        int nameCount = v4 ? ReadCount(reader, payload - stream.Position, sizeof(ulong)) : 0;
-        int bigSizeCount = v4 ? ReadCount(reader, payload - stream.Position, sizeof(long)) : 0;
-        int asciiChunks = v4 ? ReadCount(reader, payload - stream.Position, 4) : 0;
-        int asciiLastUsed = v4 ? ReadCount(reader, NameArena.ChunkChars, 1) : 0;
+        int nameCount = compact ? ReadCount(reader, payload - stream.Position, sizeof(ulong)) : 0;
+        int bigSizeCount = compact ? ReadCount(reader, payload - stream.Position, sizeof(long)) : 0;
+        int asciiChunks = compact ? ReadCount(reader, payload - stream.Position, 4) : 0;
+        int asciiLastUsed = compact ? ReadCount(reader, NameArena.ChunkChars, 1) : 0;
         var directories = new string[directoryCount];
         for (int i = 0; i < directoryCount; i++)
         {
@@ -149,15 +159,15 @@ public static class SnapshotStore
             if (directories[i][^1] != '\\') throw new InvalidDataException("快照目录格式错误。");
         }
         var arena = new NameArena { LastUsed = lastUsed, AsciiLastUsed = asciiLastUsed };
-        if (v4) { arena.Descriptors = ReadArray<ulong>(stream, nameCount, payload, cancellationToken); arena.Count = nameCount; }
-        var legacyChunks = new List<(long Offset, int Length)>(v4 ? 0 : chunks);
+        if (compact) { arena.Descriptors = ReadArray<ulong>(stream, nameCount, payload, cancellationToken); arena.Count = nameCount; }
+        var legacyChunks = new List<(long Offset, int Length)>(compact ? 0 : chunks);
         for (int i = 0; i < chunks; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             int chars = ReadCount(reader, Math.Min(NameArena.ChunkChars, (payload - stream.Position) / 2), 1);
             if (i < chunks - 1 && chars != NameArena.ChunkChars || i == chunks - 1 && chars != lastUsed)
                 throw new InvalidDataException("快照名称块长度错误。");
-            if (v4)
+            if (compact)
             {
                 var chunk = IndexArrays.Persistent<char>(chars); stream.ReadExactly(MemoryMarshal.AsBytes(chunk.AsSpan())); arena.Chunks.Add(chunk);
             }
@@ -173,15 +183,15 @@ public static class SnapshotStore
             var chunk = IndexArrays.Persistent<byte>(bytes); stream.ReadExactly(chunk); arena.AsciiChunks.Add(chunk);
         }
         if (asciiChunks == 0 && asciiLastUsed != 0) throw new InvalidDataException("快照ASCII名称块长度错误。");
-        if (v4) arena.ValidateReferences(cancellationToken);
-        long[] bigSizes = v4 ? ReadArray<long>(stream, bigSizeCount, payload, cancellationToken) : [];
+        if (compact) arena.ValidateReferences(cancellationToken);
+        long[] bigSizes = compact ? ReadArray<long>(stream, bigSizeCount, payload, cancellationToken) : [];
         foreach (long size in bigSizes)
             if (size <= int.MaxValue) throw new InvalidDataException("快照大小旁表包含无效值。");
         if (count > (payload - stream.Position) / recordSize) throw new InvalidDataException("快照记录数越界。");
         long recordsPosition = stream.Position;
         var records = IndexArrays.Persistent<IndexRecord>(count);
-        using var legacyNames = v4 ? null : new MappedSnapshotNames(stream, legacyChunks);
-        if (v4)
+        using var legacyNames = compact ? null : new MappedSnapshotNames(stream, legacyChunks);
+        if (compact)
         {
             for (int start = 0; start < count; start += 16_384)
             {
@@ -253,7 +263,7 @@ public static class SnapshotStore
             }
         }
         ulong[]? references = null, parents = null;
-        if (v3 && reader.ReadBoolean())
+        if (hasIdentityField && reader.ReadBoolean())
         {
             references = ReadArray<ulong>(stream, count, payload, cancellationToken);
             parents = ReadArray<ulong>(stream, directoryCount, payload, cancellationToken);
@@ -262,15 +272,25 @@ public static class SnapshotStore
                     throw new InvalidDataException("文件身份分组顺序无效。");
         }
         byte[]? legacyFingerprint = null;
-        if (v4 && reader.ReadBoolean())
+        if (compact && reader.ReadBoolean())
         {
             legacyFingerprint = reader.ReadBytes(32);
             if (legacyFingerprint.Length != 32) throw new InvalidDataException("快照来源指纹不完整。");
         }
+        long[]? creationTimes = null;
+        ulong[]? knownCreationTimes = null;
+        if (hasCreation)
+        {
+            creationTimes = ReadArray<long>(stream, count, payload, cancellationToken);
+            knownCreationTimes = ReadArray<ulong>(stream, (int)(((long)count + 63) / 64), payload, cancellationToken);
+            if (count % 64 != 0 && (knownCreationTimes[^1] >> (count % 64)) != 0)
+                throw new InvalidDataException("快照创建时间位图越界。");
+        }
         if (stream.Position != payload) throw new InvalidDataException("快照包含多余数据。");
-        var index = new SearchIndex(arena, records, directories, cancellationToken, progress, orders, known, references, parents, bigSizes: bigSizes);
+        var index = new SearchIndex(arena, records, directories, cancellationToken, progress, orders, known, references, parents,
+            bigSizes: bigSizes, creationTimes: creationTimes, knownCreationTimes: knownCreationTimes);
         index.CheckpointFingerprint = legacyFingerprint;
-        if (!v4 && index.HasIdentity)
+        if (!compact && index.HasIdentity)
             index.CheckpointFingerprint = IndexFingerprint.LegacyFromSerialized(index, stream, recordsPosition, legacyChunks, cancellationToken);
         if (hasOrders)
         {
@@ -297,7 +317,7 @@ public static class SnapshotStore
         ValidatePayload(stream, cancellationToken);
         stream.Position = 0;
         Span<byte> magic = stackalloc byte[8]; stream.ReadExactly(magic);
-        if (!magic.SequenceEqual(Magic) && !magic.SequenceEqual("NTSIDX03"u8) && !magic.SequenceEqual("NTSIDX02"u8) && !magic.SequenceEqual("NTSIDX01"u8))
+        if (!IsCompactFormat(magic) && !magic.SequenceEqual("NTSIDX03"u8) && !magic.SequenceEqual("NTSIDX02"u8) && !magic.SequenceEqual("NTSIDX01"u8))
             throw new InvalidDataException("未知快照格式。");
     }
 

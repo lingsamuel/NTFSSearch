@@ -2,7 +2,7 @@
 
 ## 启动
 
-解压 Windows x64 便携包，双击「启动搜索.cmd」，或打开顶层的 `NtfsSearch.App.exe`。系统需要 WebView2 Runtime 和 .NET 10 Runtime。自包含便携包内含 .NET Runtime。
+把 Windows x64 便携包解压到 Windows 本地的可写目录，双击「启动搜索.cmd」，或打开顶层的 `NtfsSearch.App.exe`。系统需要 WebView2 Runtime 和 ASP.NET Core Runtime 10。自包含便携包内含所需的 .NET 与 ASP.NET Core Runtime。
 
 程序会自动发现本机已就绪的 NTFS 磁盘。Windows 可能显示 UAC 授权提示，确认后才能采集磁盘和持续监控。一个卷建立或加载索引后即可搜索该卷。
 
@@ -13,6 +13,41 @@
 - 点击名称、完整路径、大小或修改时间的列标题排序，再点一次切换方向。拖动列标题右边缘可调整宽度。文件大小自动切换单位，悬停可查看精确字节数。底栏显示匹配总数和当前页，可逐页查看。
 - 文件使用 Windows 对应类型的图标，目录使用目录图标。
 - 在搜索框按向下键进入结果表。双击结果或按 `Enter` 打开选中项。右键选择「打开所在目录」会在资源管理器中打开父目录并选中该项。条目已移动或删除时，窗口会显示错误提示。右键菜单或 `Ctrl+C` 可复制完整路径。
+
+## 通过 HTTP 和 CLI 查询
+
+桌面程序启动后默认在 `http://127.0.0.1:18791` 提供本机 HTTP/JSON 接口。关窗进入托盘期间，接口继续使用实时索引。要改端口，请在启动桌面和 CLI 的环境中设置同一个 `NTFS_SEARCH_PORT`。
+
+WSL 2 镜像网络支持通过 `127.0.0.1` 访问这个接口。使用 NAT 网络时，可通过 WSL 互操作运行 Windows 版 CLI。 [Microsoft WSL 网络说明](https://learn.microsoft.com/zh-cn/windows/wsl/networking)
+
+- `GET /v1/status` 返回已索引条目数 `indexed`、可查询卷数 `volumesReady` 和各卷状态 `volumes`。
+- `POST /v1/search` 接收 JSON。可传 `text`、`matchPath`、`sort`、`descending`、`offset` 和 `limit`。排序字段使用 `name`、`path`、`size` 或 `modified`。省略查询文本即可只按元数据筛选。
+- 搜索响应包含精确总数 `total`、可查询卷数 `volumesReady` 和当前页 `rows`。默认返回 100 条，最多 1000 条。`limit: 0` 只统计数量。`volumesReady` 为零表示暂时没有已就绪的卷。
+- 搜索行包含 `name`、`fullPath`、`isDirectory`、`sizeBytes`、`createdUtc` 和 `modifiedUtc`。需要无损还原特殊 NTFS 路径时，可将 `pathKey` 按 Base64 解码为原始 UTF-16LE 路径。
+- 日期筛选使用带 `Z` 或 `±HH:mm` 时区的 ISO 8601 时间，秒的小数最多 7 位。起点包含，终点排除。大小以文件逻辑字节数计算，上下限均包含。组合条件同时成立才命中。缺少所筛选元数据的条目会被排除。
+
+例如，搜索 2026 年 11 月起创建和修改、大小至少为 100 MiB 的报告文件，可向 `POST /v1/search` 发送以下请求。
+
+```json
+{
+  "text": "report",
+  "createdFrom": "2026-11-01T00:00:00Z",
+  "modifiedFrom": "2026-11-01T00:00:00Z",
+  "minSizeBytes": 104857600,
+  "sort": "modified",
+  "descending": true,
+  "limit": 20
+}
+```
+
+便携包中的 CLI 可发送同样的查询，并输出 JSON。
+
+```powershell
+.\NtfsSearch.Cli.exe status
+.\NtfsSearch.Cli.exe search report --created-from 2026-11-01T00:00:00Z --modified-from 2026-11-01T00:00:00Z --min-size-bytes 104857600 --sort modified --descending --limit 20
+```
+
+使用 `--created-before`、`--modified-before` 或 `--max-size-bytes` 设置上限。后端不可用时，CLI 报错并返回非零退出码。开发诊断可用 `search-snapshot` 查询指定的静态 `.ntidx`。
 
 ## 查看空间分析
 
@@ -36,8 +71,8 @@
 
 ## 退出和移动
 
-窗口正常关闭时会显示索引保存进度。各卷索引完整后，程序在正常退出时分卷压缩文件元数据，并写入便携版顶层的 `Data/index.ntsnap`。下次启动时逐卷恢复并重建排序，再补读停机期间发生的变化。
+点击窗口关闭按钮或按 `Alt+F4` 会隐藏窗口，索引和查询继续运行。左键点击托盘图标或右键选择「打开」可恢复窗口。右键选择「退出」时，程序停止查询与采集并显示索引保存进度。各卷索引完整后，程序分卷压缩文件元数据，并写入便携版顶层的 `Data/index.ntsnap`。下次启动时逐卷恢复并重建排序，再补读停机期间发生的变化。
 
 在「索引状态」开启「退出时不保存索引」，程序退出时保留上次保存的快照。开关会记在 `Data/settings.json`，下次启动沿用。关闭开关可恢复正常退出保存。
 
-0.10.0 启用新快照格式，升级后的首次启动从 NTFS 卷建立索引。正常保存一次后，下次启动可使用压缩快照。移动便携版时可带上顶层的 `Data`。保存快照需要程序目录可写。
+升级至 0.12.0 后，旧快照需要从 NTFS 卷重新采集创建时间。待采集完成并正常保存一次后，下次启动即可使用新的快照。移动便携版时可带上顶层的 `Data`。保存快照需要程序目录可写。

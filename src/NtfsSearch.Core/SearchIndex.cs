@@ -8,6 +8,9 @@ public sealed partial class SearchIndex
     internal readonly NameArena Names;
     internal readonly IndexRecord[] Records;
     internal readonly long[] BigSizes;
+    // 两列同时存在。独立位图标记缺失值，时间列保留完整的64位值域。
+    internal readonly long[]? CreationTimes;
+    internal readonly ulong[]? KnownCreationTimes;
     internal readonly string[] Directories;
     private readonly SortPermutation[] orders = new SortPermutation[4];
     private readonly int[] knownCounts = new int[4];
@@ -74,7 +77,8 @@ public sealed partial class SearchIndex
     internal SearchIndex WithView(ulong[]? hidden, string[] directories, CancellationToken token, string? storageId = null)
     {
         var view = new SearchIndex(Names, Records, directories, token, storedOrders: orders, storedKnown: knownCounts,
-            fileReferences: FileReferences, directoryReferences: DirectoryReferences, hiddenRows: hidden, storageId: storageId ?? StorageId, bigSizes: BigSizes);
+            fileReferences: FileReferences, directoryReferences: DirectoryReferences, hiddenRows: hidden, storageId: storageId ?? StorageId, bigSizes: BigSizes,
+            creationTimes: CreationTimes, knownCreationTimes: KnownCreationTimes);
         view.identitySource = IdentitySource;
         if (!ReferenceEquals(directories, Directories))
         {
@@ -113,10 +117,12 @@ public sealed partial class SearchIndex
 
     internal SearchIndex(NameArena names, IndexRecord[] records, string[] directories,
         CancellationToken cancellationToken, IProgress<string>? progress = null, SortPermutation[]? storedOrders = null, int[]? storedKnown = null,
-        ulong[]? fileReferences = null, ulong[]? directoryReferences = null, ulong[]? hiddenRows = null, string? storageId = null, long[]? bigSizes = null)
+        ulong[]? fileReferences = null, ulong[]? directoryReferences = null, ulong[]? hiddenRows = null, string? storageId = null, long[]? bigSizes = null,
+        long[]? creationTimes = null, ulong[]? knownCreationTimes = null)
     {
         Names = names; Records = records; Directories = directories;
         BigSizes = bigSizes ?? [];
+        CreationTimes = creationTimes; KnownCreationTimes = knownCreationTimes;
         FileReferences = fileReferences; DirectoryReferences = directoryReferences; HiddenRows = hiddenRows;
         StorageId = storageId ?? Guid.NewGuid().ToString("N");
         VisibleCount = Count - (hiddenRows?.Sum(w => System.Numerics.BitOperations.PopCount(w)) ?? 0);
@@ -170,17 +176,23 @@ public sealed partial class SearchIndex
         return code <= int.MaxValue ? code : code == uint.MaxValue ? -1 : BigSizes[(int)(code & int.MaxValue)];
     }
 
+    internal long? CreatedUtcTicks(int id) => ReadCreationTime(CreationTimes, KnownCreationTimes, id);
+    internal static long? ReadCreationTime(long[]? times, ulong[]? known, int id)
+        => known is not null && (known[id / 64] & (1UL << (id % 64))) != 0 ? times![id] : null;
+
     public SearchRow GetRow(int id)
     {
         ref readonly var r = ref Records[id];
         Span<char> scratch = stackalloc char[255];
         string name = Name(id, scratch).ToString();
         return new(id, name, Directories[r.Directory] + name, r.HasSize ? Size(id) : null,
-            r.HasModified ? r.Modified : null, r.IsDirectory);
+            r.HasModified ? r.Modified : null, r.IsDirectory) { CreatedUtcTicks = CreatedUtcTicks(id) };
     }
 
     public IndexStatistics Statistics => new(Count, Directories.Length, Names.CapacityBytes,
-        (long)Count * Marshal.SizeOf<IndexRecord>() + (long)BigSizes.Length * sizeof(long), orders.Distinct<SortPermutation>(ReferenceEqualityComparer.Instance).Sum(a => a.StorageBytes),
+        (long)Count * Marshal.SizeOf<IndexRecord>() + (long)BigSizes.Length * sizeof(long)
+            + (long)(CreationTimes?.Length ?? 0) * sizeof(long) + (long)(KnownCreationTimes?.Length ?? 0) * sizeof(ulong),
+        orders.Distinct<SortPermutation>(ReferenceEqualityComparer.Instance).Sum(a => a.StorageBytes),
         Directories.Sum(p => (long)p.Length * sizeof(char) + 32));
 
     internal SortPermutation SortOrder(SortField field) => orders[(int)field];

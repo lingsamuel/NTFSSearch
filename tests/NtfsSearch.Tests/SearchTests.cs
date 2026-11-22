@@ -96,6 +96,51 @@ public class SearchTests
     }
 
     [Fact]
+    public void MetadataFiltersComposeWithTextAndKeepGlobalCountsAndPages()
+    {
+        var first = new IndexBuilder();
+        first.Add(@"C:\", "report-a", 10, 200, createdUtcTicks: 100);
+        first.Add(@"C:\", "report-missing-created", 20, 205);
+        first.Add(@"C:\", "report-directory", modifiedUtcTicks: 200, isDirectory: true, createdUtcTicks: 100);
+        var second = new IndexBuilder();
+        second.Add(@"D:\", "report-b", 20, 209, createdUtcTicks: 109);
+        second.Add(@"D:\", "report-modified-end", 20, 210, createdUtcTicks: 100);
+        second.Add(@"D:\", "report-created-end", 20, 209, createdUtcTicks: 110);
+        second.Add(@"D:\", "other", 15, 205, createdUtcTicks: 105);
+        var catalog = new SearchCatalog();
+        catalog.Publish("first", first.Build());
+        catalog.Publish("second", second.Build());
+
+        var filter = new SearchFilter(MinSizeBytes: 10, MaxSizeBytes: 20,
+            ModifiedFromUtcTicks: 200, ModifiedBeforeUtcTicks: 210,
+            CreatedFromUtcTicks: 100, CreatedBeforeUtcTicks: 110);
+        var page = catalog.Search("report", SortField.Size, descending: true, offset: 1, limit: 1, filter: filter);
+        Assert.Equal(2, page.TotalCount);
+        Assert.Equal(@"C:\report-a", Assert.Single(page.Rows).FullPath);
+        Assert.Equal(3, catalog.Search("", filter: filter, limit: 0).TotalCount);
+    }
+
+    [Fact]
+    public void ZeroByteSizeMatchesAndMissingSizeDoesNot()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", "empty", 0);
+        builder.Add(@"C:\", "unknown");
+        builder.Add(@"C:\", "directory", isDirectory: true);
+        builder.Add(@"C:\", "big", (long)int.MaxValue + 1);
+        var index = builder.Build();
+        Assert.Equal("empty", Assert.Single(index.Search("", filter: new(MaxSizeBytes: 0)).Rows).Name);
+        Assert.Equal("big", Assert.Single(index.Search("", filter: new(MinSizeBytes: (long)int.MaxValue + 1)).Rows).Name);
+    }
+
+    [Fact]
+    public void InvalidMetadataRangeIsRejectedEvenWhenNoVolumesAreReady()
+    {
+        var catalog = new SearchCatalog();
+        Assert.Throws<ArgumentException>(() => catalog.Search("", filter: new(MinSizeBytes: 2, MaxSizeBytes: 1)));
+    }
+
+    [Fact]
     public void DirectorySpellingIsPreservedInCaseSensitiveNtfsTrees()
     {
         var b = new IndexBuilder();

@@ -92,9 +92,10 @@ internal static class NativeFileState
             result.Add(new(link.ParentReference, path, link.Name));
         }
         phase = "Metadata";
-        long filetime = ((long)info.Write.High << 32) | info.Write.Low;
-        long? ticks = filetime > 0 && filetime <= DateTime.MaxValue.ToFileTimeUtc() ? DateTime.FromFileTimeUtc(filetime).Ticks : null;
-        return new(reference, directory, result, directory ? null : checked((long)(((ulong)info.SizeHigh << 32) | info.SizeLow)), ticks);
+        long? modified = MftMetadata.UtcTicksFromFileTime(((long)info.Write.High << 32) | info.Write.Low);
+        long? created = MftMetadata.UtcTicksFromFileTime(((long)info.Creation.High << 32) | info.Creation.Low);
+        return new(reference, directory, result, directory ? null : checked((long)(((ulong)info.SizeHigh << 32) | info.SizeLow)),
+            modified, created);
     }
 
     internal static SafeFileHandle OpenById(SafeFileHandle volume, ulong id)

@@ -63,11 +63,14 @@ public sealed class SearchCatalog
     }
 
     public SearchResult Search(string text, SortField sort = SortField.Name, bool descending = false,
-        bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default)
+        bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default,
+        SearchFilter? filter = null)
     {
         SearchIndex.ValidateRequest(text, sort, offset, limit, cancellationToken);
+        filter?.Validate();
         var timer = Stopwatch.StartNew();
-        var sources = Volatile.Read(ref published).SelectMany(p => p.Value.Select(i => new KeyValuePair<string, SearchIndex>(p.Key, i))).ToArray();
+        var snapshot = Volatile.Read(ref published);
+        var sources = snapshot.SelectMany(p => p.Value.Select(i => new KeyValuePair<string, SearchIndex>(p.Key, i))).ToArray();
         var cursors = new List<Cursor>();
         var queries = new List<PreparedSearch>();
         var queue = new PriorityQueue<Cursor, Priority>(Comparer<Priority>.Create((a, b) =>
@@ -81,7 +84,7 @@ public sealed class SearchCatalog
             foreach (var source in sources)
             {
                 // 每卷只匹配和计数一次。查询绑定发布时的数组，后续卷版本变化不会改变本次结果。
-                var query = source.Value.Prepare(text, matchPath, cancellationToken);
+                var query = source.Value.Prepare(text, matchPath, cancellationToken, filter);
                 queries.Add(query); total += query.TotalCount;
                 if (query.TotalCount == 0 || limit == 0) continue;
                 var cursor = new Cursor(source.Key, source.Value, query.Ids(sort, descending, cancellationToken).GetEnumerator());
@@ -97,7 +100,7 @@ public sealed class SearchCatalog
                 if (rows.Count == limit) break;
                 if (cursor.Ids.MoveNext()) queue.Enqueue(cursor, cursor.Priority);
             }
-            return new(total, rows, timer.Elapsed);
+            return new(total, rows, timer.Elapsed) { VolumesReady = snapshot.Length };
         }
         finally
         {

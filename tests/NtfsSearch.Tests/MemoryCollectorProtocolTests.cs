@@ -13,10 +13,10 @@ public sealed class MemoryCollectorProtocolTests
         var sender = new MemoryScanWriter(pipe, CancellationToken.None);
         sender.Start(4);
         const string rawName = "raw\ud800.txt";
-        sender.Add(@"E:\one\", rawName, 42, 7, false, 13, 11);
+        sender.Add(@"E:\one\", rawName, 42, 7, false, 13, 11, 5);
         sender.Add(@"E:\one\", "other.txt", null, null, false, 14, 11);
         sender.Finish();
-        sender.Add(@"E:\two\", rawName, 42, 7, false, 13, 12);
+        sender.Add(@"E:\two\", rawName, 42, 7, false, 13, 12, 5);
         sender.Add(@"E:\one\", "replacement.txt", null, null, false, 15, 21);
         sender.Finish();
         pipe.Position = 0;
@@ -36,7 +36,13 @@ public sealed class MemoryCollectorProtocolTests
         Assert.Contains(21UL, index.DirectoryReferences!);
         Assert.Equal(new[] { @"E:\one\" + rawName, @"E:\two\" + rawName },
             index.FindFileRows(13).Select(id => index.GetRow(id).FullPath).Order().ToArray());
-        Assert.All(index.FindFileRows(13), id => Assert.Equal(42, index.GetRow(id).Size));
+        Assert.All(index.FindFileRows(13), id =>
+        {
+            var row = index.GetRow(id);
+            Assert.Equal(42, row.Size);
+            Assert.Equal(5, row.CreatedUtcTicks);
+        });
+        Assert.Null(index.GetRow(Assert.Single(index.FindFileRows(14))).CreatedUtcTicks);
     }
 
     [Fact]

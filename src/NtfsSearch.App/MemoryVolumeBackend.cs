@@ -30,13 +30,19 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
 
     internal IReadOnlyList<VolumeStatus> Statuses
     {
-        get
-        {
-            lock (gate) return volumes.Values.Select(v => collectorError is { } error
-                ? v.Status with { Message = $"{v.Status.Message} {error}", HasError = true }
-                : v.Status).ToArray();
-        }
+        get { lock (gate) return volumes.Values.Select(ReadStatus).ToArray(); }
     }
+
+    internal (VolumeStatus Status, long? Indexed)[] CaptureSearchStatus()
+    {
+        // 卷变更同时发布索引和状态，接口读取同一次发布所对应的两项数据。
+        lock (gate) return volumes.Values.Select(v =>
+            (ReadStatus(v), v.View?.Layers.Sum(layer => (long)layer.VisibleCount))).ToArray();
+    }
+
+    private VolumeStatus ReadStatus(VolumeState volume) => collectorError is { } error
+        ? volume.Status with { Message = $"{volume.Status.Message} {error}", HasError = true }
+        : volume.Status;
 
     internal CollectorMetrics? Metrics
     {

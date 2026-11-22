@@ -8,36 +8,64 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
-const testData = join(output, 'ExitSaveData')
+const trayTest = mode === '--tray'
+const testData = join(output, trayTest ? 'TrayData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
 if (mode !== '--cached-fixture') {
   await mkdir(testData, { recursive: true })
-  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: true }))
+  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest }))
   await writeFile(snapshotPath, previousSnapshot)
 }
 const portProbe = createServer().listen(0, '127.0.0.1')
 await once(portProbe, 'listening')
 const port = portProbe.address().port
+let apiPort
+if (trayTest) {
+  const apiProbe = createServer().listen(0, '127.0.0.1')
+  await once(apiProbe, 'listening')
+  apiPort = apiProbe.address().port
+  await new Promise(resolve => apiProbe.close(resolve))
+}
 await new Promise(resolve => portProbe.close(resolve))
-const application = spawn(resolve(executable), mode === '--cached-fixture' ? [] : [mode], {
-  stdio: 'ignore',
-  env: {
-    ...process.env,
-    NTFS_SEARCH_TEST_DATA: testData,
-    WEBVIEW2_USER_DATA_FOLDER: join(output, 'WebView'),
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
-  }
-})
+const applicationArgs = mode === '--cached-fixture' ? [] : [trayTest ? '--desktop-test' : mode]
+const applicationEnv = {
+  ...process.env,
+  ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
+  NTFS_SEARCH_TEST_DATA: testData,
+  WEBVIEW2_USER_DATA_FOLDER: join(output, 'WebView'),
+  WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+}
+const application = spawn(resolve(executable), applicationArgs, { stdio: 'ignore', env: applicationEnv })
 const exited = once(application, 'exit')
 const exec = promisify(execFile)
 const powerShell = script => exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand',
-  Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' })
+  Buffer.from(script, 'utf16le').toString('base64')], {
+  encoding: 'utf8', timeout: 20_000, env: { ...process.env, TMP: output, TEMP: output }
+})
+
+async function mainWindowAction(hwnd, action) {
+  const { stdout } = await powerShell(`
+    $ErrorActionPreference = 'Stop'
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class DesktopUi {
+  [DllImport("user32")] public static extern bool IsWindowVisible(IntPtr hwnd);
+  [DllImport("user32")] public static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wparam, IntPtr lparam);
+}
+'@
+    $main = [IntPtr]${hwnd}
+    if ('${action}' -eq 'visible') { [DesktopUi]::IsWindowVisible($main) }
+    else { [DesktopUi]::PostMessage($main, 0x0112, [IntPtr]0xf060, [IntPtr]::Zero) }
+  `)
+  return stdout.trim() === 'True'
+}
 
 async function until(fn, label, milliseconds = 15_000) {
   const deadline = Date.now() + milliseconds
@@ -77,6 +105,8 @@ async function evaluate(expression) {
   if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description ?? response.exceptionDetails.text)
   return response.result.value
 }
+
+const requestQuit = () => evaluate("void window.__TAURI_INTERNALS__.invoke('send_request', { request: { type: 'quit' } })")
 
 async function screenshot(name) {
   const png = await cdp('Page.captureScreenshot', { format: 'png' })
@@ -151,7 +181,7 @@ try {
       }
     }
     await writeFile(join(output, 'benchmark.json'), JSON.stringify({ rows: total, processes: JSON.parse(memory.stdout), samples }, null, 2))
-  } else {
+  } else if (!trayTest) {
     const fileIcon = extension => `document.querySelector('td.entry-name[title$="${extension}"] img.entry-file-type-icon')`
     const textIcon = await until(() => evaluate(`(() => {
       const icon = ${fileIcon('.txt')};
@@ -434,16 +464,55 @@ try {
 
   }
 
-  const processIds = await powerShell(`
+  const backendId = async () => Number((await powerShell(`
     @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq ${application.pid} -and $_.Name -eq 'NtfsSearch.Backend.exe' } | ForEach-Object ProcessId) -join ','
-  `)
-  const backend = Number(processIds.stdout.trim())
+  `)).stdout.trim())
+  const backend = await backendId()
   assert.ok(backend, '未找到桌面程序的 .NET 子进程')
-  await powerShell(`(Get-Process -Id ${application.pid}).CloseMainWindow() | Out-Null`)
-  const [code] = await Promise.race([exited, sleep(8000, undefined, { ref: false }).then(() => { throw new Error('桌面窗口未退出') })])
+  if (trayTest) {
+    const hwnd = (await powerShell(`(Get-Process -Id ${application.pid}).MainWindowHandle.ToInt64()`)).stdout.trim()
+    assert.notEqual(hwnd, '0', '启动时显示搜索窗口')
+    const visible = () => mainWindowAction(hwnd, 'visible')
+    const queryText = 'ntfs-absent-tray-fixture'
+    await query(queryText, 0)
+    assert.equal(await mainWindowAction(hwnd, 'close'), true)
+    await until(async () => !(await visible()), '窗口关闭按钮隐藏窗口')
+    assert.equal(await backendId(), backend, '隐藏后保留原搜索后端')
+    const filters = {
+      text: '000003', minSizeBytes: 3072, maxSizeBytes: 3072,
+      createdFrom: '2025-12-31T00:03:00Z', modifiedFrom: '2026-01-01T00:03:00Z',
+    }
+    const response = await fetch(`http://127.0.0.1:${apiPort}/v1/search`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(filters), signal: AbortSignal.timeout(5000),
+    })
+    assert.equal(response.status, 200, '窗口隐藏时 HTTP 查询可用')
+    const hiddenResult = await response.json()
+    assert.equal(hiddenResult.total, 1)
+    assert.equal(hiddenResult.rows[0].createdUtc, filters.createdFrom)
+    assert.equal(hiddenResult.rows[0].modifiedUtc, filters.modifiedFrom)
+    assert.equal(hiddenResult.rows[0].sizeBytes, 3072)
+    const cli = join(dirname(resolve(executable)), 'NtfsSearch.Cli.exe')
+    const { stdout } = await exec(cli, [
+      'search', filters.text, '--min-size-bytes', '3072', '--max-size-bytes', '3072',
+      '--created-from', filters.createdFrom, '--modified-from', filters.modifiedFrom,
+    ], { encoding: 'utf8', env: applicationEnv, timeout: 10_000 })
+    assert.deepEqual(JSON.parse(stdout), hiddenResult, '窗口隐藏时 CLI 查询相同索引')
+    await exec(resolve(executable), applicationArgs, { cwd: output, env: applicationEnv, timeout: 10_000 })
+    await until(visible, '再次启动同一便携版恢复原窗口')
+    assert.equal(await evaluate("document.querySelector('.search-field input').value"), queryText)
+    assert.equal(await backendId(), backend, '再次启动复用原搜索后端')
+  }
+  // 使用现有桌面通信完成退出握手，避免测试依赖通知区图标是否被 Windows 折叠。
+  await requestQuit()
+  const [code] = await Promise.race([exited, sleep(8000, undefined, { ref: false }).then(() => { throw new Error('等待正常退出超时') })])
   assert.equal(code, 0)
   const leftover = await powerShell(`if (Get-Process -Id ${backend} -ErrorAction SilentlyContinue) { 'running' }`)
   assert.equal(leftover.stdout.trim(), '')
+  if (trayTest) {
+    const snapshot = await readFile(snapshotPath)
+    assert.match(snapshot.toString('ascii', 0, 8), /^NTSEXIT\d$/, '正常退出保存了演示快照')
+  }
   if (mode === '--desktop-test') {
     const restart = exec(join(dirname(resolve(executable)), 'NtfsSearch.Backend.exe'), ['--desktop-test'],
       { encoding: 'utf8', timeout: 10_000, env: { ...process.env, NTFS_SEARCH_TEST_DATA: testData } })
@@ -455,12 +524,13 @@ try {
     assert.equal(messages.find(message => message.type === 'quit-complete')?.error, null)
     assert.deepEqual(await readFile(snapshotPath), previousSnapshot)
   }
-  console.log(benchmark ? 'Windows 桌面性能采样与进程退出通过。' : 'Windows 桌面启动、搜索、排序、分页、文件图标、键盘、右键、窄窗口、四列拖动、大小单位和退出通过。')
+  if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
+  else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
-  socket?.close()
   if (application.exitCode == null) {
-    await powerShell(`(Get-Process -Id ${application.pid} -ErrorAction SilentlyContinue).CloseMainWindow() | Out-Null`).catch(() => {})
+    if (socket?.readyState === WebSocket.OPEN) await requestQuit().catch(() => {})
     await Promise.race([exited, sleep(4000)])
     if (application.exitCode == null) application.kill()
   }
+  socket?.close()
 }
