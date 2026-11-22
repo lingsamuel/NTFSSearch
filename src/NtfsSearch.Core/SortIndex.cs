@@ -45,7 +45,11 @@ internal static class SortIndex
         }
         for (int i = 0; i < order.Length; i++)
         {
-            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            if ((i & 4095) == 0)
+            {
+                token.ThrowIfCancellationRequested();
+                checkpoint?.Invoke();
+            }
             if (!queue.TryPeek(out int part, out int id)) throw new InvalidOperationException("排序归并提前结束。");
             merged[i] = id;
             if (++positions[part] < ends[part]) queue.DequeueEnqueue(part, order[positions[part]]);

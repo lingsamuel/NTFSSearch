@@ -27,6 +27,11 @@ public static class ExitSnapshotStore
     /// <summary>流式保存冻结视图，卷进度在对应数据全部写入临时文件时报告。</summary>
     public static void Save(string path, IReadOnlyList<ExitSnapshotVolume> volumes,
         CancellationToken token = default, Action<int, int>? progress = null)
+        => Save(path, volumes, token, progress, beginCommit: null);
+
+    // 临时文件完整刷盘并关闭后，由调用方在原子替换前确定是否还接受取消。
+    internal static void Save(string path, IReadOnlyList<ExitSnapshotVolume> volumes,
+        CancellationToken token, Action<int, int>? progress, Action? beginCommit)
     {
         RequireLittleEndian();
         token.ThrowIfCancellationRequested();
@@ -79,6 +84,8 @@ public static class ExitSnapshotStore
                 writer.Write(directoryDigest);
                 file.Flush(flushToDisk: true);
             }
+            token.ThrowIfCancellationRequested();
+            beginCommit?.Invoke();
             AtomicFile.Publish(temporary, path, token: token);
         }
         catch (ZstdException error) { throw new IOException("退出快照压缩失败。", error); }

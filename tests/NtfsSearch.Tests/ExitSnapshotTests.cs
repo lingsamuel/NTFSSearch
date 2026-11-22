@@ -233,6 +233,39 @@ public sealed class ExitSnapshotTests : IDisposable
         Assert.Equal(SnapshotPath, Assert.Single(Directory.GetFiles(directory)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CommitBoundaryRunsAfterFlushingTheCompleteCandidate(bool cancel)
+    {
+        ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "old")]);
+        byte[] previous = File.ReadAllBytes(SnapshotPath);
+        using var cancellation = new CancellationTokenSource();
+
+        void Save() => ExitSnapshotStore.Save(SnapshotPath, [Volume("C", "new")],
+            cancellation.Token, progress: null, beginCommit: () =>
+            {
+                string temporary = Assert.Single(Directory.GetFiles(directory, "*.tmp"));
+                var candidate = Assert.Single(ExitSnapshotStore.Load(temporary));
+                Assert.Equal("new", Assert.Single(candidate.Layers).GetRow(0).Name);
+                Assert.Equal(previous, File.ReadAllBytes(SnapshotPath));
+                if (cancel) cancellation.Cancel();
+            });
+
+        if (cancel)
+        {
+            Assert.Throws<OperationCanceledException>(Save);
+            Assert.Equal(previous, File.ReadAllBytes(SnapshotPath));
+        }
+        else
+        {
+            Save();
+            var current = Assert.Single(ExitSnapshotStore.Load(SnapshotPath));
+            Assert.Equal("new", Assert.Single(current.Layers).GetRow(0).Name);
+        }
+        Assert.Equal(SnapshotPath, Assert.Single(Directory.GetFiles(directory)));
+    }
+
     [Fact]
     public void StoresACommonParentPathOnlyOnceAcrossLayers()
     {

@@ -27,7 +27,7 @@ internal sealed class DirectorySizeWorker(SearchCatalog catalog,
             if (!value)
             {
                 active?.Source.Cancel();
-                foreach (var volume in catalog.PublishedVolumes) volume.DirectorySizes = null;
+                foreach (var volume in catalog.PublishedVolumes) catalog.SetDirectorySizes(volume, null);
             }
             updates.Writer.TryWrite(true);
             return true;
@@ -128,8 +128,7 @@ internal sealed class DirectorySizeWorker(SearchCatalog catalog,
         lock (gate)
         {
             // 关闭及快速重新开启都使前一轮结果失效。
-            if (batch != revision || token.IsCancellationRequested || catalog.FindVolume(volume.Id) != volume) return;
-            volume.DirectorySizes = orders;
+            if (batch != revision || token.IsCancellationRequested || !catalog.SetDirectorySizes(volume, orders)) return;
         }
         changed();
     }

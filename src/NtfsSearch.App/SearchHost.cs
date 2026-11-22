@@ -6,6 +6,7 @@ namespace NtfsSearch.App;
 internal sealed class SearchHost
 {
     private readonly SearchCatalog catalog = new();
+    internal SortPrecomputeWorker SortPrecompute { get; }
     private readonly AutomaticVolumeLoader? demo;
     private readonly string cacheDirectory;
     private readonly string snapshotPath;
@@ -14,7 +15,6 @@ internal sealed class SearchHost
 
     internal SearchCatalog Catalog => catalog;
     internal IndexMetadata Metadata { get; private set; } = IndexMetadata.All;
-    internal bool PrecomputeSort { get; private set; } = true;
     internal IReadOnlyList<VolumeStatus> Statuses => windowsBackend?.Statuses ?? demo?.Statuses ?? [];
     internal CollectorMetrics? Metrics => windowsBackend?.Metrics;
     internal event Action? StatusChanged;
@@ -50,6 +50,9 @@ internal sealed class SearchHost
 
     internal SearchHost(int? demoCount = null, string? cacheDirectory = null)
     {
+        SortPrecompute = new(catalog);
+        catalog.Changed += SortPrecompute.Notify;
+        SortPrecompute.SetEnabled(true);
         this.cacheDirectory = cacheDirectory ?? PortableDataDirectory.Resolve();
         snapshotPath = Path.Combine(this.cacheDirectory, ExitSnapshotStore.FileName);
         if (demoCount is int count)
@@ -64,10 +67,22 @@ internal sealed class SearchHost
     internal void ConfigureIndex(IndexMetadata metadata, bool precomputeSort)
     {
         Metadata = metadata;
-        PrecomputeSort = precomputeSort;
+        SortPrecompute.SetEnabled(precomputeSort);
     }
 
     internal async Task RunAutomaticAsync(CancellationToken token)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
+        Task precompute = SortPrecompute.RunAsync(lifetime.Token);
+        try { await CollectAsync(lifetime.Token); }
+        finally
+        {
+            await lifetime.CancelAsync();
+            await precompute;
+        }
+    }
+
+    private async Task CollectAsync(CancellationToken token)
     {
         if (demo is not null)
         {
@@ -75,7 +90,7 @@ internal sealed class SearchHost
             return;
         }
 
-        var backend = new MemoryVolumeBackend(catalog, ReadStartup, cacheDirectory, Metadata, PrecomputeSort);
+        var backend = new MemoryVolumeBackend(catalog, ReadStartup, cacheDirectory, Metadata);
         backend.StatusChanged += () => StatusChanged?.Invoke();
         backend.Progress += (message, failure) => Progress?.Invoke(message, failure);
         backend.FileActivity += (key, parents) => FileActivity?.Invoke(key, parents);
@@ -91,7 +106,7 @@ internal sealed class SearchHost
         int parallelism = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount,
             VolumeResources.AvailableMemoryBytes()).CacheLoadLimit;
         using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, parallelism, progress,
-            Metadata, missingMetadata, PrecomputeSort).GetEnumerator();
+            Metadata, missingMetadata, precomputeSort: false).GetEnumerator();
         while (true)
         {
             ExitSnapshotVolume current;
@@ -126,14 +141,15 @@ internal sealed class SearchHost
     }
 
     /// <summary>正常关闭且采集循环退出后保存，冻结每个卷的已发布视图与水位。</summary>
-    internal void SaveExitSnapshot(Action<int, int> progress)
+    internal void SaveExitSnapshot(Action<int, int> progress, CancellationToken token = default, Action? beginCommit = null)
     {
+        token.ThrowIfCancellationRequested();
         IReadOnlyList<ExitSnapshotVolume> volumes;
         if (windowsBackend is { ReadyToSave: true } backend) volumes = backend.CapturePublishedViews();
         else if (saveDemoSnapshot)
             volumes = CaptureAnalysisVolumes().Select(view => new ExitSnapshotVolume(view.Volume, new(0, 0), view.Layers)).ToArray();
         else return;
-        if (volumes.Count > 0) ExitSnapshotStore.Save(snapshotPath, volumes, progress: progress);
+        if (volumes.Count > 0) ExitSnapshotStore.Save(snapshotPath, volumes, token, progress, beginCommit);
     }
 
     internal async Task SmokeTestAsync()
@@ -248,8 +264,8 @@ internal sealed class SearchHost
         public string CacheRevision(NtfsVolume volume) => "v1";
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) =>
             Task.FromResult<CachedVolume?>(new(volume == Volumes[0]
-                ? DemoData.Create(count, includeDeepBranch: count == 1000, host.Metadata, host.PrecomputeSort)
-                : new IndexBuilder(0, fixedSize: false, host.Metadata, host.PrecomputeSort).Build(token), false));
+                ? DemoData.Create(count, includeDeepBranch: count == 1000, host.Metadata, precomputeSort: false)
+                : new IndexBuilder(0, fixedSize: false, host.Metadata, precomputeSort: false).Build(token), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;
         public string ReadStatus(NtfsVolume volume) => "测试磁盘已发现";
     }

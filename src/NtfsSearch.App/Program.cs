@@ -11,7 +11,8 @@ internal static class Program
         if (args is ["--desktop" or "--desktop-test" or "--desktop-benchmark"])
         {
             using var input = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
-            using var output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true };
+            using var output = TextWriter.Synchronized(
+                new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
             void Publish(object message) => output.WriteLine(JsonSerializer.Serialize(message, JsonSerializerOptions.Web));
             try
             {

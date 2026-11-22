@@ -7,6 +7,8 @@ internal sealed class PublishedSearchVolume(string id, SearchIndex[] layers)
     internal IReadOnlyList<SearchIndex> Layers { get; } = layers;
     internal bool SupportsDirectorySizes { get; } = layers.Any(index => index.Count != 0) && layers.All(index => index.HasIdentity);
     internal volatile DirectorySizeOrder[]? DirectorySizes;
+    // 合计正在切换到新增量视图时，保留可复用的缓存键，查询只读取已发布的合计。
+    internal object[] DirectorySortOwners = [];
 }
 
 internal readonly record struct DirectorySearchRow(int PageIndex, PublishedSearchVolume Volume, int Layer, int Row,

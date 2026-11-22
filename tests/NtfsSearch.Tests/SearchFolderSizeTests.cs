@@ -72,7 +72,7 @@ public sealed class SearchFolderSizeTests
     }
 
     [Fact]
-    public void MetadataOnlyFileUpdateReusesSelectedDirectorySizeOrder()
+    public void FileTimeAndSizeUpdatesReuseTheSelectedDirectoryBaseline()
     {
         const int count = 8192;
         var builder = new IndexBuilder(count + 1, fixedSize: false, precomputeSort: false);
@@ -102,11 +102,15 @@ public sealed class SearchFolderSizeTests
             [new(10, false, [new(100, @"C:\folder-00000\", "data")], 0, 3)])));
         var resized = aggregation.Update(live.Layers, default)[0];
         int last = Assert.Single(index.FindFileRows((ulong)count + 99));
-        Assert.Equal(last, resized.Ordered(true, default, selection).First());
+        start = GC.GetAllocatedBytesForCurrentThread();
+        int resizedLargest = resized.Ordered(true, default, selection).First();
+        allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.Equal(last, resizedLargest);
+        Assert.True(allocated < count * sizeof(int), $"单目录大小变化后读取目录大小排序分配了 {allocated:N0} 字节。");
     }
 
     [Fact]
-    public void DirectoryPathsInvalidateSelectedDirectorySizeOrder()
+    public void DirectoryPathChangesMergeWithTheSelectedDirectoryBaseline()
     {
         var builder = new IndexBuilder(2, fixedSize: false, precomputeSort: false);
         builder.Add(@"C:\alpha\", "folder", isDirectory: true, fileReference: 10, parentReference: 100);
@@ -123,6 +127,10 @@ public sealed class SearchFolderSizeTests
         directories[index.Records[first].Directory] = @"C:\gamma\";
         var updated = Assert.Single(aggregation.Update([index.WithView(null, directories, default)], default));
         Assert.Equal(new[] { second, first }, updated.Ordered(false, default, selection));
+
+        var coldSelection = new SearchSortSelection(SortField.Size);
+        Assert.Equal(new[] { first, second }, updated.Ordered(true, default, coldSelection));
+        Assert.Equal(new[] { first, second }, original.Ordered(false, default, coldSelection));
     }
 
     [Theory]
@@ -151,8 +159,8 @@ public sealed class SearchFolderSizeTests
         Assert.True(pending.DirectorySortPending);
         Assert.Equal("match-file-large", pending.Rows[0].Name);
         var pendingDirectory = catalog.SearchDesktop("match-dir", SortField.Size, true, false, 0, 1, default);
-        PublishSizes(catalog.FindVolume("C")!, new(Root));
-        PublishSizes(catalog.FindVolume("D")!, new(@"D:\"));
+        PublishSizes(catalog, catalog.FindVolume("C")!, new(Root));
+        PublishSizes(catalog, catalog.FindVolume("D")!, new(@"D:\"));
         Assert.Null(Assert.Single(pendingDirectory.DirectoryRows!).SortSizes);
 
         var largest = Run(true, 0, 3);
@@ -186,7 +194,7 @@ public sealed class SearchFolderSizeTests
         }
         var catalog = new SearchCatalog();
         catalog.Publish("C", builder.Build());
-        PublishSizes(catalog.FindVolume("C")!, new(Root));
+        PublishSizes(catalog, catalog.FindVolume("C")!, new(Root));
 
         Assert.Equal(new[] { "folder-00123", "folder-00124" }, Query(false).Rows.Select(row => row.Name));
         Assert.Equal(new[] { "folder-16876", "folder-16875" }, Query(true).Rows.Select(row => row.Name));
@@ -218,7 +226,7 @@ public sealed class SearchFolderSizeTests
             [new(40, false, [new(30, @"C:\left\nested\", "child")], 20)]));
         catalog.PublishLayers("C", live.Layers);
         Assert.True(Search().DirectorySortPending);
-        PublishSizes(catalog.FindVolume("C")!, aggregation);
+        PublishSizes(catalog, catalog.FindVolume("C")!, aggregation);
         Assert.Equal(new[] { "child", "nested", "left", "file", "right" }, Search().Rows.Select(r => r.Name));
         Assert.Equal(10, original.DirectorySizes![0].GetSize(original.Layers[0].FindFileRows(10)[0]));
 
@@ -236,13 +244,13 @@ public sealed class SearchFolderSizeTests
         {
             catalog.PublishLayers("C", live.Layers);
             var volume = catalog.FindVolume("C")!;
-            PublishSizes(volume, aggregation);
+            PublishSizes(catalog, volume, aggregation);
             return volume;
         }
 
         SearchResult Search() => catalog.SearchDesktop("", SortField.Size, true, true, 0, 20, default);
     }
 
-    private static void PublishSizes(PublishedSearchVolume volume, DirectorySizeAggregation aggregation)
-        => volume.DirectorySizes = aggregation.Update(volume.Layers, default);
+    private static void PublishSizes(SearchCatalog catalog, PublishedSearchVolume volume, DirectorySizeAggregation aggregation)
+        => Assert.True(catalog.SetDirectorySizes(volume, aggregation.Update(volume.Layers, default)));
 }

@@ -12,6 +12,8 @@ public sealed partial class SearchIndex
     internal bool PrecomputeSort { get; }
     private SearchIndex? sortSource;
     internal SearchIndex SortSource => sortSource ?? this;
+    private SearchIndex? correctionBaseline;
+    internal SearchIndex BaselineSortSource => correctionBaseline ?? SortSource;
     internal readonly uint[]? SizeCodes;
     internal readonly long[]? ModifiedTimes;
     internal readonly long[] BigSizes;
@@ -23,8 +25,9 @@ public sealed partial class SearchIndex
     private readonly int[] knownCounts = new int[4];
     private int[][]? corrections;
     private int[]? correctionKnown;
+    private int[]? correctionRows;
     private bool[]? correctionDirectories;
-    internal bool HasOrderCorrections => corrections is not null;
+    internal bool HasOrderCorrections => corrections is not null || correctionRows is not null;
     public int Count => Records.Length;
     public int VisibleCount { get; private set; }
     public bool HasIdentity => FileReferences is not null && DirectoryReferences is not null;
@@ -89,26 +92,32 @@ public sealed partial class SearchIndex
             sizeCodes: SizeCodes, modifiedTimes: ModifiedTimes, metadata: Metadata, precomputeSort: PrecomputeSort,
             availableMetadata: AvailableMetadata);
         view.identitySource = IdentitySource;
-        if (!PrecomputeSort)
-        {
-            // 仅可见性变化时沿用同一个排序来源，父路径变化时重新计算有效顺序。
-            if (ReferenceEquals(directories, Directories)) view.sortSource = SortSource;
-            return view;
-        }
         if (!ReferenceEquals(directories, Directories))
         {
-            // 以最初快照排序为参照累计修正，只保留受影响ID，查询时归并两个有序流。
-            // 小目录改名不需要复制四份全卷排序数组。
-            var source = IdentitySource;
+            // 以完整排列所在视图为参照累计修正。小目录改名只需排序受影响的行。
+            var source = PrecomputeSort ? IdentitySource : BaselineSortSource;
             var changed = new bool[directories.Length];
             for (int d = 0; d < changed.Length; d++) changed[d] = directories[d] != source.Directories[d];
             var affected = new List<int>();
             for (int id = 0; id < Count; id++)
             {
                 if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
-                if (changed[Records[id].Directory]) affected.Add(id);
+                if (!changed[Records[id].Directory]) continue;
+                // 大范围改名直接换用新基线，避免同时缓存两份接近整卷的排列。
+                if (!PrecomputeSort && affected.Count >= Count / 2) return view;
+                affected.Add(id);
             }
-            if (affected.Count > 0)
+            if (!PrecomputeSort)
+            {
+                if (affected.Count == 0) view.sortSource = source;
+                else
+                {
+                    view.correctionBaseline = source;
+                    view.correctionRows = affected.ToArray();
+                    view.correctionDirectories = changed;
+                }
+            }
+            else if (affected.Count > 0)
             {
                 view.corrections = new int[4][]; view.correctionKnown = new int[4]; view.correctionDirectories = changed;
                 for (int field = 0; field < 4; field++)
@@ -119,18 +128,17 @@ public sealed partial class SearchIndex
                         view.corrections[field] = view.corrections[(int)SortField.Path];
                         continue;
                     }
-                    var sorted = affected.ToArray();
-                    SortIndex.Sort(sorted, (a, b) => view.Compare(a, b, (SortField)field), token);
-                    view.corrections[field] = sorted;
-                    int known = sorted.Length;
-                    while (known > 0 && !IsKnown(sorted[known - 1], (SortField)field)) known--;
-                    view.correctionKnown[field] = known;
+                    var sorted = view.BuildOrderCorrection(affected.ToArray(), (SortField)field, token);
+                    view.corrections[field] = sorted.Order;
+                    view.correctionKnown[field] = sorted.Known;
                 }
             }
         }
         else
         {
+            if (!PrecomputeSort) view.sortSource = SortSource;
             view.corrections = corrections; view.correctionKnown = correctionKnown; view.correctionDirectories = correctionDirectories;
+            view.correctionRows = correctionRows; view.correctionBaseline = correctionBaseline;
         }
         return view;
     }
@@ -182,44 +190,51 @@ public sealed partial class SearchIndex
         _ => true
     };
 
+    internal bool IsSortAvailable(SortField field) => field switch
+    {
+        SortField.Size => (Metadata & IndexMetadata.FileSize) != 0,
+        SortField.Modified => (Metadata & IndexMetadata.ModifiedTime) != 0,
+        _ => true
+    };
+
     private sealed record RowSortOrder(SortPermutation Order, int Known);
 
-    private RowSortOrder BuildSortOrder(SortField field, CancellationToken token)
+    private RowSortOrder BuildSortOrder(SortField field, CancellationToken token, Action? checkpoint = null)
     {
         int[]? scratch = null, temporary = null;
-        return BuildSortOrder(field, token, ref scratch, ref temporary);
+        return BuildSortOrder(field, token, ref scratch, ref temporary, checkpoint);
     }
 
     private RowSortOrder BuildSortOrder(SortField field, CancellationToken token,
-        ref int[]? sortScratch, ref int[]? temporaryOrder)
+        ref int[]? sortScratch, ref int[]? temporaryOrder, Action? checkpoint = null)
     {
         int[] order = SortPermutation.UsesPackedStorage(Count)
             ? temporaryOrder ??= new int[Count] : IndexArrays.Persistent<int>(Count);
         for (int id = 0; id < Count; id++)
         {
-            if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
+            if ((id & 65535) == 0) Checkpoint();
             order[id] = id;
         }
         bool sorted = true;
         for (int i = 1; i < Count; i++)
         {
-            if ((i & 65535) == 0) token.ThrowIfCancellationRequested();
+            if ((i & 65535) == 0) Checkpoint();
             if (Compare(order[i - 1], order[i], field) > 0) { sorted = false; break; }
         }
         if (!sorted)
         {
             // 多列预计算复用临时排列和归并缓冲，减少构建期间分配的大数组。
             if (Count > 1_000_000) sortScratch ??= new int[Count];
-            order = SortIndex.Sort(order, (a, b) => Compare(a, b, field), token, sortScratch);
+            order = SortIndex.Sort(order, (a, b) => Compare(a, b, field), token, sortScratch, checkpoint: checkpoint);
         }
         var frozen = SortPermutation.TakeSorted(order, token);
-        int known = Count;
-        while (known > 0 && !IsKnown(order[known - 1], field))
+        return new(frozen, CountKnownRows(order, field, token, checkpoint));
+
+        void Checkpoint()
         {
-            if ((known & 65535) == 0) token.ThrowIfCancellationRequested();
-            known--;
+            token.ThrowIfCancellationRequested();
+            checkpoint?.Invoke();
         }
-        return new(frozen, known);
     }
 
     internal ReadOnlySpan<char> Name(int id, Span<char> scratch) => Names.Get(Records[id].NameId, scratch);
@@ -255,13 +270,77 @@ public sealed partial class SearchIndex
         Directories.Sum(p => (long)p.Length * sizeof(char) + 32));
 
     internal (SortPermutation Order, int Known) ResolveSortOrder(SortField field, CancellationToken token,
-        SearchSortSelection? selection = null)
+        SearchSortSelection? selection = null, Action? beforeColdSort = null)
+    {
+        if (correctionRows is null) return ResolveBaselineSortOrder(field, token, selection, beforeColdSort);
+        // 需要连续排列的调用方仍可取得对应视图的完整顺序。普通查询直接归并两路。
+        beforeColdSort?.Invoke();
+        var sorted = SortSource.BuildSortOrder(field, token);
+        return (sorted.Order, sorted.Known);
+    }
+
+    internal (SortPermutation Order, int Known) ResolveBaselineSortOrder(SortField field, CancellationToken token,
+        SearchSortSelection? selection = null, Action? beforeColdSort = null)
     {
         int f = (int)field;
         if (PrecomputeSort) return (orders[f], knownCounts[f]);
-        var source = SortSource;
+        var source = BaselineSortSource;
+        if (selection is null) beforeColdSort?.Invoke();
         var sorted = selection is null ? source.BuildSortOrder(field, token)
-            : selection.Get(source, () => source.BuildSortOrder(field, token), token);
+            : selection.Get(source, () => source.BuildSortOrder(field, token), token, beforeColdSort);
+        return (sorted.Order, sorted.Known);
+    }
+
+    internal void WarmSort(SearchSortSelection selection, object session, CancellationToken token, Action? checkpoint)
+    {
+        var source = BaselineSortSource;
+        selection.Warm(source, () => source.BuildSortOrder(selection.Field, token, checkpoint), token, session);
+        if (correctionRows is not null)
+        {
+            var view = SortSource;
+            selection.Warm(view, () => view.BuildSparseCorrection(selection.Field, token, checkpoint), token, session);
+        }
+    }
+
+    internal bool IsSortCached(SearchSortSelection selection) => selection.Contains(BaselineSortSource)
+        && (correctionRows is null || selection.Contains(SortSource));
+
+    private sealed record RowSortCorrection(int[] Order, int Known);
+
+    private RowSortCorrection BuildSparseCorrection(SortField field, CancellationToken token, Action? checkpoint = null)
+        => BuildOrderCorrection((int[])correctionRows!.Clone(), field, token, checkpoint);
+
+    private RowSortCorrection BuildOrderCorrection(int[] rows, SortField field, CancellationToken token, Action? checkpoint = null)
+    {
+        checkpoint?.Invoke();
+        var order = SortIndex.Sort(rows, (a, b) => Compare(a, b, field), token, checkpoint: checkpoint);
+        return new(order, CountKnownRows(order, field, token, checkpoint));
+    }
+
+    private int CountKnownRows(int[] order, SortField field, CancellationToken token, Action? checkpoint)
+    {
+        int known = order.Length;
+        while (known > 0 && !IsKnown(order[known - 1], field))
+        {
+            if ((known & 65535) == 0)
+            {
+                token.ThrowIfCancellationRequested();
+                checkpoint?.Invoke();
+            }
+            known--;
+        }
+        return known;
+    }
+
+    private (int[] Order, int Known) ResolveOrderCorrection(SortField field, CancellationToken token,
+        SearchSortSelection? selection, Action? beforeColdSort)
+    {
+        int f = (int)field;
+        if (corrections is not null) return (corrections[f], correctionKnown![f]);
+        var view = SortSource;
+        if (selection is null) beforeColdSort?.Invoke();
+        var sorted = selection is null ? view.BuildSparseCorrection(field, token)
+            : selection.Get(view, () => view.BuildSparseCorrection(field, token), token, beforeColdSort);
         return (sorted.Order, sorted.Known);
     }
 
@@ -270,38 +349,38 @@ public sealed partial class SearchIndex
         => EnumerateOrdered(field, false, token, selection: selection);
 
     private IEnumerable<int> EnumerateOrdered(SortField field, bool descending, CancellationToken token, bool? knownOnly = null,
-        SearchSortSelection? selection = null)
+        SearchSortSelection? selection = null, Action? beforeColdSort = null)
     {
-        int f = (int)field;
-        var (order, known) = ResolveSortOrder(field, token, selection);
+        var (order, known) = ResolveBaselineSortOrder(field, token, selection, beforeColdSort);
         int start = knownOnly == false ? known : 0;
         int end = knownOnly == true ? known : Count;
-        if (corrections is null)
+        if (!HasOrderCorrections)
         {
             for (int position = start; position < end; position++)
             {
                 if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
-                yield return order[descending && position < known ? known - 1 - position : position];
+                yield return ReadOrderId(order, known, descending, position);
             }
             yield break;
         }
-        int old = start, next = knownOnly == false ? correctionKnown![f] : 0;
-        int correctionsEnd = knownOnly == true ? correctionKnown![f] : corrections[f].Length;
+        var (changed, changedKnown) = ResolveOrderCorrection(field, token, selection, beforeColdSort);
+        int old = start, next = knownOnly == false ? changedKnown : 0;
+        int correctionsEnd = knownOnly == true ? changedKnown : changed.Length;
         for (int position = 0; old < end || next < correctionsEnd; position++)
         {
             if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
-            while (old < end && correctionDirectories![Records[OrderedId(field, descending, old)].Directory])
+            while (old < end && correctionDirectories![Records[ReadOrderId(order, known, descending, old)].Directory])
             {
                 if ((old & 4095) == 0) token.ThrowIfCancellationRequested();
                 old++;
             }
-            int corrected = next < correctionsEnd ? corrections[f][descending && next < correctionKnown![f] ? correctionKnown[f] - 1 - next : next] : -1;
-            if (next < correctionsEnd && (old == end || CompareAcross(this, corrected, this, OrderedId(field, descending, old), field, descending) <= 0))
+            int corrected = next < correctionsEnd ? changed[descending && next < changedKnown ? changedKnown - 1 - next : next] : -1;
+            if (next < correctionsEnd && (old == end || CompareAcross(this, corrected, this, ReadOrderId(order, known, descending, old), field, descending) <= 0))
             { next++; yield return corrected; }
-            else if (old < end) { yield return OrderedId(field, descending, old); old++; }
+            else if (old < end) { yield return ReadOrderId(order, known, descending, old); old++; }
         }
     }
-    internal int KnownCount(SortField field) => ResolveSortOrder(field, default).Known;
+    internal int KnownCount(SortField field) => ResolveBaselineSortOrder(field, default).Known;
 
     internal bool IsKnown(int id, SortField field) => field switch
     {
@@ -371,10 +450,7 @@ public sealed partial class SearchIndex
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int OrderedId(SortField field, bool descending, int position)
-    {
-        int known = knownCounts[(int)field];
-        return orders[(int)field][descending && position < known ? known - 1 - position : position];
-    }
+    private static int ReadOrderId(SortPermutation order, int known, bool descending, int position)
+        => order[descending && position < known ? known - 1 - position : position];
 
 }

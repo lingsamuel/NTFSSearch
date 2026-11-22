@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Text.Json;
@@ -72,8 +73,11 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
     {
         if (!request.HasJsonContentType())
             return Error("查询请求须发送 JSON。", StatusCodes.Status415UnsupportedMediaType);
+        long started = Stopwatch.GetTimestamp();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(request.HttpContext.RequestAborted, stopping);
-        deadline.CancelAfter(host.PrecomputeSort ? SearchTimeout : LocalSearchEndpoint.OnDemandSortTimeout);
+        deadline.CancelAfter(SearchTimeout);
+        var deadlineGate = new object();
+        bool deadlineExtended = false;
         try
         {
             var query = await request.ReadFromJsonAsync<LocalSearchRequest>(deadline.Token);
@@ -100,8 +104,8 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
             var filter = new SearchFilter(query.MinSizeBytes, query.MaxSizeBytes,
                 ParseUtcTicks(query.ModifiedFrom, "modifiedFrom"), ParseUtcTicks(query.ModifiedBefore, "modifiedBefore"),
                 ParseUtcTicks(query.CreatedFrom, "createdFrom"), ParseUtcTicks(query.CreatedBefore, "createdBefore"));
-            var result = host.Catalog.Search(query.Text ?? "", sort, query.Descending, query.MatchPath,
-                query.Offset, query.Limit, deadline.Token, filter);
+            var result = host.Catalog.SearchHttp(query.Text ?? "", sort, query.Descending, query.MatchPath,
+                query.Offset, query.Limit, deadline.Token, filter, AllowColdQuery);
             deadline.Token.ThrowIfCancellationRequested();
             return Results.Json(new
             {
@@ -122,6 +126,18 @@ internal sealed class LocalSearchApi(WebApplication application) : IAsyncDisposa
             if (request.HttpContext.RequestAborted.IsCancellationRequested) return Results.Empty;
             if (stopping.IsCancellationRequested) return Error("本机 HTTP 搜索服务正在停止。", StatusCodes.Status503ServiceUnavailable);
             return Error("本机查询超时。", StatusCodes.Status504GatewayTimeout);
+        }
+
+        void AllowColdQuery()
+        {
+            // 各卷可以并行接触冷排列，只延长一次，并从收到请求起计算总时限。
+            lock (deadlineGate)
+            {
+                if (deadlineExtended) return;
+                var remaining = LocalSearchEndpoint.OnDemandSortTimeout - Stopwatch.GetElapsedTime(started);
+                deadline.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                deadlineExtended = true;
+            }
         }
     }
 

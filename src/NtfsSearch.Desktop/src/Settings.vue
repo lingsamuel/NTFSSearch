@@ -15,8 +15,7 @@ const enabled = ref(false)
 const port = ref<number | string>('')
 const searchDirectorySizes = ref(true)
 const saveExitIndex = ref(true)
-const indexOptions = [
-  { key: 'precomputeSort', name: 'precompute-sort', label: '预计算排序' },
+const indexMetadataOptions = [
   { key: 'indexCreationTime', name: 'index-creation-time', label: '索引创建时间' },
   { key: 'indexModifiedTime', name: 'index-modified-time', label: '索引修改时间' },
   { key: 'indexFileSize', name: 'index-file-size', label: '索引文件大小' },
@@ -48,7 +47,9 @@ watch(() => props.status, status => {
     searchDirectorySizes.value = status.searchDirectorySizes
   if (!saved || status.skipExitIndexSave !== saved.skipExitIndexSave)
     saveExitIndex.value = !status.skipExitIndexSave
-  for (const { key } of indexOptions) {
+  if (!saved || status.precomputeSort !== saved.precomputeSort)
+    indexSettings.precomputeSort = status.precomputeSort ?? defaultIndexSettings.precomputeSort
+  for (const { key } of indexMetadataOptions) {
     if (!saved || status[key] !== saved[key]) indexSettings[key] = status[key] ?? defaultIndexSettings[key]
   }
   saved = status
@@ -108,8 +109,13 @@ onMounted(() => back.value?.focus())
             <label class="settings-toggle">
               <input v-model="saveExitIndex" name="save-exit-index" type="checkbox">退出时保存索引
             </label>
+            <label class="settings-toggle">
+              <input v-model="indexSettings.precomputeSort" name="precompute-sort" type="checkbox"
+                aria-describedby="precompute-sort-note">预计算排序
+            </label>
+            <p id="precompute-sort-note" class="settings-note">保存后立即生效。</p>
             <p class="settings-note index-settings-note">保存后，以下索引设置将在下次重启时生效。请从托盘菜单退出程序，再重新打开。</p>
-            <label v-for="option in indexOptions" :key="option.key" class="settings-toggle">
+            <label v-for="option in indexMetadataOptions" :key="option.key" class="settings-toggle">
               <input v-model="indexSettings[option.key]" :name="option.name" type="checkbox"
                 :aria-describedby="option.key === 'indexFileSize' ? 'index-file-size-note' : undefined">{{ option.label }}
             </label>
@@ -148,7 +154,7 @@ onMounted(() => back.value?.focus())
     </div>
     <footer class="settings-footer">
       <div class="settings-feedback">
-        <p v-if="status?.indexRestartRequired" class="settings-note" role="status">索引设置已保存，下次重启生效。</p>
+        <p v-if="status?.indexRestartRequired" class="settings-note" role="status">索引字段设置已保存，下次重启生效。</p>
         <p v-if="error" id="settings-error" class="settings-error" role="alert">{{ error }}</p>
       </div>
       <button type="submit" form="desktop-settings" class="outlined-button" :disabled="!connected || !status || busy">

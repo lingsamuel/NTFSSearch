@@ -80,7 +80,7 @@ internal sealed class DesktopSession
             try { settings = DesktopSettings.Load(settingsDirectory); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
             { PublishError("action", "无法读取应用设置：" + error.Message); }
-        // 本进程的索引布局与排序策略在首次发布前固定，后续保存的选项在下次启动时读取。
+        // 元数据布局在本进程首次发布前固定，排序缓存可随保存的设置切换。
         host.ConfigureIndex(settings.Metadata, settings.PrecomputeSort);
         directorySizes.SetEnabled(SearchDirectorySizesEnabled);
         string? serviceError = null;
@@ -93,58 +93,79 @@ internal sealed class DesktopSession
         PublishSettingsStatus(serviceError);
         PublishStatus();
         RunQuery();
-        _ = ReadInputAsync(input, lifetime.Token);
+        using var inputLifetime = new CancellationTokenSource();
+        var exitSave = new ExitSave(publish);
+        _ = ReadInputAsync(input, exitSave, lifetime.Token, inputLifetime.Token);
         Task automatic = Task.Run(() => ObserveAutomaticAsync(lifetime.Token));
         Task folderSizes = Task.Run(() => directorySizes.RunAsync(lifetime.Token));
+        string? exitError = null;
         try
         {
-            await foreach (var action in messages.Reader.ReadAllAsync())
+            try
             {
-                action();
-                if (quitRequested) break;
+                await foreach (var action in messages.Reader.ReadAllAsync())
+                {
+                    action();
+                    if (quitRequested) break;
+                }
             }
+            finally
+            {
+                queryState.Close();
+                var activeSearch = search;
+                activeSearch?.Cancel();
+                await lifetime.CancelAsync();
+                await Task.WhenAll(automatic, folderSizes, searchTask ?? Task.CompletedTask,
+                    spaceAnalysis.StopAsync(), StopSettingsAsync(exitSave));
+                directorySizes.Dispose();
+                activeSearch?.Dispose();
+            }
+
+            if (quitRequested && !settings.SkipExitIndexSave)
+                try { host.SaveExitSnapshot(exitSave.ReportWritten, exitSave.Token, exitSave.BeginCommit); }
+                catch (OperationCanceledException) when (exitSave.Token.IsCancellationRequested) { }
+                catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException)
+                { exitError = "无法保存退出快照：" + failure.Message; }
         }
         finally
         {
-            queryState.Close();
-            var activeSearch = search;
-            activeSearch?.Cancel();
-            await lifetime.CancelAsync();
-            await Task.WhenAll(automatic, folderSizes, searchTask ?? Task.CompletedTask,
-                spaceAnalysis.StopAsync(), StopSettingsAsync());
-            directorySizes.Dispose();
-            activeSearch?.Dispose();
+            exitSave.Dispose();
+            // 父进程收到退出确认后才关闭 stdin，已在等待读取的管道不能阻塞确认。
+            inputLifetime.Cancel();
         }
 
-        if (quitRequested)
-        {
-            string? error = null;
-            if (!settings.SkipExitIndexSave)
-                try { host.SaveExitSnapshot((written, total) => publish(new { Type = "saving", Written = written, Total = total })); }
-                catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException)
-                { error = "无法保存退出快照：" + failure.Message; }
-            publish(new { Type = "quit-complete", Error = error });
-        }
+        if (quitRequested) publish(new { Type = "quit-complete", Error = exitError });
     }
 
     private void Post(Action action) => messages.Writer.TryWrite(action);
 
-    private async Task ReadInputAsync(TextReader input, CancellationToken token)
+    private async Task ReadInputAsync(TextReader input, ExitSave exitSave, CancellationToken workToken,
+        CancellationToken inputToken)
     {
+        bool quitReceived = false;
         try
         {
-            while (await input.ReadLineAsync(token) is { } line)
+            while (await input.ReadLineAsync(inputToken) is { } line)
             {
                 try
                 {
                     var request = JsonSerializer.Deserialize<DesktopRequest>(line, JsonSerializerOptions.Web)
                         ?? throw new JsonException("缺少桌面请求。");
-                    Post(() => HandleRequest(request, token));
+                    // quit 之后只直接处理保存控制，普通工作队列随退出关闭。
+                    if (request.Type == "skipExitSave")
+                    {
+                        if (quitReceived) exitSave.Skip();
+                    }
+                    else if (!quitReceived)
+                    {
+                        quitReceived = request.Type == "quit";
+                        Post(() => HandleRequest(request, workToken));
+                    }
                 }
                 catch (JsonException error) { Post(() => PublishError("action", error.Message)); }
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (OperationCanceledException) when (inputToken.IsCancellationRequested) { }
         catch (IOException) { }
         finally { messages.Writer.TryComplete(); }
     }
@@ -304,6 +325,7 @@ internal sealed class DesktopSession
 
     private void QueueDirectoryRefresh()
     {
+        host.SortPrecompute.Notify();
         if (Interlocked.Exchange(ref directoryNoticeQueued, 1) != 0) return;
         Post(() =>
         {
@@ -351,7 +373,11 @@ internal sealed class DesktopSession
         var source = new CancellationTokenSource();
         search = source;
         bool includeDirectorySizes = directorySizes.Enabled;
-        if (request.UserInitiated && includeDirectorySizes) directorySizes.Pause();
+        if (request.UserInitiated)
+        {
+            host.SortPrecompute.Pause();
+            if (includeDirectorySizes) directorySizes.Pause();
+        }
         searchTask = ExecuteQueryAsync(request, options, source, includeDirectorySizes);
     }
 
@@ -377,7 +403,11 @@ internal sealed class DesktopSession
         catch (Exception error) { failure = error.Message; }
         finally
         {
-            if (request.UserInitiated && includeDirectorySizes) directorySizes.Resume();
+            if (request.UserInitiated)
+            {
+                if (includeDirectorySizes) directorySizes.Resume();
+                host.SortPrecompute.Resume();
+            }
         }
         Post(() =>
         {
@@ -563,11 +593,11 @@ internal sealed class DesktopSession
             searchService.Address?.GetLeftPart(UriPartial.Authority), searchService.PortOverridden,
             searchService.Running, Busy: false, error, settings.SearchDirectorySizes, settings.SkipExitIndexSave,
             settings.PrecomputeSort, settings.IndexCreationTime, settings.IndexModifiedTime, settings.IndexFileSize,
-            settings.Metadata != host.Metadata || settings.PrecomputeSort != host.PrecomputeSort);
+            settings.Metadata != host.Metadata);
         publish(settingsStatus);
     }
 
-    private async Task StopSettingsAsync()
+    private async Task StopSettingsAsync(ExitSave exitSave)
     {
         try
         {
@@ -579,9 +609,74 @@ internal sealed class DesktopSession
                 if (await ApplySettingsChangeAsync(change.Apply) is { } error)
                     PublishError("action", error);
             if (!settings.SkipExitIndexSave)
-                publish(new { Type = "saving", Written = 0, Total = host.Catalog.VolumeCount });
+                exitSave.Start(host.Catalog.VolumeCount);
         }
         finally { await searchService.DisposeAsync(); }
+    }
+
+    private sealed class ExitSave(Action<object> publish) : IDisposable
+    {
+        private readonly object gate = new();
+        private readonly CancellationTokenSource cancellation = new();
+        private string? phase;
+        private int written, total;
+
+        internal CancellationToken Token => cancellation.Token;
+
+        internal void Start(int volumes)
+        {
+            lock (gate)
+            {
+                total = volumes;
+                Publish(cancellation.IsCancellationRequested ? "skipping" : "writing");
+            }
+        }
+
+        internal void ReportWritten(int writtenVolumes, int totalVolumes)
+        {
+            lock (gate)
+            {
+                if (phase != "writing") return;
+                written = writtenVolumes;
+                total = totalVolumes;
+                Publish("writing");
+            }
+        }
+
+        internal void Skip()
+        {
+            lock (gate)
+            {
+                if (phase is not (null or "writing") || cancellation.IsCancellationRequested) return;
+                cancellation.Cancel();
+                if (phase == "writing") Publish("skipping");
+            }
+        }
+
+        internal void BeginCommit()
+        {
+            // 跳过与原子替换使用同一个边界。提交赢得边界后必须完成替换。
+            lock (gate)
+            {
+                Token.ThrowIfCancellationRequested();
+                Publish("committing");
+            }
+        }
+
+        private void Publish(string next)
+        {
+            phase = next;
+            publish(new { Type = "saving", Phase = next, Written = written, Total = total });
+        }
+
+        public void Dispose()
+        {
+            lock (gate)
+            {
+                phase = "finished";
+                cancellation.Dispose();
+            }
+        }
     }
 
     private void SaveSettings(DesktopSettings next)
@@ -591,6 +686,7 @@ internal sealed class DesktopSession
         {
             if (settingsDirectory is not null) next.Save(settingsDirectory);
             settings = next;
+            host.SortPrecompute.SetEnabled(next.PrecomputeSort);
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
         { throw new IOException("无法保存应用设置：" + failure.Message, failure); }

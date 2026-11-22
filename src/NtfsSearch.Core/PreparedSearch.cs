@@ -10,10 +10,10 @@ internal sealed class PreparedSearch(SearchIndex index, ulong[]? bits, long tota
     public long TotalCount { get; } = total;
     internal bool RequiresFullOrder => ownedBits is null || TotalCount > SearchIndex.DirectMatchSortLimit;
     public IEnumerable<int> Ids(SortField sort, bool descending, CancellationToken token,
-        DirectorySizeOrder? directorySizes = null, SearchSortSelection? selection = null)
+        DirectorySizeOrder? directorySizes = null, SearchSortSelection? selection = null, Action? beforeColdSort = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        return index.EnumerateMatches(ownedBits, TotalCount, sort, descending, token, directorySizes, selection);
+        return index.EnumerateMatches(ownedBits, TotalCount, sort, descending, token, directorySizes, selection, beforeColdSort);
     }
     public void Dispose()
     {

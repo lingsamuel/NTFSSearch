@@ -7,7 +7,7 @@ namespace NtfsSearch.App;
 
 internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
     Func<CancellationToken, Action<NtfsVolume, bool, int>, Action<NtfsVolume, IndexMetadata>, IEnumerable<ExitSnapshotVolume>> startup,
-    string? cacheDirectory = null, IndexMetadata metadata = IndexMetadata.All, bool precomputeSort = true)
+    string? cacheDirectory = null, IndexMetadata metadata = IndexMetadata.All)
 {
     private readonly object gate = new();
     private readonly Dictionary<string, VolumeState> volumes = new(StringComparer.Ordinal);

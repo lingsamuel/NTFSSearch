@@ -116,7 +116,7 @@ internal sealed partial class MemoryVolumeBackend
                     using (var body = frame.Open()) ScanStarted(volume, generation, body.ReadInt32());
                     break;
                 case CollectorFrameKind.ScanStart when records is null:
-                    using (var body = frame.Open()) records = new(body.ReadInt32(), metadata, precomputeSort);
+                    using (var body = frame.Open()) records = new(body.ReadInt32(), metadata, precomputeSort: false);
                     break;
                 case CollectorFrameKind.ScanRows when records is not null:
                     records.ReadRows(frame, token);
@@ -127,7 +127,6 @@ internal sealed partial class MemoryVolumeBackend
                         var target = CollectorWire.ReadPosition(body);
                         var skipped = body.ReadInt64();
                         var progress = new ScanProgress(message => Report(volume, generation, message));
-                        if (precomputeSort) progress.Report("建立排序索引…");
                         return (records.Build(token, progress), target, skipped);
                     }
                 default:

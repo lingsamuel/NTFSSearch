@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --index-memory-settings]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --index-memory-settings | --exit-save-skip]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -16,14 +16,15 @@ const trayTest = mode === '--tray'
 const searchResultsTest = mode === '--search-results'
 const searchServiceSettingsTest = mode === '--search-service-settings'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
+const exitSaveSkipTest = mode === '--exit-save-skip'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
-  : indexMemorySettingsTest ? 'IndexMemoryData' : 'ExitSaveData')
+  : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
 if (mode !== '--cached-fixture') {
   await mkdir(testData, { recursive: true })
-  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest, ...(trayTest ? { IndexCreationTime: true } : {}) }))
+  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest && !exitSaveSkipTest, ...(trayTest ? { IndexCreationTime: true } : {}) }))
   await writeFile(snapshotPath, previousSnapshot)
 }
 const portProbe = createServer().listen(0, '127.0.0.1')
@@ -38,7 +39,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || searchServiceSettingsTest || indexMemorySettingsTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || searchServiceSettingsTest || indexMemorySettingsTest || exitSaveSkipTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -48,8 +49,8 @@ const applicationEnv = {
 }
 let application
 let exited
-function launchApplication() {
-  application = spawn(resolve(executable), applicationArgs, { stdio: 'ignore', env: applicationEnv })
+function launchApplication(args = applicationArgs) {
+  application = spawn(resolve(executable), args, { stdio: 'ignore', env: applicationEnv })
   exited = once(application, 'exit')
 }
 launchApplication()
@@ -348,7 +349,7 @@ async function verifyIndexMemorySettings(total) {
   const field = name => `document.querySelector('.settings-workspace input[name=${name}]')`
   const ready = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
   const columns = () => evaluate("[...document.querySelectorAll('thead .column-label')].map(label => label.textContent)")
-  const pendingRestart = () => evaluate("[...document.querySelectorAll('.settings-workspace [role=status]')].some(status => status.textContent.includes('索引设置已保存'))")
+  const pendingRestart = () => evaluate("Boolean(document.querySelector('.settings-feedback [role=status]'))")
   const folderSizes = () => evaluate(`(() => {
     const input = ${field('search-directory-sizes')};
     return { checked: input.checked, disabled: input.disabled };
@@ -375,9 +376,10 @@ async function verifyIndexMemorySettings(total) {
     await click('保存并应用')
     await until(async () => {
       const saved = JSON.parse(await readFile(settingsPath, 'utf8'))
-      return await ready() && (await pendingRestart()) === needsRestart && saved.SearchDirectorySizes === true
+      return await ready() && saved.SearchDirectorySizes === true
         && Object.entries(values).every(([name, checked]) => saved[name] === checked)
     }, '保存索引设置和文件夹大小偏好')
+    assert.equal(await pendingRestart(), needsRestart, '只有元数据列变更需要重启')
   }
   async function restartApplication() {
     await quitApplication()
@@ -394,6 +396,21 @@ async function verifyIndexMemorySettings(total) {
   await openSettings()
   await checkSwitches(defaults)
   assert.equal(await pendingRestart(), false)
+  for (const precompute of [false, true, false, true]) {
+    const values = { PrecomputeSort: precompute }
+    await editSwitches(values)
+    await saveSwitches(values, false)
+    await click('返回')
+    assert.deepEqual(await columns(), allColumns)
+    assert.equal(await evaluate("document.querySelector('thead th[aria-sort=ascending]').textContent.trim()"), '大小')
+    await query(precompute ? '' : 'HELLO 000901', precompute ? total : 1)
+    await openSettings()
+    await checkSwitches(values)
+  }
+  assert.match(await evaluate(`(() => {
+    const input = ${field('precompute-sort')};
+    return document.getElementById(input.getAttribute('aria-describedby'))?.textContent ?? '';
+  })()`), /保存后立即生效/)
   assert.match(await evaluate("document.querySelector('[aria-labelledby=index-settings-title]').textContent"), /保存后，以下索引设置将在下次重启时生效/)
   await editSwitches(disabledColumns)
   assert.deepEqual(await folderSizes(), { checked: true, disabled: true })
@@ -441,11 +458,59 @@ async function verifyIndexMemorySettings(total) {
       && / B$/.test(row.querySelector('.entry-size').title))`), '恢复保存的文件夹大小统计')
 }
 
+async function verifyExitSaveSkip() {
+  // 先用正常退出保存一份较小的快照，再用现有的大型演示索引留出写入时的操作窗口。
+  await quitApplication()
+  const snapshot = await readFile(snapshotPath)
+  assert.match(snapshot.toString('ascii', 0, 8), /^NTSEXIT\d$/, '已生成上次完整快照')
+  socket.close()
+  const benchmarkArgs = ['--desktop-benchmark']
+  launchApplication(benchmarkArgs)
+  await waitForDesktop(1_000_000)
+
+  await cdp('Runtime.addBinding', { name: 'reportExitSaveState' })
+  const states = []
+  socket.addEventListener('message', event => {
+    const message = JSON.parse(event.data)
+    if (message.method === 'Runtime.bindingCalled' && message.params.name === 'reportExitSaveState')
+      states.push(JSON.parse(message.params.payload))
+  })
+  await evaluate(`(() => {
+    let clicked = false;
+    let previous;
+    new MutationObserver(() => {
+      const overlay = document.querySelector('.save-overlay');
+      if (!overlay) return;
+      const button = [...overlay.querySelectorAll('button')].find(button => button.textContent.trim() === '此次不保存');
+      const status = overlay.querySelector('strong').textContent.trim();
+      const enabled = !!button && !button.disabled;
+      const state = JSON.stringify({ status, enabled });
+      if (state !== previous) window.reportExitSaveState(previous = state);
+      if (enabled && !clicked) {
+        clicked = true;
+        button.click();
+      }
+    }).observe(document.body, { childList: true, attributes: true, characterData: true, subtree: true });
+  })()`)
+  await quitApplication()
+  assert.ok(states.some(state => state.status === '正在保存退出快照' && state.enabled), '写入时显示可操作的「此次不保存」')
+  assert.ok(states.some(state => state.status === '正在跳过本次保存…' && !state.enabled), '点击后显示跳过状态并禁用按钮')
+  assert.ok((await readFile(snapshotPath)).equals(snapshot), `跳过时逐字节保留旧快照。保存阶段 ${JSON.stringify(states)}`)
+  assert.equal(JSON.parse(await readFile(settingsPath, 'utf8')).SkipExitIndexSave, false, '跳过后保留退出保存偏好')
+  assert.deepEqual((await readdir(testData)).filter(name => name.endsWith('.tmp')), [], '跳过后清理临时快照')
+
+  socket.close()
+  launchApplication(benchmarkArgs)
+  await waitForDesktop(1_000_000)
+  return snapshot
+}
+
 try {
   const benchmark = mode === '--desktop-benchmark'
   const total = benchmark ? 1_000_000 : 1000
   await waitForDesktop(total)
 
+  let snapshotBeforeSkip
   if (benchmark) {
     await sleep(2000)
     const memory = await powerShell(`
@@ -470,6 +535,8 @@ try {
     await verifySearchServiceSettings()
   } else if (indexMemorySettingsTest) {
     await verifyIndexMemorySettings(total)
+  } else if (exitSaveSkipTest) {
+    snapshotBeforeSkip = await verifyExitSaveSkip()
   } else if (!trayTest) {
     const fileIcon = extension => `document.querySelector('td.entry-name[title$="${extension}"] img.entry-file-type-icon')`
     const textIcon = await until(() => evaluate(`(() => {
@@ -803,6 +870,11 @@ try {
     const snapshot = await readFile(snapshotPath)
     assert.match(snapshot.toString('ascii', 0, 8), /^NTSEXIT\d$/, '正常退出保存了演示快照')
   }
+  if (exitSaveSkipTest) {
+    const snapshot = await readFile(snapshotPath)
+    assert.match(snapshot.toString('ascii', 0, 8), /^NTSEXIT\d$/, '下次退出仍保存索引')
+    assert.ok(!snapshot.equals(snapshotBeforeSkip), '下次退出原子替换旧快照')
+  }
   if (mode === '--desktop-test') {
     const restart = exec(join(dirname(resolve(executable)), 'NtfsSearch.Backend.exe'), ['--desktop-test'],
       { encoding: 'utf8', timeout: 10_000, env: { ...process.env, NTFS_SEARCH_TEST_DATA: testData } })
@@ -817,7 +889,8 @@ try {
   if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
   else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
-  else if (indexMemorySettingsTest) console.log('Windows 索引内存设置、重启生效、搜索结果列和文件夹大小偏好通过。')
+  else if (indexMemorySettingsTest) console.log('Windows 预计算排序即时切换、元数据列重启生效和文件夹大小偏好通过。')
+  else if (exitSaveSkipTest) console.log('Windows 退出保存按钮、状态、旧快照保留及再次退出保存通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

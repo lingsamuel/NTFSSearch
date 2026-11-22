@@ -9,14 +9,29 @@ internal sealed class DirectorySizeOrder
     private readonly int[] directoryRows;
     private readonly string[] baselinePaths;
     private readonly Int128[] sizes;
+    private readonly int baselineKnownCount;
     private readonly int knownCount;
     private readonly int[]? order;
-    private readonly object? sortOwner;
+    private readonly object? baselineSortOwner;
+    private readonly object? correctionSortOwner;
     private readonly ImmutableDictionary<int, Int128> overrides;
     private readonly ImmutableSortedSet<Entry>? corrections;
     internal SearchIndex Index { get; }
     internal bool HasKnownDirectories => knownCount != 0;
-    internal object SortOwner => sortOwner ?? this;
+    internal object SortOwner => correctionSortOwner ?? baselineSortOwner ?? this;
+    internal IEnumerable<object> SortOwners
+    {
+        get
+        {
+            if (baselineSortOwner is not null) yield return baselineSortOwner;
+            if (correctionSortOwner is not null) yield return correctionSortOwner;
+        }
+    }
+
+    internal bool IsPrecomputed(SearchSortSelection selection)
+        => !HasKnownDirectories || order is not null
+            || selection.Contains(baselineSortOwner!)
+                && (correctionSortOwner is null || selection.Contains(correctionSortOwner));
 
     internal static DirectorySizeOrder Create(SearchIndex index, SpaceUsageIndex usage, CancellationToken token)
     {
@@ -42,27 +57,31 @@ internal sealed class DirectorySizeOrder
             sizes[slot] = Read(index, rows[slot], usage);
             if (sizes[slot] != Unknown) knownCount++;
         }
+        baselineKnownCount = knownCount;
         overrides = ImmutableDictionary<int, Int128>.Empty;
         if (index.PrecomputeSort)
         {
-            order = BuildOrder(token, () => usage.Checkpoint(token));
+            order = BuildBaseline(token, () => usage.Checkpoint(token));
             corrections = ImmutableSortedSet.Create<Entry>(CompareEntries(index));
         }
-        else sortOwner = new();
+        else baselineSortOwner = new();
     }
 
     private DirectorySizeOrder(SearchIndex index, DirectorySizeOrder baseline, ImmutableDictionary<int, Int128> overrides,
-        int knownCount, ImmutableSortedSet<Entry>? corrections, object? previousSortOwner = null)
+        int knownCount, ImmutableSortedSet<Entry>? corrections, bool preserveCorrectionOrder)
     {
         Index = index;
         directoryRows = baseline.directoryRows;
         baselinePaths = baseline.baselinePaths;
         sizes = baseline.sizes;
+        baselineKnownCount = baseline.baselineKnownCount;
         order = baseline.order;
         this.overrides = overrides;
         this.knownCount = knownCount;
         this.corrections = corrections;
-        sortOwner = index.PrecomputeSort ? null : previousSortOwner ?? new object();
+        baselineSortOwner = baseline.baselineSortOwner;
+        if (baselineSortOwner is not null && !overrides.IsEmpty)
+            correctionSortOwner = preserveCorrectionOrder ? baseline.correctionSortOwner : new();
     }
 
     internal Int128? GetSize(int row)
@@ -83,7 +102,7 @@ internal sealed class DirectorySizeOrder
         var affected = new HashSet<int>();
         bool samePaths = ReferenceEquals(index.Directories, Index.Directories);
         bool pathsChanged = false;
-        if (corrections is not null && !samePaths)
+        if (!samePaths)
         {
             for (int slot = 0; slot < directoryRows.Length; slot++)
             {
@@ -104,7 +123,7 @@ internal sealed class DirectorySizeOrder
         if (affected.Count == 0)
         {
             // 文件元数据可以更新索引视图但不改变目录排序。只共享键，避免新视图持有旧索引。
-            return index == Index ? this : new(index, this, overrides, knownCount, corrections, samePaths ? sortOwner : null);
+            return index == Index ? this : new(index, this, overrides, knownCount, corrections, preserveCorrectionOrder: true);
         }
         if (affected.Count > rebaseThreshold)
             return new(index, directoryRows, usage, token);
@@ -129,7 +148,7 @@ internal sealed class DirectorySizeOrder
             Int128 previous = overrides.TryGetValue(id, out var changed) ? changed : baseline;
             if ((previous == Unknown) != (bytes == Unknown)) known += bytes == Unknown ? -1 : 1;
             int parent = index.Records[id].Directory;
-            if (bytes == baseline && (sorted is null || bytes == Unknown || index.Directories[parent] == baselinePaths[parent]))
+            if (bytes == baseline && (bytes == Unknown || index.Directories[parent] == baselinePaths[parent]))
                 next.Remove(id);
             else
             {
@@ -139,7 +158,9 @@ internal sealed class DirectorySizeOrder
         }
         if (next.Count > rebaseThreshold)
             return new(index, directoryRows, usage, token);
-        return new(index, this, next.ToImmutable(), known, sorted?.ToImmutable());
+        var updated = next.ToImmutable();
+        return new(index, this, updated, known, sorted?.ToImmutable(),
+            preserveCorrectionOrder: !pathsChanged && ReferenceEquals(updated, overrides));
     }
 
     private static Comparer<Entry> CompareEntries(SearchIndex index)
@@ -148,10 +169,12 @@ internal sealed class DirectorySizeOrder
     private static Int128 Read(SearchIndex index, int id, SpaceUsageIndex usage)
         => index.IsVisible(id) ? usage.DirectorySize(index.FileReferences![id]) ?? Unknown : Unknown;
 
-    private int[] BuildOrder(CancellationToken token, Action? checkpoint = null)
+    private int[] BuildBaseline(CancellationToken token, Action? checkpoint = null)
     {
-        if (knownCount == 0) return [];
-        var sorted = new int[knownCount];
+        if (baselineKnownCount == 0) return [];
+        // 重排已切换路径的视图时，基线仍按原父路径比较，移动行由增量流覆盖。
+        var baseline = ReferenceEquals(Index.Directories, baselinePaths) ? Index : Index.WithView(null, baselinePaths, token);
+        var sorted = new int[baselineKnownCount];
         int position = 0;
         for (int slot = 0; slot < directoryRows.Length; slot++)
         {
@@ -160,44 +183,66 @@ internal sealed class DirectorySizeOrder
                 token.ThrowIfCancellationRequested();
                 checkpoint?.Invoke();
             }
-            if (SizeAt(slot) != Unknown) sorted[position++] = slot;
+            if (sizes[slot] != Unknown) sorted[position++] = slot;
         }
-        return SortIndex.Sort(sorted, (a, b) => SearchIndex.CompareSizes(Index, directoryRows[a], SizeAt(a),
-            Index, directoryRows[b], SizeAt(b)), token, maxParallelism: 1, checkpoint: checkpoint);
+        return SortIndex.Sort(sorted, (a, b) => SearchIndex.CompareSizes(baseline, directoryRows[a], sizes[a],
+            baseline, directoryRows[b], sizes[b]), token, maxParallelism: 1, checkpoint: checkpoint);
+    }
 
-        Int128 SizeAt(int slot) => overrides.TryGetValue(directoryRows[slot], out var changed) ? changed : sizes[slot];
+    private int[] BuildCorrections(CancellationToken token, Action? checkpoint = null)
+    {
+        var rows = new List<int>(overrides.Count);
+        int checkedRows = 0;
+        foreach (var (id, bytes) in overrides)
+        {
+            if ((checkedRows++ & 4095) == 0)
+            {
+                token.ThrowIfCancellationRequested();
+                checkpoint?.Invoke();
+            }
+            if (bytes != Unknown) rows.Add(id);
+        }
+        return SortIndex.Sort(rows.ToArray(), (a, b) => SearchIndex.CompareSizes(Index, a, overrides[a],
+            Index, b, overrides[b]), token, maxParallelism: 1, checkpoint: checkpoint);
+    }
+
+    internal void WarmSort(SearchSortSelection selection, object session, CancellationToken token, Action? checkpoint)
+    {
+        selection.Warm(baselineSortOwner!, () => BuildBaseline(token, checkpoint), token, session);
+        if (correctionSortOwner is not null)
+            selection.Warm(correctionSortOwner, () => BuildCorrections(token, checkpoint), token, session);
     }
 
     internal IEnumerable<int> Ordered(bool descending, CancellationToken token, SearchSortSelection? selection = null)
     {
         token.ThrowIfCancellationRequested();
         if (knownCount == 0) yield break;
-        if (order is null)
+        // 按需模式的全量基线和稀疏修正都由当前列持有，汇总视图只保存大小与比较所需数据。
+        var baseline = order ?? selection?.Get(baselineSortOwner!, () => BuildBaseline(token), token) ?? BuildBaseline(token);
+        if (overrides.IsEmpty)
         {
-            // 合计视图不持有按需排列。桌面的当前排序列可以在查询之间复用它。
-            var sorted = selection?.Get(SortOwner, () => BuildOrder(token), token) ?? BuildOrder(token);
-            for (int i = 0; i < sorted.Length; i++)
+            for (int i = 0; i < baseline.Length; i++)
             {
                 if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
-                yield return directoryRows[sorted[descending ? sorted.Length - 1 - i : i]];
+                yield return directoryRows[baseline[descending ? baseline.Length - 1 - i : i]];
             }
             yield break;
         }
 
-        var corrected = corrections!;
-        using var changed = (descending ? corrected.Reverse() : corrected).GetEnumerator();
+        var corrected = corrections is null ? SelectedCorrections() : descending ? corrections.Reverse() : corrections;
+        using var changed = corrected.GetEnumerator();
         bool hasChanged = changed.MoveNext();
         int position = 0;
-        while (position < order.Length || hasChanged)
+        while (position < baseline.Length || hasChanged)
         {
             if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
-            if (position == order.Length)
+            if (position == baseline.Length)
             {
                 yield return changed.Current.Row;
                 hasChanged = changed.MoveNext();
                 continue;
             }
-            int slot = order[descending ? order.Length - 1 - position : position];
+            int slot = baseline[descending ? baseline.Length - 1 - position : position];
             int row = directoryRows[slot];
             if (overrides.ContainsKey(row)) { position++; continue; }
             if (hasChanged && SearchIndex.CompareSizes(Index, changed.Current.Row, changed.Current.Bytes,
@@ -210,6 +255,16 @@ internal sealed class DirectorySizeOrder
             {
                 yield return row;
                 position++;
+            }
+        }
+
+        IEnumerable<Entry> SelectedCorrections()
+        {
+            var rows = selection?.Get(correctionSortOwner!, () => BuildCorrections(token), token) ?? BuildCorrections(token);
+            for (int i = 0; i < rows.Length; i++)
+            {
+                int id = rows[descending ? rows.Length - 1 - i : i];
+                yield return new(id, overrides[id]);
             }
         }
     }

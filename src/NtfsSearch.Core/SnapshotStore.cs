@@ -80,7 +80,7 @@ public static class SnapshotStore
             {
                 var sort = (SortField)field;
                 var selection = index.PrecomputeSort ? null : new SearchSortSelection(sort);
-                var (order, known) = index.ResolveSortOrder(sort, cancellationToken, selection);
+                var (order, known) = index.ResolveBaselineSortOrder(sort, cancellationToken, selection);
                 int alias = -1;
                 // 修正视图的有效排列由两路归并产生，不能仅以基线共享引用推断alias。
                 if (savedOrders is not null && !index.HasOrderCorrections)

@@ -26,7 +26,9 @@ const fatal = ref('')
 const queryError = ref('')
 const notice = ref('')
 const actionError = ref('')
-const saving = shallowRef<{ written: number; total: number }>()
+const saving = shallowRef<Extract<DesktopMessage, { type: 'saving' }>>()
+const skipSaveButton = ref<HTMLButtonElement>()
+const skipSavePending = ref(false)
 const preferencePending = ref(false)
 const showingSpace = ref(false)
 const space = shallowRef<SpaceAnalysisResult>()
@@ -51,6 +53,15 @@ const hasAvailableIndex = computed(() => (result.value?.volumesReady ?? 0) > 0)
 const indexFileSize = computed(() => indexStatus.value?.indexFileSize ?? true)
 const indexModifiedTime = computed(() => indexStatus.value?.indexModifiedTime ?? true)
 const canViewSpace = computed(() => connected.value && !!indexStatus.value && indexFileSize.value && !saving.value)
+const savePhase = computed(() => {
+  const phase = saving.value?.phase ?? 'writing'
+  return phase === 'writing' && skipSavePending.value ? 'skipping' : phase
+})
+const saveLabels = {
+  writing: '正在保存退出快照',
+  skipping: '正在跳过本次保存…',
+  committing: '正在完成保存…',
+}
 const spaceUnavailable = '空间分析需要启用「索引文件大小」。'
 const page = computed(() => result.value ? Math.floor(result.value.offset / result.value.pageSize) + 1 : 1)
 const pages = computed(() => result.value ? Math.max(1, Math.ceil(result.value.total / result.value.pageSize)) : 1)
@@ -153,6 +164,7 @@ function receive(message: DesktopMessage) {
       applyFileTypeIcons(message.icons)
       break
     case 'saving':
+      if (!saving.value) skipSavePending.value = false
       saving.value = message
       break
     case 'exitSavePreference':
@@ -206,6 +218,9 @@ function query(offset = 0) {
 }
 
 watch([text, matchPath, sort, descending], () => query())
+watch(skipSaveButton, button => {
+  if (button && !button.disabled) button.focus()
+}, { flush: 'post' })
 
 function sortBy(field: SortField) {
   if (sort.value === field) {
@@ -234,7 +249,7 @@ function clearQuery() {
 }
 
 function handleShortcut(event: KeyboardEvent) {
-  if (showingSettings.value) return
+  if (showingSettings.value || saving.value) return
   if (event.ctrlKey && event.key.toLowerCase() === 'f') {
     event.preventDefault()
     if (showingSpace.value) closeSpace()
@@ -336,6 +351,16 @@ function updateSavePreference(skipExitIndexSave: boolean) {
   })
 }
 
+function skipExitSave() {
+  if (!saving.value || savePhase.value !== 'writing') return
+  showFeedback('')
+  skipSavePending.value = true
+  void sendRequest({ type: 'skipExitSave' }).catch(error => {
+    skipSavePending.value = false
+    showFeedback(String(error), true)
+  })
+}
+
 function fileAction(type: FileAction, row: SearchRow) {
   if (!pending.value) sendAction({ type, key: row.key })
 }
@@ -361,7 +386,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="workspace" @keydown="handleShortcut" @contextmenu.prevent>
-    <div class="workspace-content" :inert="showingSettings">
+    <div class="workspace-content" :class="{ 'settings-open': showingSettings }" :inert="showingSettings || !!saving">
       <header v-show="!showingSpace" class="search-toolbar">
         <div class="search-field">
           <span class="search-glyph" aria-hidden="true"></span>
@@ -421,17 +446,20 @@ onBeforeUnmount(() => {
         @details="requestSpaceDetails"
         @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
     </div>
-    <Settings v-if="showingSettings" :status="settingsStatus" :pending="settingsPending || preferencePending"
+    <Settings v-if="showingSettings" :inert="!!saving" :status="settingsStatus" :pending="settingsPending || preferencePending"
       :connected="connected" :error="fatal || settingsError" @close="closeSettings" @request="requestSettings" />
-    <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
+    <div v-if="!saving && (notice || actionError)" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>
       <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>
     </div>
-    <div v-if="saving" class="save-overlay" role="status" aria-live="polite">
+    <div v-if="saving" class="save-overlay">
       <div>
-        <strong>正在保存退出快照</strong>
+        <strong role="status">{{ saveLabels[savePhase] }}</strong>
         <progress v-if="saving.total" :value="saving.written" :max="saving.total"
           :aria-label="'已保存 ' + saving.written + ' 个卷，共 ' + saving.total + ' 个卷'"></progress>
+        <span v-if="actionError" class="save-error" role="alert">{{ actionError }}</span>
+        <button ref="skipSaveButton" type="button" class="outlined-button" :disabled="savePhase !== 'writing'"
+          @click="skipExitSave">此次不保存</button>
       </div>
     </div>
   </main>
@@ -440,7 +468,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .workspace { position: relative; }
 .workspace-content { display: contents; }
-.workspace-content[inert] { visibility: hidden; }
+.workspace-content.settings-open { visibility: hidden; }
 .toolbar-button { height: 39px; white-space: nowrap; }
 
 .save-overlay {
@@ -455,10 +483,13 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 12px;
   min-width: 250px;
+  max-width: min(430px, calc(100% - 24px));
   padding: 18px 22px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
 }
 .save-overlay progress { width: 100%; accent-color: var(--accent); }
+.save-overlay button { justify-self: end; }
+.save-error { color: var(--warning); overflow-wrap: anywhere; }
 </style>

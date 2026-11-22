@@ -122,7 +122,7 @@ export type DesktopMessage =
   | { type: 'directorySizes'; requestId: number; rows: Pick<SearchRow, 'key' | 'sizeText' | 'sizeBytesText' | 'sizeHint'>[] }
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
-  | { type: 'saving'; written: number; total: number }
+  | { type: 'saving'; written: number; total: number; phase?: 'writing' | 'skipping' | 'committing' }
   | { type: 'exitSavePreference'; skipExitIndexSave: boolean; error: string | null }
   | { type: 'quit-complete'; error?: string }
   | { type: 'error'; scope: 'fatal' | 'query' | 'refresh' | 'action'; message: string; requestId?: number }
@@ -137,7 +137,7 @@ export type DesktopRequest =
   | { type: 'spaceExclude'; requestId: number; volumeKey: string; key: string; fileReference: string | null }
   | { type: 'spaceRestore'; requestId: number; volumeKey?: string; key?: string }
   | { type: 'closeSpaceAnalysis'; requestId: number }
-  | { type: 'rescan' | 'cancel' }
+  | { type: 'rescan' | 'cancel' | 'skipExitSave' }
   | { type: 'setSkipExitIndexSave'; skipExitIndexSave: boolean }
   | { type: 'fileTypeIcons'; extensions: string[] }
   | { type: FileAction; key: string }

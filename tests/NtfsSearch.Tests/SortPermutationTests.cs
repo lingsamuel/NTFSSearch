@@ -43,15 +43,15 @@ public class SortPermutationTests
         builder.Add(@"C:\second\", "b.txt");
         var original = builder.Build();
         var selection = new SearchSortSelection(SortField.Path);
-        selection.UpdateOwners([original]);
+        selection.UpdateOwners(new HashSet<object> { original.SortSource });
         var order = original.ResolveSortOrder(SortField.Path, default, selection).Order;
 
         var hidden = original.WithView([1UL], original.Directories, default);
-        selection.UpdateOwners([hidden]);
+        selection.UpdateOwners(new HashSet<object> { hidden.SortSource });
         Assert.Same(order, hidden.ResolveSortOrder(SortField.Path, default, selection).Order);
 
         var moved = hidden.WithView(null, [@"C:\third\", @"C:\second\"], default);
-        selection.UpdateOwners([moved]);
+        selection.UpdateOwners(new HashSet<object> { moved.SortSource });
         Assert.Same(original, moved.IdentitySource);
         Assert.False(selection.Contains(original));
         Assert.Equal(1, moved.ResolveSortOrder(SortField.Path, default, selection).Order[0]);
@@ -139,13 +139,15 @@ public class SortPermutationTests
         finally { File.Delete(path); }
     }
 
-    [Fact]
-    public void AllOrdersRemainExactAcrossPackedViewsAndSnapshotVersions()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AllOrdersRemainExactAcrossPackedViewsAndSnapshotVersions(bool precomputeSort)
     {
         string path = Path.Combine(Path.GetTempPath(), $"packed-orders-{Guid.NewGuid():N}.ntidx");
         try
         {
-            var builder = new IndexBuilder();
+            var builder = new IndexBuilder(0, fixedSize: false, precomputeSort: precomputeSort);
             var random = new Random(721);
             for (int i = 0; i < 2300; i++)
                 builder.Add(i % 2 == 0 ? @"C:\old\" : @"C:\z\", $"file{random.Next(120):D3}",
@@ -158,6 +160,7 @@ public class SortPermutationTests
             CheckOracle(changed);
             SnapshotStore.Save(changed, path);
             CheckOracle(SnapshotStore.Load(path));
+            if (!precomputeSort) return;
             for (int version = 1; version <= 3; version++)
             {
                 LegacySnapshotFixture.Write(original, path, version);

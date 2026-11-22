@@ -371,6 +371,15 @@ def check_index_settings(backend, cli, sandbox):
         row = request(port, "search", dict(text=text, limit=1))["rows"][0]
         assert row["sizeBytes"] is not None and row["modifiedUtc"] and row["createdUtc"] is None, row
 
+        ordered_query = dict(text=text, sort="size", descending=True, offset=6, limit=9)
+        ordered = request(port, "search", ordered_query)
+        for precompute in (False, True, False, True):
+            check_preferences(apply(process, receive, precomputeSort=precompute),
+                              INDEX_DEFAULTS | dict(precomputeSort=precompute), False)
+            persisted = json.loads((data / "settings.json").read_bytes())
+            assert persisted["PrecomputeSort"] is precompute, persisted
+            assert request(port, "search", ordered_query) == ordered
+
         check_preferences(apply(process, receive, **settings), settings, True)
         check_preferences(apply(process, receive, **INDEX_DEFAULTS), INDEX_DEFAULTS, False)
         check_preferences(apply(process, receive, **settings), settings, True)
