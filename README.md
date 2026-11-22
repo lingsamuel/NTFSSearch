@@ -50,7 +50,9 @@ dotnet run --project src/NtfsSearch.Cli -c Release -- drives
 dotnet run --project src/NtfsSearch.Cli -c Release -- bench 1000000 report.json shuffled 5
 ```
 
-在 Windows 安装 Node.js、Rust MSVC、Microsoft C++ Build Tools 和 .NET 10 SDK，使用 PowerShell 执行 `scripts/build-windows.ps1` 构建便携发布目录。Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
+在 Windows 安装 Node.js、Rust MSVC、Microsoft C++ Build Tools 和 .NET 10 SDK，使用 PowerShell 执行 `scripts/build-windows.ps1` 构建便携版。交付目录为项目工作区的 `artifacts/windows`。从 Windows 构建镜像或临时 Git worktree 构建时，也将成品放到该交付目录。 [构建与交付约定](AGENTS.md)
+
+Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
 诊断参数可传给 `app/NtfsSearch.App.exe` 或 `app/NtfsSearch.Backend.exe`。`--smoke-test report.txt` 执行后端自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离数据目录等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
 
