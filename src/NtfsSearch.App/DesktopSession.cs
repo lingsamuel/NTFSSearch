@@ -161,7 +161,7 @@ internal sealed class DesktopSession
                     spaceAnalysis.ViewPath(request.RequestId, request.Path, request.Root, request.BreadcrumbIds, request.VolumeKey);
                     break;
                 case "spaceDetails":
-                    spaceAnalysis.Details(request.RequestId, request.DetailId, request.DirectoryIds);
+                    spaceAnalysis.Details(request.RequestId, request.DetailId, request.DirectoryIds, request.ManualDirectoryIds, request.BranchIds);
                     break;
                 case "closeSpaceAnalysis":
                     spaceAnalysis.Close(request.RequestId);
@@ -367,5 +367,6 @@ internal sealed class DesktopSession
     private sealed record DesktopRequest(string Type, long RequestId, string Text = "", SortField Sort = SortField.Name,
         bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null,
         string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null,
-        long DetailId = 0, string[]? DirectoryIds = null, bool SkipExitIndexSave = false);
+        long DetailId = 0, string[]? DirectoryIds = null, string[]? ManualDirectoryIds = null, string[]? BranchIds = null,
+        bool SkipExitIndexSave = false);
 }

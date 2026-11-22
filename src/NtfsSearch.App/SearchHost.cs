@@ -59,7 +59,7 @@ internal sealed class SearchHost
         Progress?.Invoke("正在加载上次退出保存的索引…", false);
         int parallelism = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount,
             VolumeResources.AvailableMemoryBytes()).CacheLoadLimit;
-        using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, maxConcurrency: parallelism).GetEnumerator();
+        using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, parallelism, progress).GetEnumerator();
         while (true)
         {
             ExitSnapshotVolume current;
@@ -215,7 +215,8 @@ internal sealed class SearchHost
         public IReadOnlyList<NtfsVolume> Discover() => count == 1000 ? Volumes : [Volumes[0]];
         public string CacheRevision(NtfsVolume volume) => "v1";
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) =>
-            Task.FromResult<CachedVolume?>(new(volume == Volumes[0] ? DemoData.Create(count) : new IndexBuilder().Build(token), false));
+            Task.FromResult<CachedVolume?>(new(volume == Volumes[0] ? DemoData.Create(count, includeDeepBranch: count == 1000)
+                : new IndexBuilder().Build(token), false));
         public Task EnsureCollectorAsync(CancellationToken token) => Task.CompletedTask;
         public string ReadStatus(NtfsVolume volume) => "测试磁盘已发现";
     }

@@ -76,6 +76,17 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
 
     internal bool Contains(ulong reference) => reference == 0 || folders.ContainsKey(reference);
 
+    /// <summary>按当前索引校验临时展开的父子关系，返回第一个已删除或移动的目录。</summary>
+    internal ulong? FindBrokenBranch(ulong parent, IEnumerable<ulong> branch)
+    {
+        foreach (ulong id in branch)
+        {
+            if (!folders.TryGetValue(id, out var folder) || folder.Parent?.Id != parent) return id;
+            parent = id;
+        }
+        return null;
+    }
+
     /// <summary>将发生文件变更的父目录归到指定视图根的直接子目录。</summary>
     internal HashSet<ulong> ActivityFolders(ulong viewRoot, IEnumerable<ulong> parents)
     {

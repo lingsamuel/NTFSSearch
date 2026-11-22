@@ -204,6 +204,25 @@ public sealed class SpaceUsageTests
         Assert.Equal(new[] { 11UL }, usage.ActivityFolders(10, parents));
     }
 
+    [Fact]
+    public void DetectsAMovedIntermediateDirectoryEvenWhenTheDeepestDirectoryStillExists()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "left", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "right", isDirectory: true, fileReference: 20, parentReference: 5);
+        builder.Add(@"C:\left\", "middle", isDirectory: true, fileReference: 11, parentReference: 10);
+        builder.Add(@"C:\left\middle\", "deep", isDirectory: true, fileReference: 12, parentReference: 11);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+        Assert.Null(usage.FindBrokenBranch(0, [10, 11, 12]));
+
+        live.Apply(Change(0, new IndexedFileState(11, true, [new(20, @"C:\right\", "middle")])));
+        usage = usage.Update(live.Layers);
+        Assert.True(usage.Contains(12));
+        Assert.Equal(11UL, usage.FindBrokenBranch(0, [10, 11, 12]));
+        Assert.Null(usage.FindBrokenBranch(0, [20, 11, 12]));
+    }
+
     private static LiveTransaction Change(long from, params IndexedFileState[] files) =>
         new(new(1, from), new(1, from + 1), files);
 }

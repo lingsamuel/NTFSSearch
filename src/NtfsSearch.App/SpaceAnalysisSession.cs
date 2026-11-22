@@ -19,6 +19,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private SpaceActivityObservation? observation;
     private HashSet<ulong> visibleFolders = [];
     private ulong[] detailDirectories = [];
+    private ulong[] detailBranch = [];
     private long detailId, lastDetailId;
     private (long RequestId, string Root, ulong Directory, string? Path, string? VolumeKey)? selection;
     private (string Root, ulong[] BreadcrumbIds, string? VolumeKey) pathOrigin;
@@ -55,6 +56,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         latestRequestId = requestId;
         Observe(null);
         detailDirectories = [];
+        detailBranch = [];
         detailId = lastDetailId = 0;
         selection = (requestId, root, directory, path, null);
         work.RequestUser();
@@ -63,11 +65,14 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         TryStart();
     }
 
-    internal void Details(long requestId, long revision, string[]? directoryIds)
+    internal void Details(long requestId, long revision, string[]? directoryIds, string[]? manualDirectoryIds, string[]? branchIds)
     {
         if (selection?.RequestId != requestId || revision <= detailId) return;
         detailId = revision;
-        detailDirectories = directoryIds?.Take(DetailDirectoryLimit).Select(ParseDirectoryId).Distinct().ToArray() ?? [];
+        // 预算只限制自动取数，手动选择的分支可继续逐层请求。
+        detailDirectories = (manualDirectoryIds ?? []).Concat((directoryIds ?? []).Take(DetailDirectoryLimit))
+            .Select(ParseDirectoryId).Distinct().ToArray();
+        detailBranch = branchIds?.Select(ParseDirectoryId).ToArray() ?? [];
         work.RequestRefresh();
         work.RefreshWindowElapsed();
         TryStart();
@@ -198,17 +203,17 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         activeRoot = root;
         cancellation = source;
         task = ExecuteAsync(request, target.RequestId, roots, root, directory, target.Path, selected.Layers!,
-            usage, sameDisplayedVolume ? trail : [], detailId, detailDirectories, changedParents, source);
+            usage, sameDisplayedVolume ? trail : [], detailId, detailDirectories, detailBranch, changedParents, source);
     }
 
     private async Task ExecuteAsync(QueryRequest request, long requestId, string[] roots, string root, ulong directory, string? path,
         IReadOnlyList<SearchIndex> layers, SpaceUsageIndex? previous, ulong[] fallback, long detailsRevision,
-        ulong[] detailsRequested, ulong[] changedParents, CancellationTokenSource source)
+        ulong[] detailsRequested, ulong[] branch, ulong[] changedParents, CancellationTokenSource source)
     {
         SpaceUsageIndex? updated = null;
         SpaceFolder? result = null;
         string? error = null;
-        Dictionary<ulong, SpaceItem[]> details = [];
+        Dictionary<ulong, SpaceItem[]?> details = [];
         HashSet<ulong> affected = [];
         try
         {
@@ -234,7 +239,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 var folder = index.Read(directory, VisibleItems, token);
                 if (changedParents.Length > 0) affected.UnionWith(index.ActivityFolders(directory, changedParents));
                 foreach (ulong id in detailsRequested)
-                    if (id != directory && index.Contains(id)) details.Add(id, index.Read(id, VisibleItems, token).Children);
+                    if (id != directory) details.Add(id, index.Contains(id) ? index.Read(id, VisibleItems, token).Children : null);
+                if (index.FindBrokenBranch(directory, branch) is { } broken) details[broken] = null;
                 return (index, folder, (string?)null);
             }, source.Token);
         }
@@ -299,12 +305,13 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     }
 
     private void Publish(long requestId, string[] roots, string? root, SpaceFolder? folder, string? error,
-        long detailsRevision, Dictionary<ulong, SpaceItem[]> details, ulong[] flashes)
+        long detailsRevision, Dictionary<ulong, SpaceItem[]?> details, ulong[] flashes)
         => publish(new
         {
             Type = "spaceAnalysis", RequestId = requestId, Roots = roots, Root = root, VolumeKey = volumeKey, Error = error,
             DoubleClickMilliseconds = doubleClickMilliseconds, DetailId = detailsRevision,
-            Details = details.ToDictionary(pair => pair.Key.ToString("X16"), pair => SerializeItems(pair.Value)),
+            Details = details.ToDictionary(pair => pair.Key.ToString("X16"),
+                pair => pair.Value is { } items ? SerializeItems(items) : null),
             Flashes = flashes.Select(id => id.ToString("X16")),
             Folder = folder is null ? null : new
             {

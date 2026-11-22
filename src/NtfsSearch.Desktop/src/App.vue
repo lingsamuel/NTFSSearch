@@ -237,9 +237,9 @@ function closeSpace() {
   void nextTick(focusQuery)
 }
 
-function requestSpaceDetails(id: number, directoryIds: string[]) {
+function requestSpaceDetails(id: number, directoryIds: string[], manualDirectoryIds: string[], branchIds: string[]) {
   if (!showingSpace.value || !connected.value || id !== spaceRequestId) return
-  void sendRequest({ type: 'spaceDetails', requestId: id, detailId: ++spaceDetailId, directoryIds })
+  void sendRequest({ type: 'spaceDetails', requestId: id, detailId: ++spaceDetailId, directoryIds, manualDirectoryIds, branchIds })
     .catch(error => { if (id === spaceRequestId) showFeedback(String(error), true) })
 }
 

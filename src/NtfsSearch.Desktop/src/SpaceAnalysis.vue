@@ -17,7 +17,7 @@ const emit = defineEmits<{
   path: [value: string]
   close: []
   reveal: [key: string]
-  details: [requestId: number, directoryIds: string[]]
+  details: [requestId: number, directoryIds: string[], manualDirectoryIds: string[], branchIds: string[]]
 }>()
 
 interface Tile {
@@ -26,6 +26,7 @@ interface Tile {
   level: number
   detailed?: boolean
   preview?: boolean
+  ancestors: SpaceEntry[]
   fraction: number
   left: number
   top: number
@@ -42,7 +43,7 @@ const height = ref(0)
 const hovered = ref<string>()
 const focused = ref<string>()
 const detailLevel = ref(2)
-const expanded = ref<string>()
+const branch = ref<SpaceEntry[]>([])
 const folderHeaderHeight = 24
 const flashTokens = ref<Record<string, number>>({})
 const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -55,7 +56,8 @@ const selectedRoot = computed({
   set: root => emit('view', root),
 })
 const active = computed(() => drawing.value.tiles.find(tile => tile.key === (hovered.value ?? focused.value)))
-const preview = computed(() => drawing.value.tiles.find(tile => tile.level === 1 && tile.item.directoryId === expanded.value))
+const preview = computed(() => branch.value.at(-1))
+const expandedIds = computed(() => new Set(branch.value.map(item => item.directoryId!)))
 let observer: ResizeObserver | undefined
 
 watch(() => props.pending, pending => {
@@ -74,25 +76,27 @@ function openAddress() {
 const drawing = computed(() => {
   const tiles: Tile[] = []
   const requested = new Set<string>()
+  const manual = new Set<string>()
+  if (preview.value?.directoryId) manual.add(preview.value.directoryId)
   const current = folder.value
   if (current) {
     const area = { left: 0, top: 0, width: width.value, height: height.value }
     const roots = layoutSpaceItems(current.children, Number(current.bytes), area)
-      .map(tile => ({ ...tile, key: itemKey(tile.item), level: 1 }))
+      .map(tile => ({ ...tile, key: itemKey(tile.item), level: 1, ancestors: [] }))
     tiles.push(...roots)
-    // 有意展开的分支优先取数据，自动展示使用余下的显示预算。
-    const manual = roots.find(tile => tile.item.directoryId === expanded.value)
-    if (manual) appendDetails(manual, detailLevel.value + 1, true)
-    for (const tile of roots)
-      if (tile !== manual) appendDetails(tile, detailLevel.value, false)
+    for (const tile of roots) appendDetails(tile)
   }
-  return { tiles, ids: [...requested] }
+  return { tiles, ids: [...requested], manualIds: [...manual] }
 
-  function appendDetails(tile: Tile, limit: number, manual: boolean) {
+  function appendDetails(tile: Tile) {
     const id = tile.item.directoryId
-    if (!id || tile.level >= limit || tile.width < (manual ? 36 : 96) || tile.height < (manual ? 42 : 64)) return
-    if (requested.size >= 32 && !requested.has(id)) return
-    requested.add(id)
+    if (!id) return
+    const expanded = expandedIds.value.has(id)
+    if (expanded) manual.add(id)
+    else {
+      if (tile.level >= detailLevel.value || tile.width < 96 || tile.height < 64 || requested.size >= 32) return
+      requested.add(id)
+    }
     const children = props.result?.details[id]
     if (!children) return
     const area = {
@@ -100,31 +104,66 @@ const drawing = computed(() => {
       width: tile.width - 6, height: tile.height - folderHeaderHeight - 3,
     }
     const nested = layoutSpaceItems(children, Number(tile.item.bytes), area)
-    const minimum = manual ? 6 : 12
+    const minimum = expanded ? 6 : 12
+    const ancestors = [...tile.ancestors, tile.item]
     for (const child of nested) {
       if (child.width < minimum || child.height < minimum) continue
       tile.detailed = true
       const next = { ...child, fraction: child.fraction * tile.fraction,
-        key: tile.key + '/' + itemKey(child.item), level: tile.level + 1, preview: manual }
+        key: tile.key + '/' + itemKey(child.item), level: tile.level + 1, preview: expanded, ancestors }
       tiles.push(next)
-      appendDetails(next, limit, manual)
+      appendDetails(next)
     }
+  }
+})
+
+const overflowPreview = computed(() => {
+  const id = preview.value?.directoryId
+  if (!id) return []
+  const children = props.result?.details[id]
+  if (!children?.length) return []
+  const rendered = new Set(drawing.value.tiles.filter(tile => tile.ancestors.at(-1)?.directoryId === id)
+    .map(tile => itemKey(tile.item)))
+  // 原块放不下子目录时，在当前视图内保留继续单击下探的入口。
+  return children.filter(item => rendered.size === 0 || item.directoryId && !rendered.has(itemKey(item)))
+})
+
+const overflowPlacement = computed(() => {
+  const tile = drawing.value.tiles.find(entry => entry.item.directoryId === preview.value?.directoryId)
+  if (!tile) return undefined
+  // 子项列表放到标题另一侧，第一击展开时仍能在同一位置识别第二击。
+  const above = tile.top
+  const below = height.value - tile.top - Math.min(tile.height, folderHeaderHeight)
+  return {
+    top: above > below ? '8px' : 'auto',
+    bottom: above > below ? 'auto' : '8px',
+    maxHeight: Math.max(0, Math.min(230, Math.max(above, below) - 12)) + 'px',
   }
 })
 
 const scene = computed(() => (props.result?.volumeKey ?? '') + '/' + (folder.value?.breadcrumbs.at(-1)?.id ?? ''))
 watch(scene, () => {
   clearTimeout(clickTimer)
-  expanded.value = undefined
+  branch.value = []
   hovered.value = focused.value = undefined
   clearFlashes()
 })
-watch(() => folder.value?.children, items => {
-  if (expanded.value && !items?.some(item => item.directoryId === expanded.value)) expanded.value = undefined
+watch(() => props.result, result => {
+  let entries = result?.folder?.children
+  for (const [index, item] of branch.value.entries()) {
+    if (entries && !entries.some(entry => entry.directoryId === item.directoryId)
+        || result?.details[item.directoryId!] === null) {
+      branch.value = branch.value.slice(0, index)
+      break
+    }
+    entries = result?.details[item.directoryId!] ?? undefined
+  }
 })
-watch([() => props.result?.requestId, () => drawing.value.ids.join(',')], ([requestId, ids], [previousId, previousIds]) => {
-  if (requestId !== undefined && (ids || requestId === previousId && previousIds))
-    emit('details', requestId, ids ? ids.split(',') : [])
+watch([() => props.result?.requestId, () => drawing.value.ids.join(','), () => drawing.value.manualIds.join(','),
+  () => [...expandedIds.value].join(',')],
+  ([requestId, ids, manualIds, branchIds], [previousId, previousIds, previousManualIds]) => {
+  if (requestId !== undefined && (ids || manualIds || requestId === previousId && (previousIds || previousManualIds)))
+    emit('details', requestId, ids ? ids.split(',') : [], manualIds ? manualIds.split(',') : [], branchIds ? branchIds.split(',') : [])
 })
 watch(() => props.result, result => {
   for (const id of result?.flashes ?? []) {
@@ -167,24 +206,34 @@ function title(tile: Tile) {
 }
 
 function clickTile(tile: Tile, event: MouseEvent) {
-  const id = tile.item.directoryId
-  if (!id) {
-    if (tile.item.key) emit('reveal', tile.item.key)
+  const tileTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top
+  clickEntry(tile.item, tile.ancestors, event, event.clientY - tileTop < folderHeaderHeight)
+}
+
+function clickEntry(item: SpaceEntry, ancestors: SpaceEntry[], event: MouseEvent, stableTarget = false) {
+  if (!item.directoryId) {
+    if (item.key) emit('reveal', item.key)
     return
   }
-  if (tile.level !== 1 || event.detail > 1) return
+  if (event.detail > 1) return
   clearTimeout(clickTimer)
-  const toggle = () => { expanded.value = expanded.value === id ? undefined : id }
-  const tileTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top
+  const toggle = () => {
+    branch.value = preview.value?.directoryId === item.directoryId ? ancestors : [...ancestors, item]
+  }
   // 标题区始终留给父目录。点击内部空白时等待双击，防止新子块盖住第二次点击。
-  if (event.detail === 0 || event.clientY - tileTop < folderHeaderHeight) toggle()
+  if (event.detail === 0 || stableTarget) toggle()
   else clickTimer = setTimeout(toggle, (props.result?.doubleClickMilliseconds ?? 500) + 16)
 }
 
-function enterTile(tile: Tile) {
-  if (!tile.item.directoryId) return
+function enterFolder(item: SpaceEntry) {
+  if (!item.directoryId) return
   clearTimeout(clickTimer)
-  emit('view', props.root, tile.item.directoryId)
+  emit('view', props.root, item.directoryId)
+}
+
+function collapsePreview() {
+  clearTimeout(clickTimer)
+  branch.value = branch.value.slice(0, -1)
 }
 
 function detailShortcut(event: KeyboardEvent) {
@@ -249,19 +298,16 @@ onBeforeUnmount(() => {
       <template v-else>
         <button v-for="tile in drawing.tiles" :key="tile.key" type="button" class="space-tile"
           :class="{ directory: tile.item.directoryId, others: !tile.item.key, nested: tile.level > 1, preview: tile.preview,
-            expanded: tile.level === 1 && !!tile.item.directoryId && tile.item.directoryId === expanded }"
+            expanded: tile.item.directoryId && expandedIds.has(tile.item.directoryId) }"
           :aria-disabled="!tile.item.key"
-          :aria-expanded="tile.level === 1 && tile.item.directoryId ? tile.item.directoryId === expanded : undefined"
+          :aria-expanded="tile.item.directoryId ? expandedIds.has(tile.item.directoryId) : undefined"
           :title="title(tile)" :aria-label="title(tile)" :style="{
             left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px',
           }" @mouseenter="hovered = tile.key" @mouseleave="hovered = undefined"
-          @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)" @dblclick="enterTile(tile)"
-          @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterTile(tile))">
+          @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)" @dblclick="enterFolder(tile.item)"
+          @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterFolder(tile.item))">
           <template v-if="tile.width >= 32 && tile.height >= 23">
             <span class="space-tile-name">
-              <i v-if="tile.level === 1 && tile.item.directoryId" class="space-folder-toggle" aria-hidden="true">
-                {{ tile.item.directoryId === expanded ? '−' : '+' }}
-              </i>
               <span>{{ tile.item.name }}</span>
             </span>
             <small v-if="tile.height >= 42 && tile.width >= 47 && !tile.detailed">{{ tile.item.sizeText }}</small>
@@ -272,11 +318,24 @@ onBeforeUnmount(() => {
             :key="flashTokens[tile.item.directoryId]" class="space-flash" aria-hidden="true"
             :style="{ left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px' }"></div>
         </template>
+        <section v-if="preview && overflowPreview.length" class="space-preview-overflow" :aria-label="preview.name"
+          :style="overflowPlacement">
+          <header>
+            <strong>{{ preview.name }}</strong>
+            <button type="button" class="outlined-button" @click="collapsePreview">收起一层</button>
+          </header>
+          <button v-for="item in overflowPreview" :key="itemKey(item)" type="button" class="space-preview-entry"
+            :data-directory-id="item.directoryId" :disabled="!item.key" :title="item.name"
+            @click="clickEntry(item, branch, $event)" @dblclick="enterFolder(item)"
+            @keydown.enter="item.directoryId && ($event.preventDefault(), enterFolder(item))">
+            <span>{{ item.name }}</span><small>{{ item.sizeText }}</small>
+          </button>
+        </section>
       </template>
     </div>
     <footer class="space-details">
-      <span v-if="preview && !pending && !error" class="space-preview-status" role="status" :title="preview.item.name">
-        临时展开 · {{ preview.item.name }}
+      <span v-if="preview && !pending && !error" class="space-preview-status" role="status" :title="preview.name">
+        临时展开 · {{ preview.name }}
       </span>
       <span v-if="active && !pending && !error" :title="title(active)">{{ title(active) }}</span>
       <span v-if="folder?.unknownFiles && !pending" class="space-unknown">
@@ -375,8 +434,20 @@ onBeforeUnmount(() => {
 .space-tile span, .space-tile small, .space-details span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .space-tile-name, .space-tile small { margin: 0 6px; pointer-events: none; }
 .space-tile-name { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
-.space-folder-toggle { flex: none; width: 12px; font-style: normal; text-align: center; }
-.space-tile.expanded .space-folder-toggle { border-radius: 2px; background: var(--accent); color: white; }
+.space-preview-overflow {
+  position: absolute; right: 8px; bottom: 8px; z-index: 3;
+  width: min(360px, calc(100% - 16px)); max-height: min(60%, 230px); overflow: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 2px 10px #19253833;
+}
+.space-preview-overflow header, .space-preview-entry {
+  display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 5px 8px;
+}
+.space-preview-overflow header { position: sticky; top: 0; background: var(--chrome); }
+.space-preview-overflow strong, .space-preview-entry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-preview-overflow header button, .space-preview-entry small { flex: none; }
+.space-preview-entry { width: 100%; border: 0; background: var(--surface); text-align: left; }
+.space-preview-entry:hover { background: var(--accent-quiet); }
 .space-tile small { font-weight: 400; font-variant-numeric: tabular-nums; }
 .space-details { display: flex; align-items: center; gap: 10px; padding: 0 16px; min-width: 0; color: var(--muted); }
 .space-preview-status { flex: 0 1 auto; max-width: 55%; padding: 2px 7px; border-radius: 4px; background: var(--accent-quiet); color: var(--accent); }

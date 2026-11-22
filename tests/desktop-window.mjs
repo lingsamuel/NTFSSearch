@@ -229,6 +229,21 @@ try {
         ${topFolder('目录009')}.getAttribute('aria-expanded') === 'false'`), '切换时收起原目录')
       await evaluate(`${topFolder('目录008')}.click()`)
       await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '再次单击收起')
+      await evaluate(`${topFolder('目录001')}.click()`)
+      for (let depth = 1; depth <= 5; depth++) {
+        const subfolder = `[...document.querySelectorAll('.space-tile.directory.nested, .space-preview-entry[data-directory-id]')]
+          .find(tile => tile.title.startsWith(${JSON.stringify('深层' + depth)}))`
+        await until(() => evaluate(`Boolean(${subfolder})`), '为单击显示第 ' + depth + ' 层目录')
+        await evaluate(`${subfolder}.click()`)
+        await until(() => evaluate(`document.querySelector('.space-preview-status')?.textContent.includes('深层${depth}')`),
+          '在原视图单击展开第 ' + depth + ' 层目录')
+      }
+      assert.equal(await evaluate("document.querySelector('.space-total').title"), '511,488,000 B')
+      assert.equal(await evaluate("document.querySelector('select[aria-label=细节层级]').value"), '1')
+      await evaluate(`${topFolder('目录008')}.click()`)
+      await until(() => evaluate(`${topFolder('目录008')}.getAttribute('aria-expanded') === 'true' &&
+        ${topFolder('目录001')}.getAttribute('aria-expanded') === 'false' &&
+        !document.querySelector('.space-preview-status')?.textContent.includes('深层')`), '切换后收起整条旧分支')
       const { x, y } = await evaluate(`(() => {
         const rect = ${topFolder('目录009')}.getBoundingClientRect();
         return { x: Math.floor(rect.left + 12), y: Math.floor(rect.top + 10) };

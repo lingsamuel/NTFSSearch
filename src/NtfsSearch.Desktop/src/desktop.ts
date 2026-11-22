@@ -60,7 +60,7 @@ export interface SpaceAnalysisResult {
   error: string | null
   doubleClickMilliseconds: number
   detailId: number
-  details: Record<string, SpaceEntry[]>
+  details: Record<string, SpaceEntry[] | null>
   flashes: string[]
   folder: {
     path: string
@@ -90,7 +90,7 @@ export type DesktopRequest =
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }
-  | { type: 'spaceDetails'; requestId: number; detailId: number; directoryIds: string[] }
+  | { type: 'spaceDetails'; requestId: number; detailId: number; directoryIds: string[]; manualDirectoryIds: string[]; branchIds: string[] }
   | { type: 'closeSpaceAnalysis'; requestId: number }
   | { type: 'rescan' | 'cancel' }
   | { type: 'setSkipExitIndexSave'; skipExitIndexSave: boolean }
