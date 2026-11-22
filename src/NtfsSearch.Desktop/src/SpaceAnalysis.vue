@@ -25,6 +25,7 @@ interface Tile {
   key: string
   level: number
   detailed?: boolean
+  preview?: boolean
   fraction: number
   left: number
   top: number
@@ -42,6 +43,7 @@ const hovered = ref<string>()
 const focused = ref<string>()
 const detailLevel = ref(2)
 const expanded = ref<string>()
+const folderHeaderHeight = 24
 const flashTokens = ref<Record<string, number>>({})
 const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let flashSequence = 0
@@ -53,6 +55,7 @@ const selectedRoot = computed({
   set: root => emit('view', root),
 })
 const active = computed(() => drawing.value.tiles.find(tile => tile.key === (hovered.value ?? focused.value)))
+const preview = computed(() => drawing.value.tiles.find(tile => tile.level === 1 && tile.item.directoryId === expanded.value))
 let observer: ResizeObserver | undefined
 
 watch(() => props.pending, pending => {
@@ -87,22 +90,22 @@ const drawing = computed(() => {
 
   function appendDetails(tile: Tile, limit: number, manual: boolean) {
     const id = tile.item.directoryId
-    const headerHeight = 24
     if (!id || tile.level >= limit || tile.width < (manual ? 36 : 96) || tile.height < (manual ? 42 : 64)) return
     if (requested.size >= 32 && !requested.has(id)) return
     requested.add(id)
     const children = props.result?.details[id]
     if (!children) return
     const area = {
-      left: tile.left + 3, top: tile.top + headerHeight,
-      width: tile.width - 6, height: tile.height - headerHeight - 3,
+      left: tile.left + 3, top: tile.top + folderHeaderHeight,
+      width: tile.width - 6, height: tile.height - folderHeaderHeight - 3,
     }
     const nested = layoutSpaceItems(children, Number(tile.item.bytes), area)
+    const minimum = manual ? 6 : 12
     for (const child of nested) {
-      if (child.width < 12 || child.height < 12) continue
+      if (child.width < minimum || child.height < minimum) continue
       tile.detailed = true
       const next = { ...child, fraction: child.fraction * tile.fraction,
-        key: tile.key + '/' + itemKey(child.item), level: tile.level + 1 }
+        key: tile.key + '/' + itemKey(child.item), level: tile.level + 1, preview: manual }
       tiles.push(next)
       appendDetails(next, limit, manual)
     }
@@ -172,8 +175,9 @@ function clickTile(tile: Tile, event: MouseEvent) {
   if (tile.level !== 1 || event.detail > 1) return
   clearTimeout(clickTimer)
   const toggle = () => { expanded.value = expanded.value === id ? undefined : id }
-  // 等系统双击间隔结束再铺子块，否则第二次点击可能落在刚出现的子块上。
-  if (event.detail === 0) toggle()
+  const tileTop = (event.currentTarget as HTMLElement).getBoundingClientRect().top
+  // 标题区始终留给父目录。点击内部空白时等待双击，防止新子块盖住第二次点击。
+  if (event.detail === 0 || event.clientY - tileTop < folderHeaderHeight) toggle()
   else clickTimer = setTimeout(toggle, (props.result?.doubleClickMilliseconds ?? 500) + 16)
 }
 
@@ -244,7 +248,7 @@ onBeforeUnmount(() => {
       </div>
       <template v-else>
         <button v-for="tile in drawing.tiles" :key="tile.key" type="button" class="space-tile"
-          :class="{ directory: tile.item.directoryId, others: !tile.item.key, nested: tile.level > 1,
+          :class="{ directory: tile.item.directoryId, others: !tile.item.key, nested: tile.level > 1, preview: tile.preview,
             expanded: tile.level === 1 && !!tile.item.directoryId && tile.item.directoryId === expanded }"
           :aria-disabled="!tile.item.key"
           :aria-expanded="tile.level === 1 && tile.item.directoryId ? tile.item.directoryId === expanded : undefined"
@@ -254,7 +258,12 @@ onBeforeUnmount(() => {
           @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)" @dblclick="enterTile(tile)"
           @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterTile(tile))">
           <template v-if="tile.width >= 32 && tile.height >= 23">
-            <span>{{ tile.item.name }}</span>
+            <span class="space-tile-name">
+              <i v-if="tile.level === 1 && tile.item.directoryId" class="space-folder-toggle" aria-hidden="true">
+                {{ tile.item.directoryId === expanded ? '−' : '+' }}
+              </i>
+              <span>{{ tile.item.name }}</span>
+            </span>
             <small v-if="tile.height >= 42 && tile.width >= 47 && !tile.detailed">{{ tile.item.sizeText }}</small>
           </template>
         </button>
@@ -266,6 +275,9 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <footer class="space-details">
+      <span v-if="preview && !pending && !error" class="space-preview-status" role="status" :title="preview.item.name">
+        临时展开 · {{ preview.item.name }}
+      </span>
       <span v-if="active && !pending && !error" :title="title(active)">{{ title(active) }}</span>
       <span v-if="folder?.unknownFiles && !pending" class="space-unknown">
         {{ formatCount(folder.unknownFiles) }} 个文件的大小未知
@@ -344,7 +356,8 @@ onBeforeUnmount(() => {
 }
 .space-tile.directory { background: #dce6ff; color: #223e84; font-weight: 600; }
 .space-tile.directory.nested { background: #cddcff; }
-.space-tile.expanded { box-shadow: inset 0 0 0 2px var(--accent); }
+.space-tile.expanded { box-shadow: inset 0 0 0 2px var(--accent); background: #c5d7ff; }
+.space-tile.preview:not(.directory):not(.others) { background: #c3e6dd; }
 .space-tile.others { background: #e6ebf3; color: #4e5b71; cursor: default; }
 .space-tile:hover { filter: brightness(.96); }
 .space-tile:focus-visible { outline-offset: -2px; }
@@ -360,9 +373,12 @@ onBeforeUnmount(() => {
 @keyframes space-activity { from { opacity: 1; } to { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .space-flash { animation: none; } }
 .space-tile span, .space-tile small, .space-details span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.space-tile span, .space-tile small { margin: 0 6px; }
-.space-tile span { margin-top: 4px; }
+.space-tile-name, .space-tile small { margin: 0 6px; pointer-events: none; }
+.space-tile-name { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
+.space-folder-toggle { flex: none; width: 12px; font-style: normal; text-align: center; }
+.space-tile.expanded .space-folder-toggle { border-radius: 2px; background: var(--accent); color: white; }
 .space-tile small { font-weight: 400; font-variant-numeric: tabular-nums; }
 .space-details { display: flex; align-items: center; gap: 10px; padding: 0 16px; min-width: 0; color: var(--muted); }
+.space-preview-status { flex: 0 1 auto; max-width: 55%; padding: 2px 7px; border-radius: 4px; background: var(--accent-quiet); color: var(--accent); }
 .space-unknown { margin-left: auto; color: var(--warning); }
 </style>

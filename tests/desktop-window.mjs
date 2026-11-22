@@ -186,6 +186,21 @@ try {
       })()`), '多个目录自动显示内部结构')
       assert.equal(automatic, true)
       assert.equal(await evaluate("document.querySelectorAll('.space-flash').length"), 0)
+      const clickFolderHeader = name => evaluate(`(async () => {
+        const tile = ${topFolder(name)};
+        const rect = tile.getBoundingClientRect();
+        tile.dispatchEvent(new MouseEvent('click', { detail: 1, clientY: rect.top + 10, bubbles: true }));
+        await Promise.resolve();
+        return { expanded: tile.getAttribute('aria-expanded'), preview: document.querySelector('.space-preview-status')?.textContent };
+      })()`)
+      const preview = await clickFolderHeader('目录009')
+      assert.equal(preview.expanded, 'true', '默认两层时单击目录标题立即展开')
+      assert.ok(preview.preview?.includes('目录009'), '内容已自动展示时仍有明确的临时展开提示')
+      const nextPreview = await clickFolderHeader('目录008')
+      assert.equal(nextPreview.expanded, 'true')
+      assert.ok(nextPreview.preview?.includes('目录008'))
+      assert.equal(await evaluate(`${topFolder('目录009')}.getAttribute('aria-expanded')`), 'false')
+      assert.equal((await clickFolderHeader('目录008')).expanded, 'false')
       await cdp('Emulation.setDeviceMetricsOverride', { width: 480, height: 170, deviceScaleFactor: 1, mobile: false })
       await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '狭小空间自动收起细节')
       await cdp('Emulation.clearDeviceMetricsOverride')
