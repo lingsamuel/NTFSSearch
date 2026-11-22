@@ -2,7 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
 export type SortField = 0 | 1 | 2 | 3
-export type FileAction = 'open' | 'reveal' | 'copy'
+export type FileAction = 'open' | 'openWith' | 'reveal' | 'copy'
 
 export interface SearchRow {
   key: string
@@ -41,14 +41,20 @@ export interface IndexStatus {
   error: string | null
 }
 
+export interface SpaceExclusion {
+  volumeKey: string
+  path: string
+  key: string
+}
+
 export interface SpaceEntry {
   directoryId: string | null
+  fileReference: string | null
   name: string
   count: number
   key: string | null
   bytes: string
   sizeText: string
-  sizeBytesText: string
 }
 
 export interface SpaceAnalysisResult {
@@ -64,12 +70,13 @@ export interface SpaceAnalysisResult {
   detailId: number
   details: Record<string, SpaceEntry[] | null>
   flashes: string[]
+  exclusionRevision: number
+  exclusions: SpaceExclusion[]
   folder: {
     path: string
     breadcrumbs: { id: string; name: string }[]
     bytes: string
     sizeText: string
-    sizeBytesText: string
     unknownFiles: number
     isEmpty: boolean
     children: SpaceEntry[]
@@ -93,6 +100,8 @@ export type DesktopRequest =
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }
   | { type: 'spaceDetails'; requestId: number; detailId: number; directoryIds: string[]; manualDirectoryIds: string[]; branchIds: string[] }
+  | { type: 'spaceExclude'; requestId: number; volumeKey: string; key: string; fileReference: string | null }
+  | { type: 'spaceRestore'; requestId: number; volumeKey?: string; key?: string }
   | { type: 'closeSpaceAnalysis'; requestId: number }
   | { type: 'rescan' | 'cancel' }
   | { type: 'setSkipExitIndexSave'; skipExitIndexSave: boolean }

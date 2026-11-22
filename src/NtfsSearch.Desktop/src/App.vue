@@ -7,7 +7,7 @@ import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
   formatCount, listenToBackend, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
-  type SpaceAnalysisResult,
+  type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
 } from './desktop'
 
 const queryInput = ref<HTMLInputElement>()
@@ -83,7 +83,8 @@ function receive(message: DesktopMessage) {
     case 'spaceAnalysis':
       if (!showingSpace.value || message.requestId !== spaceRequestId) return
       if (message.detailId < spaceDetailId && space.value?.requestId === message.requestId
-          && space.value.volumeKey === message.volumeKey && space.value.folder?.path === message.folder?.path)
+          && space.value.volumeKey === message.volumeKey && space.value.folder?.path === message.folder?.path
+          && space.value.exclusionRevision === message.exclusionRevision)
         space.value = { ...message, details: space.value.details }
       else space.value = message
       spaceRoot.value = message.root ?? ''
@@ -243,6 +244,18 @@ function requestSpaceDetails(id: number, directoryIds: string[], manualDirectory
     .catch(error => { if (id === spaceRequestId) showFeedback(String(error), true) })
 }
 
+function excludeSpaceItem(item: SpaceEntry) {
+  const current = space.value
+  if (!current?.volumeKey || current.requestId !== spaceRequestId || !item.key) return
+  sendAction({ type: 'spaceExclude', requestId: current.requestId, volumeKey: current.volumeKey,
+    key: item.key, fileReference: item.fileReference })
+}
+
+function restoreSpaceItems(item?: SpaceExclusion) {
+  if (space.value?.requestId !== spaceRequestId) return
+  sendAction({ type: 'spaceRestore', requestId: spaceRequestId, volumeKey: item?.volumeKey, key: item?.key })
+}
+
 function sendAction(request: DesktopRequest) {
   if (!connected.value || saving.value) return
   showFeedback('')
@@ -331,7 +344,7 @@ onBeforeUnmount(() => {
       :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
       :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
       @details="requestSpaceDetails"
-      @reveal="sendAction({ type: 'reveal', key: $event })" />
+      @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
     <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>
       <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>

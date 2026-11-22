@@ -18,6 +18,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private readonly int doubleClickHeight = OperatingSystem.IsWindows() ? GetSystemMetricsForDpi(37, 96) : 4;
     private readonly object activityGate = new();
     private readonly HashSet<ulong> pendingParents = [];
+    private readonly Dictionary<(string Volume, string Path), SpaceExclusion> exclusions = [];
+    private long exclusionRevision;
     private SpaceActivityObservation? observation;
     private HashSet<ulong> visibleFolders = [];
     private ulong[] detailDirectories = [];
@@ -80,6 +82,33 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         TryStart();
     }
 
+    internal void Exclude(long requestId, string? key, string pathKey, string? fileReference)
+    {
+        if (selection?.RequestId != requestId || key is null || key != displayedVolumeKey) return;
+        string path = DesktopFileActions.DecodePath(pathKey);
+        ulong? reference = fileReference is null ? null : ulong.Parse(fileReference, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        if (exclusions.TryAdd((key, path), new(path, reference))) ExclusionsChanged();
+    }
+
+    internal void Restore(long requestId, string? key, string pathKey)
+    {
+        if (selection?.RequestId != requestId) return;
+        if (pathKey.Length == 0)
+        {
+            if (exclusions.Count == 0) return;
+            exclusions.Clear();
+        }
+        else if (key is null || !exclusions.Remove((key, DesktopFileActions.DecodePath(pathKey)))) return;
+        ExclusionsChanged();
+    }
+
+    private void ExclusionsChanged()
+    {
+        exclusionRevision++;
+        work.RequestUser();
+        TryStart();
+    }
+
     internal bool QueueActivity(SpaceActivityObservation source, IReadOnlyCollection<ulong> parents)
     {
         lock (activityGate)
@@ -127,6 +156,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         if (requestId < latestRequestId) return;
         latestRequestId = requestId;
         selection = null;
+        exclusions.Clear();
         Observe(null);
         visibleFolders.Clear();
         trail = [];
@@ -205,12 +235,13 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         activeRoot = root;
         cancellation = source;
         task = ExecuteAsync(request, target.RequestId, roots, root, directory, target.Path, selected.Layers!,
-            usage, sameDisplayedVolume ? trail : [], detailId, detailDirectories, detailBranch, changedParents, source);
+            usage, sameDisplayedVolume ? trail : [], detailId, detailDirectories, detailBranch, changedParents,
+            exclusions.Where(entry => entry.Key.Volume == key).Select(entry => entry.Value).ToArray(), source);
     }
 
     private async Task ExecuteAsync(QueryRequest request, long requestId, string[] roots, string root, ulong directory, string? path,
         IReadOnlyList<SearchIndex> layers, SpaceUsageIndex? previous, ulong[] fallback, long detailsRevision,
-        ulong[] detailsRequested, ulong[] branch, ulong[] changedParents, CancellationTokenSource source)
+        ulong[] detailsRequested, ulong[] branch, ulong[] changedParents, SpaceExclusion[] excluded, CancellationTokenSource source)
     {
         SpaceUsageIndex? updated = null;
         SpaceFolder? result = null;
@@ -225,6 +256,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 if (changedParents.Length > 0 && previous is not null)
                     affected = previous.ActivityFolders(directory, changedParents);
                 var index = previous?.Update(layers, token) ?? SpaceUsageIndex.Create(root, layers, token);
+                var filter = index.CreateFilter(excluded, token);
                 if (path is not null)
                 {
                     var (found, ambiguous) = index.FindDirectory(path, token);
@@ -234,16 +266,20 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                             : "索引中找不到此目录，请确认路径指向已索引的文件夹。";
                         return (index, null, reason);
                     }
+                    if (index.IsExcluded(found.Value, filter))
+                        return (index, null, "该目录已临时排除，请先恢复。");
                     directory = found.Value;
                 }
-                else if (!index.Contains(directory))
-                    directory = fallback.Reverse().FirstOrDefault(index.Contains);
-                var folder = index.Read(directory, VisibleItems, token);
+                else if (!IsVisible(directory))
+                    directory = fallback.Reverse().FirstOrDefault(IsVisible);
+                var folder = index.Read(directory, VisibleItems, token, filter);
                 if (changedParents.Length > 0) affected.UnionWith(index.ActivityFolders(directory, changedParents));
                 foreach (ulong id in detailsRequested)
-                    if (id != directory) details.Add(id, index.Contains(id) ? index.Read(id, VisibleItems, token).Children : null);
+                    if (id != directory) details.Add(id, IsVisible(id) ? index.Read(id, VisibleItems, token, filter).Children : null);
                 if (index.FindBrokenBranch(directory, branch) is { } broken) details[broken] = null;
                 return (index, folder, (string?)null);
+
+                bool IsVisible(ulong id) => index.Contains(id) && !index.IsExcluded(id, filter);
             }, source.Token);
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested) { }
@@ -315,13 +351,17 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
             DoubleClickHeight = doubleClickHeight, DetailId = detailsRevision,
             Details = details.ToDictionary(pair => pair.Key.ToString("X16"),
                 pair => pair.Value is { } items ? SerializeItems(items) : null),
-            Flashes = flashes.Select(id => id.ToString("X16")),
+            Flashes = flashes.Select(id => id.ToString("X16")), ExclusionRevision = exclusionRevision,
+            Exclusions = exclusions.Select(entry => new
+            {
+                VolumeKey = entry.Key.Volume, entry.Value.Path, Key = DesktopFileActions.EncodePath(entry.Value.Path)
+            }),
             Folder = folder is null ? null : new
             {
                 folder.Path,
                 Breadcrumbs = folder.Breadcrumbs.Select(crumb => new { Id = crumb.Id.ToString("X16"), crumb.Name }),
                 Bytes = folder.Bytes.ToString(CultureInfo.InvariantCulture), SizeText = FileSizeDisplay.Format(folder.Bytes),
-                SizeBytesText = $"{folder.Bytes:N0} B", folder.UnknownFiles, folder.IsEmpty,
+                folder.UnknownFiles, folder.IsEmpty,
                 Children = SerializeItems(folder.Children)
             }
         });
@@ -329,10 +369,10 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private static IEnumerable<object> SerializeItems(IEnumerable<SpaceItem> items)
         => items.Select(item => new
         {
-            DirectoryId = item.DirectoryId?.ToString("X16"), item.Name, item.Count,
+            DirectoryId = item.DirectoryId?.ToString("X16"), FileReference = item.FileReference?.ToString("X16"),
+            item.Name, item.Count,
             Key = item.Path is { } path ? DesktopFileActions.EncodePath(path) : null,
-            Bytes = item.Bytes.ToString(CultureInfo.InvariantCulture), SizeText = FileSizeDisplay.Format(item.Bytes),
-            SizeBytesText = $"{item.Bytes:N0} B"
+            Bytes = item.Bytes.ToString(CultureInfo.InvariantCulture), SizeText = FileSizeDisplay.Format(item.Bytes)
         });
 
     [DllImport("user32")] private static extern uint GetDoubleClickTime();

@@ -163,6 +163,12 @@ internal sealed class DesktopSession
                 case "spaceDetails":
                     spaceAnalysis.Details(request.RequestId, request.DetailId, request.DirectoryIds, request.ManualDirectoryIds, request.BranchIds);
                     break;
+                case "spaceExclude":
+                    spaceAnalysis.Exclude(request.RequestId, request.VolumeKey, request.Key, request.FileReference);
+                    break;
+                case "spaceRestore":
+                    spaceAnalysis.Restore(request.RequestId, request.VolumeKey, request.Key);
+                    break;
                 case "closeSpaceAnalysis":
                     spaceAnalysis.Close(request.RequestId);
                     break;
@@ -182,6 +188,9 @@ internal sealed class DesktopSession
                     PublishStatus();
                     break;
                 case "open":
+                case "openWith":
+                    _ = OpenFileAsync(request);
+                    break;
                 case "reveal":
                 case "copy":
                     DesktopFileActions.Run(request.Type, request.Key, request.WindowHandle);
@@ -193,6 +202,12 @@ internal sealed class DesktopSession
             }
         }
         catch (Exception error) { PublishError("action", error.Message); }
+    }
+
+    private async Task OpenFileAsync(DesktopRequest request)
+    {
+        try { await DesktopFileActions.OpenAsync(request.Key, request.Type == "openWith"); }
+        catch (Exception error) { Post(() => PublishError("action", error.Message)); }
     }
 
     private async Task PublishFileTypeIconsAsync(string[] extensions, CancellationToken token)
@@ -368,5 +383,5 @@ internal sealed class DesktopSession
         bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null,
         string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null,
         long DetailId = 0, string[]? DirectoryIds = null, string[]? ManualDirectoryIds = null, string[]? BranchIds = null,
-        bool SkipExitIndexSave = false);
+        bool SkipExitIndexSave = false, string? FileReference = null);
 }

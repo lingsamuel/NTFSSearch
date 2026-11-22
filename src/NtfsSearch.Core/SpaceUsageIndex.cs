@@ -3,7 +3,7 @@ namespace NtfsSearch.Core;
 internal sealed record SpaceFolder(string Path, SpaceBreadcrumb[] Breadcrumbs, Int128 Bytes, long UnknownFiles,
     bool IsEmpty, SpaceItem[] Children);
 internal sealed record SpaceBreadcrumb(ulong Id, string Name);
-internal sealed record SpaceItem(ulong? DirectoryId, string Name, string? Path, Int128 Bytes, long Count = 1);
+internal sealed record SpaceItem(ulong? DirectoryId, string Name, string? Path, Int128 Bytes, long Count = 1, ulong? FileReference = null);
 
 // 一个后台工作任务独占当前卷。索引层只读，统计只为目录保存对象。
 internal sealed partial class SpaceUsageIndex(string rootPath)
@@ -120,12 +120,13 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
     }
 
     /// <summary>在当前卷的目录树上匹配已规范化的绝对路径，包括自身没有记录的目录锚。</summary>
-    internal (ulong? Id, bool Ambiguous) FindDirectory(string fullPath, CancellationToken token = default)
+    internal (ulong? Id, bool Ambiguous) FindDirectory(string fullPath, CancellationToken token = default,
+        bool exactOnly = false)
     {
         if (!fullPath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return default;
         var relative = fullPath.AsSpan(rootPath.Length).TrimEnd('\\');
         var exact = FindDirectory(relative, StringComparison.Ordinal, token);
-        return exact.Id.HasValue || exact.Ambiguous ? exact : FindDirectory(relative, StringComparison.OrdinalIgnoreCase, token);
+        return exactOnly || exact.Id.HasValue || exact.Ambiguous ? exact : FindDirectory(relative, StringComparison.OrdinalIgnoreCase, token);
     }
 
     private (ulong? Id, bool Ambiguous) FindDirectory(ReadOnlySpan<char> path, StringComparison comparison, CancellationToken token)
@@ -154,16 +155,18 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
         return (match, false);
     }
 
-    internal SpaceFolder Read(ulong reference, int limit, CancellationToken token = default)
+    internal SpaceFolder Read(ulong reference, int limit, CancellationToken token = default, Filter? filter = null)
     {
         var folder = reference == 0 ? root : folders[reference];
         var breadcrumbs = Breadcrumbs(folder);
         string path = string.Join('\\', breadcrumbs.Select(crumb => crumb.Name.TrimEnd('\\'))) + "\\";
         var biggest = new PriorityQueue<Candidate, Int128>();
+        Usage total = folder.Usage - (filter?.Totals.GetValueOrDefault(folder.Id) ?? default);
         long count = 0;
+        bool hasDirectory = false;
         void Offer(Candidate candidate, Int128 size)
         {
-            if (size <= 0) return;
+            if (size <= 0 || candidate.Index is { } index && filter?.Files.Contains((index, candidate.Id)) == true) return;
             count++;
             if (biggest.Count < limit) biggest.Enqueue(candidate, size);
             else biggest.EnqueueDequeue(candidate, size);
@@ -172,24 +175,26 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
         for (var child = folder.FirstChild; child is not null; child = child.NextSibling)
         {
             token.ThrowIfCancellationRequested();
-            Offer(new(child, null, 0), child.Usage.Bytes);
+            if (filter?.Directories.Contains(child.Id) == true) continue;
+            hasDirectory = true;
+            Offer(new(child, null, 0), child.Usage.Bytes - (filter?.Totals.GetValueOrDefault(child.Id).Bytes ?? 0));
         }
         foreach (var layer in layers)
             layer.OfferFiles(folder.Id, Offer, token);
 
-        Int128 remainder = folder.Usage.Bytes;
+        Int128 remainder = total.Bytes;
         long otherCount = count - biggest.Count;
         var entries = new SpaceItem[biggest.Count + (otherCount > 0 ? 1 : 0)];
         Span<char> nameScratch = stackalloc char[255];
         for (int i = biggest.Count - 1; biggest.TryDequeue(out var item, out var size); i--)
         {
             string name = item.Folder is { } child ? child.Name.ToString() : item.Index!.Name(item.Id, nameScratch).ToString();
-            entries[i] = new(item.Folder?.Id, name, path + name, size);
+            entries[i] = new(item.Folder?.Id, name, path + name, size, FileReference: item.Index?.FileReferences![item.Id]);
             remainder -= size;
         }
         if (otherCount > 0) entries[^1] = new(null, "其他", null, remainder, otherCount);
-        return new(folder == root ? path : path[..^1], breadcrumbs, folder.Usage.Bytes, folder.Usage.Unknown,
-            folder.DirectFiles == 0 && folder.FirstChild is null, entries);
+        return new(folder == root ? path : path[..^1], breadcrumbs, total.Bytes, total.Unknown,
+            !hasDirectory && folder.DirectFiles == (filter?.DirectFiles.GetValueOrDefault(folder.Id) ?? 0), entries);
     }
 
     private static SpaceBreadcrumb[] Breadcrumbs(Folder folder)
@@ -256,7 +261,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
     private static Usage ReadSize(SearchIndex index, int id)
         => index.Records[id].HasSize ? new(index.Size(id), 0) : new(0, 1);
 
-    private readonly record struct Usage(Int128 Bytes, long Unknown)
+    internal readonly record struct Usage(Int128 Bytes, long Unknown)
     {
         public static Usage operator +(Usage left, Usage right) => new(left.Bytes + right.Bytes, left.Unknown + right.Unknown);
         public static Usage operator -(Usage left, Usage right) => new(left.Bytes - right.Bytes, left.Unknown - right.Unknown);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatCount, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry } from './desktop'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { formatCount, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion } from './desktop'
 import { layoutSpaceItems } from './space-treemap'
 
 const props = defineProps<{
@@ -16,7 +16,9 @@ const emit = defineEmits<{
   view: [root: string, directoryId?: string]
   path: [value: string]
   close: []
-  reveal: [key: string]
+  action: [type: FileAction, key: string]
+  exclude: [item: SpaceEntry]
+  restore: [item?: SpaceExclusion]
   details: [requestId: number, directoryIds: string[], manualDirectoryIds: string[], branchIds: string[]]
 }>()
 
@@ -36,6 +38,9 @@ interface Tile {
 
 const map = ref<HTMLDivElement>()
 const back = ref<HTMLButtonElement>()
+const tileMenu = ref<HTMLDivElement>()
+const exclusionPanel = ref<HTMLDivElement>()
+const menuItem = ref<SpaceEntry>()
 const address = ref('')
 const addressEdited = ref(false)
 const width = ref(0)
@@ -123,6 +128,7 @@ watch(scene, () => {
   branch.value = []
   hovered.value = focused.value = undefined
   clearFlashes()
+  tileMenu.value?.hidePopover()
 })
 watch(() => props.result, result => {
   let entries = result?.folder?.children
@@ -175,16 +181,60 @@ function itemKey(item: SpaceEntry) {
   return item.directoryId ?? item.key ?? 'other'
 }
 
-function title(tile: Tile, size = tile.item.sizeText) {
-  const { item, fraction } = tile
+function sizeAndShare(tile: Tile) {
+  return tile.item.sizeText + ' (' + formatter.format(tile.fraction) + ')'
+}
+
+function tileTitle(tile: Tile, includeShare = false) {
+  const { item } = tile
   const name = item.key ? item.name : '其他 ' + formatCount(item.count) + ' 项'
-  return name + ' · ' + size + ' · ' + formatter.format(fraction)
+  return name + ' · ' + (includeShare ? sizeAndShare(tile) : item.sizeText)
+}
+
+function showPopover(element: HTMLElement | undefined, left: number, top: number) {
+  if (!element) return
+  if (!element.matches(':popover-open')) element.showPopover()
+  element.style.left = Math.max(4, Math.min(left, window.innerWidth - element.offsetWidth - 4)) + 'px'
+  element.style.top = Math.max(4, Math.min(top, window.innerHeight - element.offsetHeight - 4)) + 'px'
+  element.querySelector('button')?.focus({ preventScroll: true })
+}
+
+async function openTileMenu(tile: Tile, event: MouseEvent | KeyboardEvent) {
+  if (!tile.item.key || props.pending || props.pathPending) return
+  if (event instanceof KeyboardEvent && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+  event.preventDefault()
+  previousClick = undefined
+  const target = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  menuItem.value = tile.item
+  await nextTick()
+  if (event instanceof MouseEvent && (event.clientX || event.clientY))
+    showPopover(tileMenu.value, event.clientX, event.clientY)
+  else
+    showPopover(tileMenu.value, target.left + 12, target.bottom)
+}
+
+function chooseTileAction(action: FileAction | 'exclude') {
+  const item = menuItem.value
+  tileMenu.value?.hidePopover()
+  if (!item?.key) return
+  if (action === 'exclude') emit('exclude', item)
+  else emit('action', action, item.key)
+}
+
+function toggleExclusions(event: MouseEvent) {
+  const panel = exclusionPanel.value
+  if (panel?.matches(':popover-open')) {
+    panel.hidePopover()
+    return
+  }
+  const button = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  showPopover(panel, button.left, button.bottom + 4)
 }
 
 function clickTile(tile: Tile, event: MouseEvent) {
   const { item, ancestors } = tile
   if (!item.directoryId) {
-    if (item.key) emit('reveal', item.key)
+    if (item.key) emit('action', 'reveal', item.key)
     return
   }
   branch.value = preview.value?.directoryId === item.directoryId ? ancestors : [...ancestors, item]
@@ -252,7 +302,11 @@ onBeforeUnmount(() => {
       <select v-model.number="detailLevel" class="scope-select space-level" aria-label="细节层级">
         <option v-for="level in 3" :key="level" :value="level">细节 {{ level }} 层</option>
       </select>
-      <span v-if="folder && !pending" class="space-total" :title="folder.sizeBytesText">逻辑大小 <strong>{{ folder.sizeText }}</strong></span>
+      <button v-if="result?.exclusions.length" type="button" class="outlined-button"
+        :disabled="pending || pathPending" popovertarget="space-exclusions" @click.prevent="toggleExclusions">
+        已排除 {{ formatCount(result.exclusions.length) }} 项
+      </button>
+      <span v-if="folder && !pending" class="space-total">逻辑大小 <strong>{{ folder.sizeText }}</strong></span>
     </header>
     <form class="space-address" @submit.prevent="openAddress">
       <div class="space-address-field">
@@ -282,19 +336,21 @@ onBeforeUnmount(() => {
         <button v-for="tile in drawing.tiles" :key="tile.key" type="button" class="space-tile"
           :data-tile-key="tile.key"
           :class="{ directory: tile.item.directoryId, others: !tile.item.key, nested: tile.level > 1, preview: tile.preview,
-            expanded: tile.item.directoryId && expandedIds.has(tile.item.directoryId) }"
+            expanded: tile.item.directoryId && expandedIds.has(tile.item.directoryId), detailed: tile.detailed }"
           :aria-disabled="!tile.item.key"
           :aria-expanded="tile.item.directoryId ? expandedIds.has(tile.item.directoryId) : undefined"
-          :title="title(tile, tile.item.sizeBytesText)" :aria-label="title(tile)" :style="{
+          :title="tileTitle(tile)" :aria-label="tileTitle(tile, true)" :style="{
             left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px',
           }" @mouseenter="hovered = tile.key" @mouseleave="hovered = undefined"
           @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)"
+          @contextmenu.prevent="openTileMenu(tile, $event)" @keydown="openTileMenu(tile, $event)"
           @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterFolder(tile.item))">
           <template v-if="tile.width >= 32 && tile.height >= 23">
             <span class="space-tile-name">
               <span>{{ tile.item.name }}</span>
+              <small v-if="tile.detailed && tile.width >= 128">{{ sizeAndShare(tile) }}</small>
             </span>
-            <small v-if="tile.height >= 42 && tile.width >= 47 && !tile.detailed">{{ tile.item.sizeText }}</small>
+            <small v-if="tile.height >= 42 && tile.width >= 47 && !tile.detailed">{{ sizeAndShare(tile) }}</small>
           </template>
         </button>
         <template v-for="tile in drawing.tiles" :key="'flash/' + tile.key">
@@ -305,11 +361,28 @@ onBeforeUnmount(() => {
       </template>
     </div>
     <footer class="space-details">
-      <span v-if="active && !pending && !error" :title="title(active, active.item.sizeBytesText)">{{ title(active) }}</span>
+      <span v-if="active && !pending && !error" :title="tileTitle(active)">{{ tileTitle(active, true) }}</span>
       <span v-if="folder?.unknownFiles && !pending" class="space-unknown">
         {{ formatCount(folder.unknownFiles) }} 个文件的大小未知
       </span>
     </footer>
+    <div ref="tileMenu" class="file-menu space-popover" popover role="group" aria-label="文件操作">
+      <template v-if="menuItem">
+        <button type="button" @click="chooseTileAction('open')">打开</button>
+        <button v-if="!menuItem.directoryId" type="button" @click="chooseTileAction('openWith')">打开方式…</button>
+        <button type="button" @click="chooseTileAction('exclude')">临时排除</button>
+      </template>
+    </div>
+    <div v-if="result?.exclusions.length" id="space-exclusions" ref="exclusionPanel"
+      class="file-menu space-popover space-exclusions" popover role="group" aria-label="临时排除项">
+      <ul>
+        <li v-for="item in result.exclusions" :key="item.volumeKey + '/' + item.key">
+          <span :title="item.path">{{ item.path }}</span>
+          <button type="button" :aria-label="'恢复 ' + item.path" @click="emit('restore', item)">恢复</button>
+        </li>
+      </ul>
+      <button type="button" @click="emit('restore')">全部恢复</button>
+    </div>
   </section>
 </template>
 
@@ -383,7 +456,7 @@ onBeforeUnmount(() => {
 }
 .space-tile.directory { background: #dce6ff; color: #223e84; font-weight: 600; }
 .space-tile.directory.nested { background: #cddcff; }
-.space-tile.expanded { box-shadow: inset 0 0 0 2px var(--accent); background: #c5d7ff; }
+.space-tile.expanded { background: #c5d7ff; }
 .space-tile.preview:not(.directory):not(.others) { background: #c3e6dd; }
 .space-tile.others { background: #e6ebf3; color: #4e5b71; cursor: default; }
 .space-tile:hover { filter: brightness(.96); }
@@ -402,7 +475,17 @@ onBeforeUnmount(() => {
 .space-tile span, .space-tile small, .space-details span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .space-tile-name, .space-tile small { margin: 0 6px; pointer-events: none; }
 .space-tile-name { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
+.space-tile-name small { flex: none; margin: 0 0 0 auto; }
 .space-tile small { font-weight: 400; font-variant-numeric: tabular-nums; }
 .space-details { display: flex; align-items: center; gap: 10px; padding: 0 16px; min-width: 0; color: var(--muted); }
 .space-unknown { margin-left: auto; color: var(--warning); }
+
+.space-popover { margin: 0; inset: auto; color: inherit; }
+.space-popover:not(:popover-open) { display: none; }
+.space-exclusions { width: min(420px, calc(100vw - 8px)); }
+.space-exclusions ul { margin: 0; padding: 0; list-style: none; max-height: min(300px, 55vh); overflow: auto; }
+.space-exclusions li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 5px 2px 8px; }
+.space-exclusions li span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.space-exclusions li button { flex: none; }
+.space-exclusions > button { border-top: 1px solid var(--border); }
 </style>

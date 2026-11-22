@@ -223,6 +223,72 @@ public sealed class SpaceUsageTests
         Assert.Null(usage.FindBrokenBranch(0, [20, 11, 12]));
     }
 
+    [Fact]
+    public void ExclusionsRecalculateAncestorTotalsAndPromoteSmallerItems()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "games", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(@"C:\games\", "cache", isDirectory: true, fileReference: 11, parentReference: 10);
+        builder.Add(@"C:\games\", "large", 90, fileReference: 12, parentReference: 10);
+        builder.Add(@"C:\games\", "small", 6, fileReference: 14, parentReference: 10);
+        builder.Add(@"C:\games\", "smaller", 3, fileReference: 15, parentReference: 10);
+        builder.Add(@"C:\games\cache\", "nested", 40, fileReference: 16, parentReference: 11);
+        builder.Add(@"C:\games\cache\", "unknown", fileReference: 17, parentReference: 11);
+        var usage = SpaceUsageIndex.Create(Root, [builder.Build()]);
+        SpaceExclusion large = new(@"C:\games\large", 12);
+        SpaceExclusion cache = new(@"C:\games\cache", null);
+        SpaceExclusion nested = new(@"C:\games\cache\nested", 16);
+
+        var filter = usage.CreateFilter([large, cache, nested]);
+        var root = usage.Read(0, 1, filter: filter);
+        Assert.Equal(9, root.Bytes);
+        Assert.Equal(0, root.UnknownFiles);
+        Assert.Equal(9, Assert.Single(root.Children).Bytes);
+        var games = usage.Read(10, 1, filter: filter);
+        Assert.Equal("small", games.Children[0].Name);
+        Assert.Equal(3, games.Children[1].Bytes);
+        Assert.Equal(1, games.Children[1].Count);
+        Assert.True(usage.IsExcluded(11, filter));
+
+        filter = usage.CreateFilter([large, nested]);
+        Assert.False(usage.IsExcluded(11, filter));
+        root = usage.Read(0, 1, filter: filter);
+        Assert.Equal(9, root.Bytes);
+        Assert.Equal(1, root.UnknownFiles);
+        Assert.False(usage.Read(11, 1, filter: filter).IsEmpty);
+        Assert.Equal(139, usage.Read(0, 1).Bytes);
+    }
+
+    [Fact]
+    public void AFileExclusionUsesTheLatestSizeOfOnlyTheSelectedHardLink()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "left", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "right", isDirectory: true, fileReference: 20, parentReference: 5);
+        builder.Add(@"C:\left\", "shared", 9, fileReference: 11, parentReference: 10);
+        builder.Add(@"C:\right\", "shared", 9, fileReference: 11, parentReference: 20);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+        SpaceExclusion entry = new(@"C:\left\shared", 11);
+
+        var filter = usage.CreateFilter([entry]);
+        Assert.Equal(9, usage.Read(0, 1, filter: filter).Bytes);
+        Assert.True(usage.Read(10, 1, filter: filter).IsEmpty);
+        live.Apply(Change(0, new IndexedFileState(11, false,
+            [new(10, @"C:\left\", "shared"), new(20, @"C:\right\", "shared")], 23)));
+        usage = usage.Update(live.Layers);
+        filter = usage.CreateFilter([entry]);
+        Assert.Equal(23, usage.Read(0, 1, filter: filter).Bytes);
+        Assert.Equal(@"C:\right\shared", Assert.Single(usage.Read(20, 1, filter: filter).Children).Path);
+
+        live.Apply(Change(1, new IndexedFileState(11, false, [new(20, @"C:\right\", "shared")], 23),
+            new IndexedFileState(12, false, [new(10, @"C:\left\", "shared")], 50)));
+        usage = usage.Update(live.Layers);
+        filter = usage.CreateFilter([entry]);
+        Assert.Equal(23, usage.Read(0, 1, filter: filter).Bytes);
+        Assert.True(usage.Read(10, 1, filter: filter).IsEmpty);
+    }
+
     private static LiveTransaction Change(long from, params IndexedFileState[] files) =>
         new(new(1, from), new(1, from + 1), files);
 }

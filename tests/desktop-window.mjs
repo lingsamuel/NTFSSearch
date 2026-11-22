@@ -185,7 +185,7 @@ try {
         return results.scrollTop;
       })()`)
       await evaluate("document.querySelector('button[aria-label=空间分析]').click()")
-      await until(() => evaluate("document.querySelector('.space-total')?.title === '511,488,000 B'"), '卷根逻辑大小')
+      await until(() => evaluate("document.querySelector('.space-total strong')?.textContent === '487.79 MB'"), '卷根逻辑大小')
       const topFolder = name => `[...document.querySelectorAll('.space-tile.directory:not(.nested)')]
         .find(tile => tile.title.includes(${JSON.stringify(name)}))`
       const automatic = await until(() => evaluate(`(() => {
@@ -222,7 +222,7 @@ try {
       assert.equal(await clickFolder('目录009', true), 'true', '点目录内部也立即响应')
       await until(() => evaluate(`${topFolder('目录009')}.getAttribute('aria-expanded') === 'true' &&
         document.querySelectorAll('.space-tile.nested').length > 0`), '单击临时展开')
-      assert.equal(await evaluate("document.querySelector('.space-total').title"), '511,488,000 B')
+      assert.equal(await evaluate("document.querySelector('.space-total strong').textContent"), '487.79 MB')
       await evaluate(`${topFolder('目录008')}.click()`)
       await until(() => evaluate(`${topFolder('目录008')}.getAttribute('aria-expanded') === 'true' &&
         ${topFolder('目录009')}.getAttribute('aria-expanded') === 'false'`), '切换时收起原目录')
@@ -238,7 +238,7 @@ try {
         await until(() => evaluate(`${subfolder}?.getAttribute('aria-expanded') === 'true'`),
           '在原视图单击展开第 ' + depth + ' 层目录')
       }
-      assert.equal(await evaluate("document.querySelector('.space-total').title"), '511,488,000 B')
+      assert.equal(await evaluate("document.querySelector('.space-total strong').textContent"), '487.79 MB')
       assert.equal(await evaluate("document.querySelector('select[aria-label=细节层级]').value"), '1')
       await evaluate(`${topFolder('目录008')}.click()`)
       await until(() => evaluate(`${topFolder('目录008')}.getAttribute('aria-expanded') === 'true' &&
@@ -269,7 +269,7 @@ try {
           })()`), '首击展开后，在同一位置点击会命中新子块')
         }
       }
-      await until(() => evaluate("document.querySelector('.space-total')?.title === '97,228,800 B'"), '下钻目录逻辑大小')
+      await until(() => evaluate("document.querySelector('.space-total strong')?.textContent === '92.72 MB'"), '下钻目录逻辑大小')
       await until(() => evaluate("document.querySelectorAll('.space-tile').length === 100"), '下钻文件矩形')
       assert.equal(await evaluate(`Array.from(document.querySelectorAll('.space-tile')).every(tile => {
         const rect = tile.getBoundingClientRect();
@@ -278,7 +278,7 @@ try {
       })`), true)
       await screenshot('space-analysis.png')
       await evaluate("document.querySelector('.space-breadcrumb button').click()")
-      await until(() => evaluate("document.querySelector('.space-total')?.title === '511,488,000 B'"), '面包屑返回卷根')
+      await until(() => evaluate("document.querySelector('.space-total strong')?.textContent === '487.79 MB'"), '面包屑返回卷根')
       const address = 'input[aria-label="目录路径"]'
       const readAddress = () => evaluate(`document.querySelector(${JSON.stringify(address)}).value`)
       const openAddress = (path, draft, pendingDrive) => evaluate(`(() => {
@@ -300,12 +300,12 @@ try {
       })()`)
       assert.equal(await readAddress(), 'C:\\')
       await openAddress('"c:\\演示\\目录009\\"')
-      await until(() => evaluate("document.querySelector('.space-total')?.title === '97,228,800 B'"), '粘贴地址下钻')
+      await until(() => evaluate("document.querySelector('.space-total strong')?.textContent === '92.72 MB'"), '粘贴地址下钻')
       assert.equal(await readAddress(), 'C:\\演示\\目录009')
       await openAddress('C:\\演示\\不存在')
       await until(() => evaluate("document.querySelector('.space-path-feedback')?.textContent.includes('找不到')"), '无效目录提示')
       assert.equal(await readAddress(), 'C:\\演示\\不存在')
-      assert.equal(await evaluate("document.querySelector('.space-total').title"), '97,228,800 B')
+      assert.equal(await evaluate("document.querySelector('.space-total strong').textContent"), '92.72 MB')
       await openAddress('无效地址', undefined, 'D:\\')
       await until(() => evaluate("document.querySelector('.space-path-feedback')?.textContent.includes('绝对目录路径')"), '处理切卷期间的无效地址')
       assert.equal(await evaluate("document.querySelector('select[aria-label=分析磁盘]').value"), 'C:\\')
@@ -314,6 +314,57 @@ try {
       assert.equal(await readAddress(), 'C:\\下一条输入')
       await openAddress('D:')
       await until(async () => await readAddress() === 'D:\\', '确认后同步地址栏')
+
+      const tileMenu = 'document.querySelector(".space-popover[aria-label=文件操作]:popover-open")'
+      const excluded = 'document.querySelector("[popovertarget=space-exclusions]")'
+      const restorePanel = 'document.querySelector("#space-exclusions:popover-open")'
+      const menuLabels = () => evaluate(`Array.from(${tileMenu}.querySelectorAll('button'), button => button.textContent.trim())`)
+      const excludeTile = () => evaluate(`${tileMenu}.querySelector('button:last-child').click()`)
+      await openAddress('C:')
+      await until(() => evaluate(`Boolean(${topFolder('目录009')})`), '返回测试目录')
+      assert.match(await evaluate(`${topFolder('目录009')}.title`), /92\.72 MB$/)
+      assert.match(await evaluate(`${topFolder('目录009')}.textContent`), /92\.72 MB \([\d.]+%\)/)
+      const folderShadow = () => evaluate(`getComputedStyle(${topFolder('目录009')}).boxShadow`)
+      const originalShadow = await folderShadow()
+      await clickFolder('目录009')
+      assert.equal(await folderShadow(), originalShadow)
+      await evaluate(`${topFolder('目录009')}.dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 150, bubbles: true, cancelable: true }))`)
+      await until(() => evaluate(`Boolean(${tileMenu})`), '目录右键操作')
+      assert.deepEqual(await menuLabels(), ['打开', '临时排除'])
+      await excludeTile()
+      await until(() => evaluate(`!${topFolder('目录009')} && Boolean(${excluded})`), '隐藏目录并重新排版')
+      assert.equal(await evaluate("document.querySelector('.space-total strong').textContent"), '395.07 MB')
+      await openAddress('C:\\演示\\目录009')
+      await until(() => evaluate("document.querySelector('.space-path-feedback')?.textContent.includes('已临时排除')"), '排除目录的地址反馈')
+      await openAddress('D:')
+      await until(async () => await readAddress() === 'D:\\', '切换至其他盘')
+      await evaluate(`${excluded}.click()`)
+      await until(() => evaluate(`Boolean(${restorePanel})`), '跨盘查看排除项')
+      await evaluate(`${restorePanel}.querySelector('li button').click()`)
+      await until(() => evaluate(`!${excluded}`), '恢复单个排除项')
+      await openAddress('C:\\演示\\目录009')
+      await until(() => evaluate("document.querySelectorAll('.space-tile').length === 100"), '恢复目录及文件')
+      const firstFile = 'document.querySelector(".space-tile[data-tile-key]")'
+      const openFileMenu = () => evaluate(`${firstFile}.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'F10', shiftKey: true, bubbles: true, cancelable: true
+      }))`)
+      await openFileMenu()
+      await until(() => evaluate(`Boolean(${tileMenu})`), '文件键盘菜单')
+      assert.deepEqual(await menuLabels(), ['打开', '打开方式…', '临时排除'])
+      await excludeTile()
+      await until(() => evaluate("document.querySelectorAll('.space-tile').length === 99"), '文件排除')
+      await evaluate(`${excluded}.click()`)
+      await until(() => evaluate(`Boolean(${restorePanel})`), '打开恢复列表')
+      await evaluate(`${restorePanel}.querySelector(':scope > button').click()`)
+      await until(() => evaluate("document.querySelectorAll('.space-tile').length === 100"), '全部恢复')
+      await openFileMenu()
+      await until(() => evaluate(`Boolean(${tileMenu})`), '重新打开文件菜单')
+      await excludeTile()
+      await until(() => evaluate(`Boolean(${excluded})`), '再次排除文件')
+      await evaluate("document.querySelector('button[aria-label=返回搜索]').click()")
+      await evaluate("document.querySelector('button[aria-label=空间分析]').click()")
+      await until(() => evaluate("document.querySelector('.space-total strong')?.textContent === '487.79 MB'"), '开始新会话')
+      assert.equal(await evaluate(`Boolean(${excluded})`), false)
       await evaluate("document.querySelector('button[aria-label=返回搜索]').click()")
       assert.equal(await evaluate(`(${resultCount})() === ${JSON.stringify(expected(total))}`), true)
       assert.equal(await evaluate("document.querySelector('.results-scroll').scrollTop"), scrollBeforeAnalysis)
