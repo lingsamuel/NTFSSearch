@@ -189,13 +189,12 @@ internal sealed class DesktopSession
                     break;
                 case "open":
                 case "openWith":
-                    _ = OpenFileAsync(request);
-                    break;
                 case "reveal":
+                    _ = RunShellActionAsync(request);
+                    break;
                 case "copy":
-                    DesktopFileActions.Run(request.Type, request.Key, request.WindowHandle);
-                    if (request.Type == "copy")
-                        publish(new { Type = "notice", Message = "已复制完整路径" });
+                    DesktopFileActions.Copy(request.Key, request.WindowHandle);
+                    publish(new { Type = "notice", Message = "已复制完整路径" });
                     break;
                 default:
                     throw new ArgumentException("未知的桌面操作。");
@@ -204,9 +203,9 @@ internal sealed class DesktopSession
         catch (Exception error) { PublishError("action", error.Message); }
     }
 
-    private async Task OpenFileAsync(DesktopRequest request)
+    private async Task RunShellActionAsync(DesktopRequest request)
     {
-        try { await DesktopFileActions.OpenAsync(request.Key, request.Type == "openWith"); }
+        try { await DesktopFileActions.RunShellActionAsync(request.Type, request.Key); }
         catch (Exception error) { Post(() => PublishError("action", error.Message)); }
     }
 

@@ -11,7 +11,7 @@ internal static class DesktopFileActions
 
     internal static string DecodePath(string key) => new(MemoryMarshal.Cast<byte, char>(Convert.FromBase64String(key)));
 
-    internal static Task OpenAsync(string key, bool chooseApplication)
+    internal static Task RunShellActionAsync(string action, string key)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // 在 STA 线程调用资源管理器，Shell 处理程序响应期间桌面仍能继续处理消息。
@@ -20,13 +20,11 @@ internal static class DesktopFileActions
             try
             {
                 string path = DecodePath(key);
-                if (chooseApplication) OpenWith(path);
-                else
+                switch (action)
                 {
-                    const int noAssociation = 1155;
-                    try { using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-                    catch (Win32Exception error) when (error.NativeErrorCode == noAssociation)
-                    { OpenWith(path); }
+                    case "open": Open(path); break;
+                    case "openWith": OpenWith(path); break;
+                    case "reveal": Reveal(path); break;
                 }
                 completion.SetResult();
             }
@@ -37,20 +35,21 @@ internal static class DesktopFileActions
         return completion.Task;
     }
 
-    internal static void Run(string action, string key, long windowHandle)
+    internal static void Copy(string key, long windowHandle) => CopyPath(DecodePath(key), (nint)windowHandle);
+
+    private static void Open(string path)
     {
-        string path = DecodePath(key);
-        switch (action)
-        {
-            case "reveal":
-                var start = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
-                start.ArgumentList.Add("/select," + path);
-                using (Process.Start(start)) { }
-                break;
-            case "copy":
-                CopyPath(path, (nint)windowHandle);
-                break;
-        }
+        const int noAssociation = 1155;
+        try { using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
+        catch (Win32Exception error) when (error.NativeErrorCode == noAssociation) { OpenWith(path); }
+    }
+
+    private static void Reveal(string path)
+    {
+        // 将完整的 Shell 条目标识交给资源管理器，避免命令行把路径里的空格或逗号当作分隔符。
+        Marshal.ThrowExceptionForHR(SHParseDisplayName(path, 0, out nint item, 0, 0));
+        try { Marshal.ThrowExceptionForHR(SHOpenFolderAndSelectItems(item, 0, 0, 0)); }
+        finally { Marshal.FreeCoTaskMem(item); }
     }
 
     private static void OpenWith(string path)
@@ -93,6 +92,10 @@ internal static class DesktopFileActions
         finally { if (memory != 0) GlobalFree(memory); }
     }
 
+    [DllImport("shell32", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int SHParseDisplayName(string name, nint bindContext, out nint item,
+        uint attributes, nint returnedAttributes);
+    [DllImport("shell32")] private static extern int SHOpenFolderAndSelectItems(nint folder, uint count, nint items, uint flags);
     [DllImport("kernel32", SetLastError = true)] private static extern nint GlobalAlloc(uint flags, nuint bytes);
     [DllImport("kernel32", SetLastError = true)] private static extern nint GlobalLock(nint memory);
     [DllImport("kernel32")] private static extern bool GlobalUnlock(nint memory);

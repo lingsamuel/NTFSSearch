@@ -382,6 +382,13 @@ try {
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))")
     await until(() => evaluate("document.querySelector('.operation-feedback.error')?.textContent.length > 1"), '打开不存在的结果反馈')
     await evaluate("document.querySelector('button[aria-label=关闭提示]').click()")
+    if (mode === '--desktop-test') {
+      await evaluate("document.querySelector('tbody tr').dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 115, bubbles: true, cancelable: true }))")
+      await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 3"), '重新打开结果菜单')
+      await evaluate("[...document.querySelectorAll('[role=menuitem]')].find(button => button.textContent.trim() === '打开所在目录').click()")
+      await until(() => evaluate("document.querySelector('.operation-feedback.error')?.textContent.length > 1"), '定位不存在的文件反馈')
+      await evaluate("document.querySelector('button[aria-label=关闭提示]').click()")
+    }
     await screenshot('desktop.png')
     await evaluate("document.querySelector('.index-toggle').click()")
     await until(() => evaluate("document.querySelector('#index-panel .volume-list li')?.textContent.includes('C:')"), '逐卷索引状态')
