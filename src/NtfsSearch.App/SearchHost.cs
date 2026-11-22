@@ -16,6 +16,12 @@ internal sealed class SearchHost
     internal CollectorMetrics? Metrics => windowsBackend?.Metrics;
     internal event Action? StatusChanged;
     internal event Action<string, bool>? Progress;
+    internal event Action<SpaceActivityObservation, IReadOnlyCollection<ulong>>? FileActivity;
+
+    internal void ObserveAnalysisVolume(SpaceActivityObservation? observation)
+    {
+        if (windowsBackend is { } backend) backend.AnalysisObservation = observation;
+    }
 
     internal SearchHost(int? demoCount = null, string? cacheDirectory = null)
     {
@@ -39,6 +45,7 @@ internal sealed class SearchHost
         var backend = new MemoryVolumeBackend(catalog, ReadStartup(token), cacheDirectory);
         backend.StatusChanged += () => StatusChanged?.Invoke();
         backend.Progress += (message, failure) => Progress?.Invoke(message, failure);
+        backend.FileActivity += (key, parents) => FileActivity?.Invoke(key, parents);
         windowsBackend = backend;
         await backend.RunAsync(token);
     }

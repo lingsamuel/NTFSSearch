@@ -24,6 +24,8 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog, IEnumer
 
     internal event Action? StatusChanged;
     internal event Action<string, bool>? Progress;
+    internal event Action<SpaceActivityObservation, IReadOnlyCollection<ulong>>? FileActivity;
+    internal volatile SpaceActivityObservation? AnalysisObservation;
 
     internal IReadOnlyList<VolumeStatus> Statuses
     {

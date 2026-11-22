@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { formatCount, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry } from './desktop'
+import { layoutSpaceItems } from './space-treemap'
 
 const props = defineProps<{
   result?: SpaceAnalysisResult
@@ -16,10 +17,14 @@ const emit = defineEmits<{
   path: [value: string]
   close: []
   reveal: [key: string]
+  details: [requestId: number, directoryIds: string[]]
 }>()
 
 interface Tile {
   item: SpaceEntry
+  key: string
+  level: number
+  detailed?: boolean
   fraction: number
   left: number
   top: number
@@ -35,13 +40,19 @@ const width = ref(0)
 const height = ref(0)
 const hovered = ref<string>()
 const focused = ref<string>()
+const detailLevel = ref(2)
+const expanded = ref<string>()
+const flashTokens = ref<Record<string, number>>({})
+const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let flashSequence = 0
+let clickTimer: ReturnType<typeof setTimeout> | undefined
 const formatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 })
 const folder = computed(() => props.result?.folder)
 const selectedRoot = computed({
   get: () => props.root,
   set: root => emit('view', root),
 })
-const active = computed(() => tiles.value.find(tile => itemKey(tile.item) === (hovered.value ?? focused.value)))
+const active = computed(() => drawing.value.tiles.find(tile => tile.key === (hovered.value ?? focused.value)))
 let observer: ResizeObserver | undefined
 
 watch(() => props.pending, pending => {
@@ -57,43 +68,77 @@ function openAddress() {
   emit('path', address.value)
 }
 
-const tiles = computed(() => {
+const drawing = computed(() => {
+  const tiles: Tile[] = []
+  const requested = new Set<string>()
   const current = folder.value
-  if (!current || width.value <= 0 || height.value <= 0 || !current.children.length) return []
-  const total = Number(current.bytes)
-  const items = current.children.map(item => ({ item, fraction: Number(item.bytes) / total }))
-    .sort((left, right) => right.fraction - left.fraction)
-  const rectangles: Tile[] = []
-  split(0, items.length, 1, 0, 0, width.value, height.value)
-  return rectangles
+  if (current) {
+    const area = { left: 0, top: 0, width: width.value, height: height.value }
+    const roots = layoutSpaceItems(current.children, Number(current.bytes), area)
+      .map(tile => ({ ...tile, key: itemKey(tile.item), level: 1 }))
+    tiles.push(...roots)
+    // 有意展开的分支优先取数据，自动展示使用余下的显示预算。
+    const manual = roots.find(tile => tile.item.directoryId === expanded.value)
+    if (manual) appendDetails(manual, detailLevel.value + 1, true)
+    for (const tile of roots)
+      if (tile !== manual) appendDetails(tile, detailLevel.value, false)
+  }
+  return { tiles, ids: [...requested] }
 
-  function split(start: number, end: number, total: number, left: number, top: number, width: number, height: number) {
-    if (start + 1 === end) {
-      rectangles.push({ ...items[start], left, top, width, height })
-      return
+  function appendDetails(tile: Tile, limit: number, manual: boolean) {
+    const id = tile.item.directoryId
+    const headerHeight = 24
+    if (!id || tile.level >= limit || tile.width < (manual ? 36 : 96) || tile.height < (manual ? 42 : 64)) return
+    if (requested.size >= 32 && !requested.has(id)) return
+    requested.add(id)
+    const children = props.result?.details[id]
+    if (!children) return
+    const area = {
+      left: tile.left + 3, top: tile.top + headerHeight,
+      width: tile.width - 6, height: tile.height - headerHeight - 3,
     }
-
-    // 沿长边切分成权重接近的两组，递归排布。每次切割的面积比例等于该组的大小比例。
-    let middle = start + 1
-    let weight = items[start].fraction
-    while (middle < end - 1 && weight + items[middle].fraction / 2 < total / 2)
-      weight += items[middle++].fraction
-    // 极小的条目仍由独立的权重计算，避免从接近 1 的数中相减丢失精度。
-    let remaining = 0
-    for (let index = middle; index < end; index++) remaining += items[index].fraction
-    const ratio = weight / (weight + remaining)
-    const otherRatio = remaining / (weight + remaining)
-    if (width >= height) {
-      const cut = width * ratio
-      split(start, middle, weight, left, top, cut, height)
-      split(middle, end, remaining, left + cut, top, width * otherRatio, height)
-    } else {
-      const cut = height * ratio
-      split(start, middle, weight, left, top, width, cut)
-      split(middle, end, remaining, left, top + cut, width, height * otherRatio)
+    const nested = layoutSpaceItems(children, Number(tile.item.bytes), area)
+    for (const child of nested) {
+      if (child.width < 12 || child.height < 12) continue
+      tile.detailed = true
+      const next = { ...child, fraction: child.fraction * tile.fraction,
+        key: tile.key + '/' + itemKey(child.item), level: tile.level + 1 }
+      tiles.push(next)
+      appendDetails(next, limit, manual)
     }
   }
 })
+
+const scene = computed(() => (props.result?.volumeKey ?? '') + '/' + (folder.value?.breadcrumbs.at(-1)?.id ?? ''))
+watch(scene, () => {
+  clearTimeout(clickTimer)
+  expanded.value = undefined
+  hovered.value = focused.value = undefined
+  clearFlashes()
+})
+watch(() => folder.value?.children, items => {
+  if (expanded.value && !items?.some(item => item.directoryId === expanded.value)) expanded.value = undefined
+})
+watch([() => props.result?.requestId, () => drawing.value.ids.join(',')], ([requestId, ids], [previousId, previousIds]) => {
+  if (requestId !== undefined && (ids || requestId === previousId && previousIds))
+    emit('details', requestId, ids ? ids.split(',') : [])
+})
+watch(() => props.result, result => {
+  for (const id of result?.flashes ?? []) {
+    clearTimeout(flashTimers.get(id))
+    flashTokens.value[id] = ++flashSequence
+    flashTimers.set(id, setTimeout(() => {
+      delete flashTokens.value[id]
+      flashTimers.delete(id)
+    }, 450))
+  }
+})
+
+function clearFlashes() {
+  flashTimers.forEach(timer => clearTimeout(timer))
+  flashTimers.clear()
+  flashTokens.value = {}
+}
 
 const message = computed(() => {
   if (props.error) return '无法分析空间：' + props.error
@@ -118,9 +163,31 @@ function title(tile: Tile) {
   return name + ' · ' + item.sizeBytesText + ' · ' + formatter.format(fraction)
 }
 
-function activate(item: SpaceEntry) {
-  if (item.directoryId) emit('view', props.root, item.directoryId)
-  else if (item.key) emit('reveal', item.key)
+function clickTile(tile: Tile, event: MouseEvent) {
+  const id = tile.item.directoryId
+  if (!id) {
+    if (tile.item.key) emit('reveal', tile.item.key)
+    return
+  }
+  if (tile.level !== 1 || event.detail > 1) return
+  clearTimeout(clickTimer)
+  const toggle = () => { expanded.value = expanded.value === id ? undefined : id }
+  // 等系统双击间隔结束再铺子块，否则第二次点击可能落在刚出现的子块上。
+  if (event.detail === 0) toggle()
+  else clickTimer = setTimeout(toggle, (props.result?.doubleClickMilliseconds ?? 500) + 16)
+}
+
+function enterTile(tile: Tile) {
+  if (!tile.item.directoryId) return
+  clearTimeout(clickTimer)
+  emit('view', props.root, tile.item.directoryId)
+}
+
+function detailShortcut(event: KeyboardEvent) {
+  if (!event.ctrlKey || event.target instanceof HTMLInputElement) return
+  if (event.key !== '+' && event.key !== '=' && event.key !== '-') return
+  event.preventDefault()
+  detailLevel.value = Math.max(1, Math.min(3, detailLevel.value + (event.key === '-' ? -1 : 1)))
 }
 
 onMounted(() => {
@@ -131,16 +198,23 @@ onMounted(() => {
   if (map.value) observer.observe(map.value)
   back.value?.focus()
 })
-onBeforeUnmount(() => observer?.disconnect())
+onBeforeUnmount(() => {
+  observer?.disconnect()
+  clearTimeout(clickTimer)
+  clearFlashes()
+})
 </script>
 
 <template>
-  <section class="space-workspace" aria-label="空间分析">
+  <section class="space-workspace" aria-label="空间分析" @keydown="detailShortcut">
     <header class="space-toolbar">
       <button ref="back" type="button" class="outlined-button" aria-label="返回搜索" @click="emit('close')">返回搜索</button>
       <select v-model="selectedRoot" class="scope-select" aria-label="分析磁盘" :disabled="!result?.roots.length">
         <option v-if="!result?.roots.length" value="">等待索引</option>
         <option v-for="drive in result?.roots" :key="drive" :value="drive">{{ drive }}</option>
+      </select>
+      <select v-model.number="detailLevel" class="scope-select space-level" aria-label="细节层级">
+        <option v-for="level in 3" :key="level" :value="level">细节 {{ level }} 层</option>
       </select>
       <span v-if="folder && !pending" class="space-total" :title="folder.sizeBytesText">逻辑大小 <strong>{{ folder.sizeText }}</strong></span>
     </header>
@@ -169,17 +243,26 @@ onBeforeUnmount(() => observer?.disconnect())
           @click="emit('view', root, folder?.breadcrumbs.at(-1)?.id)">重试</button>
       </div>
       <template v-else>
-        <button v-for="tile in tiles" :key="itemKey(tile.item)" type="button" class="space-tile"
-          :class="{ directory: tile.item.directoryId, others: !tile.item.key }" :aria-disabled="!tile.item.key"
+        <button v-for="tile in drawing.tiles" :key="tile.key" type="button" class="space-tile"
+          :class="{ directory: tile.item.directoryId, others: !tile.item.key, nested: tile.level > 1,
+            expanded: tile.level === 1 && !!tile.item.directoryId && tile.item.directoryId === expanded }"
+          :aria-disabled="!tile.item.key"
+          :aria-expanded="tile.level === 1 && tile.item.directoryId ? tile.item.directoryId === expanded : undefined"
           :title="title(tile)" :aria-label="title(tile)" :style="{
             left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px',
-          }" @mouseenter="hovered = itemKey(tile.item)" @mouseleave="hovered = undefined"
-          @focus="focused = itemKey(tile.item)" @blur="focused = undefined" @click="activate(tile.item)">
+          }" @mouseenter="hovered = tile.key" @mouseleave="hovered = undefined"
+          @focus="focused = tile.key" @blur="focused = undefined" @click="clickTile(tile, $event)" @dblclick="enterTile(tile)"
+          @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterTile(tile))">
           <template v-if="tile.width >= 32 && tile.height >= 23">
             <span>{{ tile.item.name }}</span>
-            <small v-if="tile.height >= 42 && tile.width >= 47">{{ tile.item.sizeText }}</small>
+            <small v-if="tile.height >= 42 && tile.width >= 47 && !tile.detailed">{{ tile.item.sizeText }}</small>
           </template>
         </button>
+        <template v-for="tile in drawing.tiles" :key="'flash/' + tile.key">
+          <div v-if="tile.level === 1 && tile.item.directoryId && flashTokens[tile.item.directoryId]"
+            :key="flashTokens[tile.item.directoryId]" class="space-flash" aria-hidden="true"
+            :style="{ left: tile.left + 'px', top: tile.top + 'px', width: tile.width + 'px', height: tile.height + 'px' }"></div>
+        </template>
       </template>
     </div>
     <footer class="space-details">
@@ -209,6 +292,7 @@ onBeforeUnmount(() => observer?.disconnect())
   background: var(--chrome);
 }
 .space-toolbar button { height: 39px; white-space: nowrap; }
+.space-level { min-width: 94px; }
 .space-total { margin-left: auto; white-space: nowrap; color: var(--muted); }
 .space-total strong { margin-left: 6px; color: #192538; font-variant-numeric: tabular-nums; }
 
@@ -259,9 +343,22 @@ onBeforeUnmount(() => observer?.disconnect())
   text-align: left;
 }
 .space-tile.directory { background: #dce6ff; color: #223e84; font-weight: 600; }
+.space-tile.directory.nested { background: #cddcff; }
+.space-tile.expanded { box-shadow: inset 0 0 0 2px var(--accent); }
 .space-tile.others { background: #e6ebf3; color: #4e5b71; cursor: default; }
 .space-tile:hover { filter: brightness(.96); }
-.space-tile:focus-visible { z-index: 1; outline-offset: -2px; }
+.space-tile:focus-visible { outline-offset: -2px; }
+.space-flash {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 3px #e89e20;
+  background: #ffd88055;
+  animation: space-activity 450ms ease-out both;
+}
+@keyframes space-activity { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .space-flash { animation: none; } }
 .space-tile span, .space-tile small, .space-details span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .space-tile span, .space-tile small { margin: 0 6px; }
 .space-tile span { margin-top: 4px; }

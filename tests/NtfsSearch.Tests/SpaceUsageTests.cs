@@ -179,6 +179,31 @@ public sealed class SpaceUsageTests
         Assert.Null(SpaceUsageIndex.NormalizeLocalPath("C:Game"));
     }
 
+    [Fact]
+    public void FileActivityIncludesBothSidesOfMovesAndWritesWithoutSizeChanges()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(Root, "left", isDirectory: true, fileReference: 10, parentReference: 5);
+        builder.Add(Root, "right", isDirectory: true, fileReference: 20, parentReference: 5);
+        builder.Add(@"C:\left\", "nested", isDirectory: true, fileReference: 11, parentReference: 10);
+        builder.Add(@"C:\left\nested\", "item", 7, fileReference: 15, parentReference: 11);
+        var live = new LiveVolumeIndex(builder.Build(), new(1, 0));
+        var usage = SpaceUsageIndex.Create(Root, live.Layers);
+        var parents = new HashSet<ulong>();
+        var write = Change(0, new IndexedFileState(15, false, [new(11, @"C:\left\nested\", "item")], 7));
+        live.CollectFileParents(write, parents);
+        Assert.False(live.Apply(write));
+        Assert.Equal(new[] { 10UL }, usage.ActivityFolders(0, parents));
+
+        var move = Change(1, new IndexedFileState(15, false, [new(20, @"C:\right\", "item")], 7),
+            new IndexedFileState(16, false, [new(11, @"C:\left\nested\", "new")], 9));
+        live.CollectFileParents(move, parents);
+        Assert.True(live.Apply(move));
+        usage = usage.Update(live.Layers);
+        Assert.Equal(new[] { 10UL, 20UL }, usage.ActivityFolders(0, parents).Order());
+        Assert.Equal(new[] { 11UL }, usage.ActivityFolders(10, parents));
+    }
+
     private static LiveTransaction Change(long from, params IndexedFileState[] files) =>
         new(new(1, from), new(1, from + 1), files);
 }

@@ -24,6 +24,7 @@ internal sealed class DesktopSession
     private string? indexError;
     private bool refreshing, discoveryComplete, collectionCancelled, saveOnExit;
     private int catalogNoticeQueued;
+    private int catalogRefreshRequested;
 
     internal DesktopSession(SearchHost host, Action<object> publish)
     {
@@ -36,6 +37,10 @@ internal sealed class DesktopSession
     {
         using var lifetime = new CancellationTokenSource();
         host.Catalog.Changed += QueueCatalogRefresh;
+        host.FileActivity += (observation, parents) =>
+        {
+            if (spaceAnalysis.QueueActivity(observation, parents)) QueueRefresh();
+        };
         host.StatusChanged += () => Post(() =>
         {
             discoveryComplete = true;
@@ -148,6 +153,9 @@ internal sealed class DesktopSession
                 case "spacePath":
                     spaceAnalysis.ViewPath(request.RequestId, request.Path, request.Root, request.BreadcrumbIds, request.VolumeKey);
                     break;
+                case "spaceDetails":
+                    spaceAnalysis.Details(request.RequestId, request.DetailId, request.DirectoryIds);
+                    break;
                 case "closeSpaceAnalysis":
                     spaceAnalysis.Close(request.RequestId);
                     break;
@@ -216,12 +224,18 @@ internal sealed class DesktopSession
 
     private void QueueCatalogRefresh()
     {
+        Interlocked.Exchange(ref catalogRefreshRequested, 1);
+        QueueRefresh();
+    }
+
+    private void QueueRefresh()
+    {
         // 层更新可能来自多个卷，队列最多保留一个尚未处理的通知。
         if (Interlocked.Exchange(ref catalogNoticeQueued, 1) != 0) return;
         Post(() =>
         {
             Interlocked.Exchange(ref catalogNoticeQueued, 0);
-            queryState.RequestRefresh();
+            if (Interlocked.Exchange(ref catalogRefreshRequested, 0) != 0) queryState.RequestRefresh();
             if (refreshPending) return;
             refreshPending = true;
             _ = WaitForRefreshAsync(++refreshGeneration);
@@ -327,5 +341,6 @@ internal sealed class DesktopSession
 
     private sealed record DesktopRequest(string Type, long RequestId, string Text = "", SortField Sort = SortField.Name,
         bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null,
-        string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null);
+        string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null,
+        long DetailId = 0, string[]? DirectoryIds = null);
 }

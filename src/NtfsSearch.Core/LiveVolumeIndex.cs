@@ -34,6 +34,20 @@ public sealed class LiveVolumeIndex
     public bool Apply(LiveTransaction transaction, CancellationToken token = default)
         => ApplyCore(transaction, token, allowMultipart: false);
 
+    // 先于应用事务取旧链接，保留文件移动的两端以及索引内容相同的写入通知。
+    internal void CollectFileParents(LiveTransaction transaction, HashSet<ulong> parents)
+    {
+        foreach (var file in transaction.Files)
+        {
+            if (file.IsDirectory) continue;
+            foreach (var link in file.Links) parents.Add(link.ParentReference);
+            foreach (var layer in layers)
+                foreach (int row in layer.FindFileRows(file.FileReference))
+                    if (layer.IsVisible(row) && !layer.Records[row].IsDirectory)
+                        parents.Add(layer.DirectoryReferences![layer.Records[row].Directory]);
+        }
+    }
+
     private bool ApplyCore(LiveTransaction transaction, CancellationToken token, bool allowMultipart)
     {
         token.ThrowIfCancellationRequested();

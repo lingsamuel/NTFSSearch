@@ -176,7 +176,42 @@ try {
       })()`)
       await evaluate("document.querySelector('button[aria-label=空间分析]').click()")
       await until(() => evaluate("document.querySelector('.space-total')?.title === '511,488,000 B'"), '卷根逻辑大小')
-      await evaluate("Array.from(document.querySelectorAll('.space-tile')).find(tile => tile.textContent.includes('目录009')).click()")
+      const topFolder = name => `[...document.querySelectorAll('.space-tile.directory:not(.nested)')]
+        .find(tile => tile.title.includes(${JSON.stringify(name)}))`
+      const automatic = await until(() => evaluate(`(() => {
+        const tiles = [...document.querySelectorAll('.space-tile.nested')].map(tile => tile.getBoundingClientRect());
+        const roots = [...document.querySelectorAll('.space-tile.directory:not(.nested)')].map(tile => tile.getBoundingClientRect());
+        return roots.filter(root => tiles.some(tile => tile.left >= root.left && tile.right <= root.right &&
+          tile.top >= root.top && tile.bottom <= root.bottom)).length >= 2;
+      })()`), '多个目录自动显示内部结构')
+      assert.equal(automatic, true)
+      assert.equal(await evaluate("document.querySelectorAll('.space-flash').length"), 0)
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 480, height: 170, deviceScaleFactor: 1, mobile: false })
+      await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '狭小空间自动收起细节')
+      await cdp('Emulation.clearDeviceMetricsOverride')
+      await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length > 0"), '尺寸恢复后重新显示细节')
+      await evaluate(`(() => {
+        const level = document.querySelector('select[aria-label=细节层级]');
+        level.value = '1'; level.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`)
+      await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '细节降到一层')
+      await evaluate(`${topFolder('目录009')}.click()`)
+      await until(() => evaluate(`${topFolder('目录009')}.getAttribute('aria-expanded') === 'true' &&
+        document.querySelectorAll('.space-tile.nested').length > 0`), '单击临时展开')
+      assert.equal(await evaluate("document.querySelector('.space-total').title"), '511,488,000 B')
+      await evaluate(`${topFolder('目录008')}.click()`)
+      await until(() => evaluate(`${topFolder('目录008')}.getAttribute('aria-expanded') === 'true' &&
+        ${topFolder('目录009')}.getAttribute('aria-expanded') === 'false'`), '切换时收起原目录')
+      await evaluate(`${topFolder('目录008')}.click()`)
+      await until(() => evaluate("document.querySelectorAll('.space-tile.nested').length === 0"), '再次单击收起')
+      const { x, y } = await evaluate(`(() => {
+        const rect = ${topFolder('目录009')}.getBoundingClientRect();
+        return { x: Math.floor(rect.left + 12), y: Math.floor(rect.top + 10) };
+      })()`)
+      for (let clickCount = 1; clickCount <= 2; clickCount++) {
+        await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount })
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount })
+      }
       await until(() => evaluate("document.querySelector('.space-total')?.title === '97,228,800 B'"), '下钻目录逻辑大小')
       await until(() => evaluate("document.querySelectorAll('.space-tile').length === 100"), '下钻文件矩形')
       assert.equal(await evaluate(`Array.from(document.querySelectorAll('.space-tile')).every(tile => {

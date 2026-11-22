@@ -35,6 +35,7 @@ const spacePathPending = ref(false)
 const spacePathError = ref('')
 let requestId = Date.now()
 let spaceRequestId = requestId
+let spaceDetailId = 0
 let unlisten: (() => void) | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -80,7 +81,10 @@ function receive(message: DesktopMessage) {
       break
     case 'spaceAnalysis':
       if (!showingSpace.value || message.requestId !== spaceRequestId) return
-      space.value = message
+      if (message.detailId < spaceDetailId && space.value?.requestId === message.requestId
+          && space.value.volumeKey === message.volumeKey && space.value.folder?.path === message.folder?.path)
+        space.value = { ...message, details: space.value.details }
+      else space.value = message
       spaceRoot.value = message.root ?? ''
       spaceError.value = message.error ?? ''
       spacePending.value = false
@@ -204,6 +208,7 @@ function viewSpace(root = '', directoryId = '', path?: string) {
   spacePathPending.value = byPath
   spacePathError.value = ''
   const id = ++spaceRequestId
+  spaceDetailId = 0
   const displayed = space.value
   void sendRequest(byPath ? {
     type: 'spacePath', requestId: id, path, root: displayed?.root ?? '',
@@ -223,6 +228,12 @@ function closeSpace() {
   space.value = undefined
   if (connected.value) sendAction({ type: 'closeSpaceAnalysis', requestId: ++spaceRequestId })
   void nextTick(focusQuery)
+}
+
+function requestSpaceDetails(id: number, directoryIds: string[]) {
+  if (!showingSpace.value || !connected.value || id !== spaceRequestId) return
+  void sendRequest({ type: 'spaceDetails', requestId: id, detailId: ++spaceDetailId, directoryIds })
+    .catch(error => { if (id === spaceRequestId) showFeedback(String(error), true) })
 }
 
 function sendAction(request: DesktopRequest) {
@@ -301,6 +312,7 @@ onBeforeUnmount(() => {
     <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
       :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
       :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
+      @details="requestSpaceDetails"
       @reveal="sendAction({ type: 'reveal', key: $event })" />
     <div v-if="notice || actionError" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>

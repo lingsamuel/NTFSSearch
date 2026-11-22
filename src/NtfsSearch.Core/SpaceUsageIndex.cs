@@ -76,6 +76,20 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
 
     internal bool Contains(ulong reference) => reference == 0 || folders.ContainsKey(reference);
 
+    /// <summary>将发生文件变更的父目录归到指定视图根的直接子目录。</summary>
+    internal HashSet<ulong> ActivityFolders(ulong viewRoot, IEnumerable<ulong> parents)
+    {
+        var affected = new HashSet<ulong>();
+        foreach (ulong parent in parents)
+            for (var folder = folders.GetValueOrDefault(parent); folder is not null && folder.Id != viewRoot; folder = folder.Parent)
+                if (folder.Parent?.Id == viewRoot)
+                {
+                    affected.Add(folder.Id);
+                    break;
+                }
+        return affected;
+    }
+
     /// <summary>接受盘符、资源管理器复制的绝对路径和扩展路径，保留实际索引名称。</summary>
     internal static string? NormalizeLocalPath(string? input)
     {

@@ -1,13 +1,25 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
+
+// 每次导航建立独立的观察身份，同卷的旧批次也不能通知新视图。
+internal sealed record SpaceActivityObservation(string VolumeKey);
 
 // 与桌面消息循环同步安排工作；同一时间只有一个任务能读取或更新汇总。
 internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publish, Action<Action> post)
 {
     private const int VisibleItems = 200;
+    private const int DetailDirectoryLimit = 32;
     private readonly QueryRefreshState work = new();
+    private readonly uint doubleClickMilliseconds = OperatingSystem.IsWindows() ? GetDoubleClickTime() : 500;
+    private readonly object activityGate = new();
+    private readonly HashSet<ulong> pendingParents = [];
+    private SpaceActivityObservation? observation;
+    private HashSet<ulong> visibleFolders = [];
+    private ulong[] detailDirectories = [];
+    private long detailId, lastDetailId;
     private (long RequestId, string Root, ulong Directory, string? Path, string? VolumeKey)? selection;
     private (string Root, ulong[] BreadcrumbIds, string? VolumeKey) pathOrigin;
     private long latestRequestId;
@@ -41,11 +53,56 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     {
         if (requestId < latestRequestId) return;
         latestRequestId = requestId;
+        Observe(null);
+        detailDirectories = [];
+        detailId = lastDetailId = 0;
         selection = (requestId, root, directory, path, null);
         work.RequestUser();
         if (activeRoot is not null && !string.IsNullOrEmpty(root) && !SameRoot(root, activeRoot))
             ResetVolume();
         TryStart();
+    }
+
+    internal void Details(long requestId, long revision, string[]? directoryIds)
+    {
+        if (selection?.RequestId != requestId || revision <= detailId) return;
+        detailId = revision;
+        detailDirectories = directoryIds?.Take(DetailDirectoryLimit).Select(ParseDirectoryId).Distinct().ToArray() ?? [];
+        work.RequestRefresh();
+        work.RefreshWindowElapsed();
+        TryStart();
+    }
+
+    internal bool QueueActivity(SpaceActivityObservation source, IReadOnlyCollection<ulong> parents)
+    {
+        lock (activityGate)
+        {
+            if (!ReferenceEquals(source, observation)) return false;
+            pendingParents.UnionWith(parents);
+            return true;
+        }
+    }
+
+    private void Observe(string? key)
+    {
+        lock (activityGate)
+        {
+            if (observation?.VolumeKey == key) return;
+            observation = key is null ? null : new(key);
+            pendingParents.Clear();
+            host.ObserveAnalysisVolume(observation);
+        }
+    }
+
+    private ulong[] TakeActivity()
+    {
+        lock (activityGate)
+        {
+            if (pendingParents.Count == 0) return [];
+            var changed = pendingParents.ToArray();
+            pendingParents.Clear();
+            return changed;
+        }
     }
 
     internal void Refresh()
@@ -63,6 +120,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         if (requestId < latestRequestId) return;
         latestRequestId = requestId;
         selection = null;
+        Observe(null);
+        visibleFolders.Clear();
         trail = [];
         displayedVolumeKey = null;
         work.Cancel();
@@ -90,7 +149,9 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private void TryStart((NtfsVolume Volume, IReadOnlyList<SearchIndex> Layers)[]? views = null)
     {
         if (selection is not { } target || !work.TryStart(out var request)) return;
-        views ??= host.CaptureAnalysisVolumes();
+        // 活动在索引发布后入队。先取活动，再取得至少包含这些变更的索引视图。
+        var changedParents = TakeActivity();
+        if (changedParents.Length > 0 || views is null) views = host.CaptureAnalysisVolumes();
         var ordered = views.OrderBy(view => view.Volume.Root, StringComparer.OrdinalIgnoreCase).ToArray();
         var selected = ordered.FirstOrDefault(view => SameRoot(view.Volume.Root, target.Root));
         if (selected.Volume is null && target.Path is not null)
@@ -106,7 +167,8 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         string[] roots = ordered.Select(view => view.Volume.Root).ToArray();
         string? key = selected.Volume is { } volume ? VolumeCache.Key(volume) : null;
         bool sameVolume = key == volumeKey;
-        if (!request.UserInitiated && sameVolume && roots.SequenceEqual(lastRoots)
+        if (key != observation?.VolumeKey) changedParents = [];
+        if (!request.UserInitiated && sameVolume && detailId == lastDetailId && changedParents.Length == 0 && roots.SequenceEqual(lastRoots)
             && (selected.Layers == lastLayers || selected.Layers is not null && lastLayers is not null && selected.Layers.SequenceEqual(lastLayers)))
         {
             work.Complete(request, null);
@@ -116,12 +178,15 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         volumeKey = key;
         lastRoots = roots;
         lastLayers = selected.Layers;
+        lastDetailId = detailId;
         if (selected.Volume is null)
         {
             work.Complete(request, null);
             trail = [];
             displayedVolumeKey = null;
-            Publish(target.RequestId, roots, null, null, null);
+            Observe(null);
+            visibleFolders.Clear();
+            Publish(target.RequestId, roots, null, null, null, 0, [], []);
             return;
         }
 
@@ -133,20 +198,25 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         activeRoot = root;
         cancellation = source;
         task = ExecuteAsync(request, target.RequestId, roots, root, directory, target.Path, selected.Layers!,
-            usage, sameDisplayedVolume ? trail : [], source);
+            usage, sameDisplayedVolume ? trail : [], detailId, detailDirectories, changedParents, source);
     }
 
     private async Task ExecuteAsync(QueryRequest request, long requestId, string[] roots, string root, ulong directory, string? path,
-        IReadOnlyList<SearchIndex> layers, SpaceUsageIndex? previous, ulong[] fallback, CancellationTokenSource source)
+        IReadOnlyList<SearchIndex> layers, SpaceUsageIndex? previous, ulong[] fallback, long detailsRevision,
+        ulong[] detailsRequested, ulong[] changedParents, CancellationTokenSource source)
     {
         SpaceUsageIndex? updated = null;
         SpaceFolder? result = null;
         string? error = null;
+        Dictionary<ulong, SpaceItem[]> details = [];
+        HashSet<ulong> affected = [];
         try
         {
             (updated, result, error) = await Task.Run<(SpaceUsageIndex, SpaceFolder?, string?)>(() =>
             {
                 var token = source.Token;
+                if (changedParents.Length > 0 && previous is not null)
+                    affected = previous.ActivityFolders(directory, changedParents);
                 var index = previous?.Update(layers, token) ?? SpaceUsageIndex.Create(root, layers, token);
                 if (path is not null)
                 {
@@ -161,7 +231,11 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 }
                 else if (!index.Contains(directory))
                     directory = fallback.Reverse().FirstOrDefault(index.Contains);
-                return (index, index.Read(directory, VisibleItems, token), (string?)null);
+                var folder = index.Read(directory, VisibleItems, token);
+                if (changedParents.Length > 0) affected.UnionWith(index.ActivityFolders(directory, changedParents));
+                foreach (ulong id in detailsRequested)
+                    if (id != directory && index.Contains(id)) details.Add(id, index.Read(id, VisibleItems, token).Children);
+                return (index, folder, (string?)null);
             }, source.Token);
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested) { }
@@ -185,13 +259,27 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 if (path is not null && error is not null) ReportPathError(requestId, error);
                 else
                 {
+                    ulong[] flashes = [];
                     if (result is not null)
                     {
+                        ulong previousDirectory = trail.LastOrDefault();
+                        var nextFolders = result.Children.Where(item => item.DirectoryId.HasValue)
+                            .Select(item => item.DirectoryId!.Value).ToHashSet();
+                        bool sameScene = displayedVolumeKey == volumeKey && previousDirectory == directory;
+                        if (!request.UserInitiated && sameScene)
+                        {
+                            affected.IntersectWith(visibleFolders);
+                            affected.IntersectWith(nextFolders);
+                            flashes = affected.ToArray();
+                        }
+                        if (!sameScene) Observe(null);
+                        visibleFolders = nextFolders;
                         trail = result.Breadcrumbs.Select(crumb => crumb.Id).ToArray();
                         displayedVolumeKey = volumeKey;
                         selection = (requestId, root, directory, null, volumeKey);
+                        Observe(volumeKey);
                     }
-                    Publish(requestId, roots, root, result, error);
+                    Publish(requestId, roots, root, result, error, detailsRevision, details, flashes);
                 }
             }
             TryStart();
@@ -210,25 +298,34 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         TryStart();
     }
 
-    private void Publish(long requestId, string[] roots, string? root, SpaceFolder? folder, string? error)
+    private void Publish(long requestId, string[] roots, string? root, SpaceFolder? folder, string? error,
+        long detailsRevision, Dictionary<ulong, SpaceItem[]> details, ulong[] flashes)
         => publish(new
         {
             Type = "spaceAnalysis", RequestId = requestId, Roots = roots, Root = root, VolumeKey = volumeKey, Error = error,
+            DoubleClickMilliseconds = doubleClickMilliseconds, DetailId = detailsRevision,
+            Details = details.ToDictionary(pair => pair.Key.ToString("X16"), pair => SerializeItems(pair.Value)),
+            Flashes = flashes.Select(id => id.ToString("X16")),
             Folder = folder is null ? null : new
             {
                 folder.Path,
                 Breadcrumbs = folder.Breadcrumbs.Select(crumb => new { Id = crumb.Id.ToString("X16"), crumb.Name }),
                 Bytes = folder.Bytes.ToString(CultureInfo.InvariantCulture), SizeText = FileSizeDisplay.Format(folder.Bytes),
                 SizeBytesText = $"{folder.Bytes:N0} B", folder.UnknownFiles, folder.IsEmpty,
-                Children = folder.Children.Select(item => new
-                {
-                    DirectoryId = item.DirectoryId?.ToString("X16"), item.Name, item.Count,
-                    Key = item.Path is { } path ? DesktopFileActions.EncodePath(path) : null,
-                    Bytes = item.Bytes.ToString(CultureInfo.InvariantCulture), SizeText = FileSizeDisplay.Format(item.Bytes),
-                    SizeBytesText = $"{item.Bytes:N0} B"
-                })
+                Children = SerializeItems(folder.Children)
             }
         });
+
+    private static IEnumerable<object> SerializeItems(IEnumerable<SpaceItem> items)
+        => items.Select(item => new
+        {
+            DirectoryId = item.DirectoryId?.ToString("X16"), item.Name, item.Count,
+            Key = item.Path is { } path ? DesktopFileActions.EncodePath(path) : null,
+            Bytes = item.Bytes.ToString(CultureInfo.InvariantCulture), SizeText = FileSizeDisplay.Format(item.Bytes),
+            SizeBytesText = $"{item.Bytes:N0} B"
+        });
+
+    [DllImport("user32")] private static extern uint GetDoubleClickTime();
 
     private bool ContainsVolume((NtfsVolume Volume, IReadOnlyList<SearchIndex> Layers)[] views)
         => views.Any(view => VolumeCache.Key(view.Volume) == volumeKey);

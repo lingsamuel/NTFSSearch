@@ -153,19 +153,30 @@ internal sealed partial class MemoryVolumeBackend
             bool ready = start == target;
             if (ready) Publish(volume, generation, live, changed: false, monitoring: true, status: LiveStatus(live));
             bool changed = false;
+            HashSet<ulong>? fileParents = null;
+            SpaceActivityObservation? batchObservation = null;
             while (true)
             {
                 var frame = await frames.ReadAsync(token);
-                var (final, applied) = ApplyFrame(live, frame, token);
+                var observation = AnalysisObservation;
+                if (!ready || observation?.VolumeKey != volume.Key) observation = null;
+                if (!ReferenceEquals(observation, batchObservation))
+                {
+                    batchObservation = observation;
+                    fileParents = observation is null ? null : [];
+                }
+                var (final, applied) = ApplyFrame(live, frame, token, fileParents);
                 changed |= applied;
                 if (!final) continue;
                 changed |= live.CompactIfNeeded(token);
                 bool caughtUp = live.Position!.NextUsn >= target.NextUsn;
                 string? status = caughtUp && !ready ? LiveStatus(live) : null;
                 // 一个原始USN批次可拆成多帧。跨帧补采完整后才同时发布视图和水位。
-                Publish(volume, generation, live, changed, monitoring: caughtUp, status: status);
+                Publish(volume, generation, live, changed, monitoring: caughtUp, status: status,
+                    observation: batchObservation, fileParents: fileParents);
                 ready |= caughtUp;
                 changed = false;
+                fileParents?.Clear();
             }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
@@ -235,7 +246,8 @@ internal sealed partial class MemoryVolumeBackend
         return (start, target);
     }
 
-    private static (bool Final, bool Changed) ApplyFrame(LiveVolumeIndex live, CollectorFrame frame, CancellationToken token)
+    private static (bool Final, bool Changed) ApplyFrame(LiveVolumeIndex live, CollectorFrame frame, CancellationToken token,
+        HashSet<ulong>? fileParents = null)
     {
         if (frame.Kind == CollectorFrameKind.Error) throw CollectorWire.ReadError(frame);
         if (frame.Kind != CollectorFrameKind.Changes) throw new InvalidDataException("缺少USN事务。");
@@ -243,11 +255,13 @@ internal sealed partial class MemoryVolumeBackend
         var transaction = change.Transaction;
         if (change.Sequence != live.AppliedSequence + 1 || transaction.From != live.Position)
             throw new InvalidDataException("USN事务序号或水位不连续。");
+        if (fileParents is not null) live.CollectFileParents(transaction, fileParents);
         return (transaction.To != transaction.From, live.Apply(change, token));
     }
 
     private void Publish(VolumeState volume, int generation, LiveVolumeIndex live, bool changed,
-        bool scanned = false, bool monitoring = false, string? status = null)
+        bool scanned = false, bool monitoring = false, string? status = null,
+        SpaceActivityObservation? observation = null, HashSet<ulong>? fileParents = null)
     {
         lock (gate)
         {
@@ -261,6 +275,7 @@ internal sealed partial class MemoryVolumeBackend
             if (status is not null) volume.Status = new(volume.Volume.Root, status);
             if (changed) catalog.PublishLayers(volume.Key, layers);
         }
+        if (observation is not null && fileParents is { Count: > 0 }) FileActivity?.Invoke(observation, fileParents);
         if (status is not null) StatusChanged?.Invoke();
     }
 
