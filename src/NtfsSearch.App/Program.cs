@@ -15,13 +15,16 @@ internal static class Program
             void Publish(object message) => output.WriteLine(JsonSerializer.Serialize(message, JsonSerializerOptions.Web));
             try
             {
-                var host = new SearchHost(demoCount: args[0] switch
+                int? demoCount = args[0] switch
                 {
                     "--desktop-test" => 1000,
                     "--desktop-benchmark" => 1_000_000,
                     _ => null
-                });
-                await new DesktopSession(host, Publish).RunAsync(input);
+                };
+                string? settingsDirectory = demoCount.HasValue
+                    ? Environment.GetEnvironmentVariable("NTFS_SEARCH_TEST_DATA")
+                    : PortableDataDirectory.Resolve();
+                await new DesktopSession(new SearchHost(demoCount, settingsDirectory), Publish, settingsDirectory).RunAsync(input);
                 return 0;
             }
             catch (Exception error)

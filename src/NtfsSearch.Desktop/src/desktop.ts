@@ -36,6 +36,7 @@ export interface IndexStatus {
   refreshing: boolean
   discoveryComplete: boolean
   collectionCancelled: boolean
+  skipExitIndexSave: boolean
   progress: string | null
   error: string | null
 }
@@ -80,6 +81,7 @@ export type DesktopMessage =
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
   | { type: 'saving'; written: number; total: number }
+  | { type: 'exitSavePreference'; skipExitIndexSave: boolean; error: string | null }
   | { type: 'quit-complete'; error?: string }
   | { type: 'error'; scope: 'fatal' | 'query' | 'refresh' | 'action'; message: string; requestId?: number }
   | { type: 'notice'; message: string }
@@ -91,6 +93,7 @@ export type DesktopRequest =
   | { type: 'spaceDetails'; requestId: number; detailId: number; directoryIds: string[] }
   | { type: 'closeSpaceAnalysis'; requestId: number }
   | { type: 'rescan' | 'cancel' }
+  | { type: 'setSkipExitIndexSave'; skipExitIndexSave: boolean }
   | { type: 'fileTypeIcons'; extensions: string[] }
   | { type: FileAction; key: string }
 

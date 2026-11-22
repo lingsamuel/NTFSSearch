@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
@@ -12,6 +12,15 @@ if (!executable || !artifacts) throw new Error('用法：node tests/desktop-wind
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
+const testData = join(output, 'ExitSaveData')
+const settingsPath = join(testData, 'settings.json')
+const snapshotPath = join(testData, 'index.ntsnap')
+const previousSnapshot = Buffer.from('isolated exit-save fixture')
+if (mode !== '--cached-fixture') {
+  await mkdir(testData, { recursive: true })
+  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: true }))
+  await writeFile(snapshotPath, previousSnapshot)
+}
 const portProbe = createServer().listen(0, '127.0.0.1')
 await once(portProbe, 'listening')
 const port = portProbe.address().port
@@ -20,6 +29,7 @@ const application = spawn(resolve(executable), mode === '--cached-fixture' ? [] 
   stdio: 'ignore',
   env: {
     ...process.env,
+    NTFS_SEARCH_TEST_DATA: testData,
     WEBVIEW2_USER_DATA_FOLDER: join(output, 'WebView'),
     WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
   }
@@ -292,6 +302,15 @@ try {
     await screenshot('desktop.png')
     await evaluate("document.querySelector('.index-toggle').click()")
     await until(() => evaluate("document.querySelector('#index-panel .volume-list li')?.textContent.includes('C:')"), '逐卷索引状态')
+    if (mode === '--desktop-test') {
+      const preference = "document.querySelector('.index-exit-preference input')"
+      assert.equal(await evaluate(`${preference}.checked`), true)
+      await evaluate(`${preference}.click()`)
+      await until(() => evaluate(`!${preference}.checked && !${preference}.disabled`), '关闭退出保存开关')
+      assert.equal(JSON.parse(await readFile(settingsPath, 'utf8')).SkipExitIndexSave, false)
+      await evaluate(`${preference}.click()`)
+      await until(() => evaluate(`${preference}.checked && !${preference}.disabled`), '开启退出时不保存索引')
+    }
     await cdp('Emulation.setDeviceMetricsOverride', { width: 660, height: 420, deviceScaleFactor: 1, mobile: false })
     assert.equal(await evaluate("document.querySelector('.results-scroll').scrollWidth === document.querySelector('.results-scroll').clientWidth"), true)
     assert.equal(await evaluate("document.querySelector('#index-panel').getBoundingClientRect().bottom < window.innerHeight"), true)
@@ -335,6 +354,17 @@ try {
   assert.equal(code, 0)
   const leftover = await powerShell(`if (Get-Process -Id ${backend} -ErrorAction SilentlyContinue) { 'running' }`)
   assert.equal(leftover.stdout.trim(), '')
+  if (mode === '--desktop-test') {
+    const restart = exec(join(dirname(resolve(executable)), 'NtfsSearch.Backend.exe'), ['--desktop-test'],
+      { encoding: 'utf8', timeout: 10_000, env: { ...process.env, NTFS_SEARCH_TEST_DATA: testData } })
+    restart.child.stdin.end('{"type":"quit"}\n')
+    const { stdout } = await restart
+    const messages = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line))
+    assert.equal(messages.find(message => message.type === 'status')?.skipExitIndexSave, true)
+    assert.equal(messages.some(message => message.type === 'saving'), false)
+    assert.equal(messages.find(message => message.type === 'quit-complete')?.error, null)
+    assert.deepEqual(await readFile(snapshotPath), previousSnapshot)
+  }
   console.log(benchmark ? 'Windows 桌面性能采样与进程退出通过。' : 'Windows 桌面启动、搜索、排序、分页、文件图标、键盘、右键、窄窗口、四列拖动、大小单位和退出通过。')
 } finally {
   socket?.close()

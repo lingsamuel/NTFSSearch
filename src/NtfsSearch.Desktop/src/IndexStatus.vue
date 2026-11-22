@@ -2,8 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { formatCount, type IndexStatus } from './desktop'
 
-const props = defineProps<{ status?: IndexStatus; connected: boolean }>()
-const emit = defineEmits<{ action: [type: 'rescan' | 'cancel'] }>()
+const props = defineProps<{ status?: IndexStatus; connected: boolean; preferencePending: boolean }>()
+const emit = defineEmits<{ action: [type: 'rescan' | 'cancel']; savePreference: [skip: boolean] }>()
 const open = ref(false)
 const container = ref<HTMLElement>()
 const trigger = ref<HTMLButtonElement>()
@@ -27,6 +27,13 @@ function escape() {
   if (!open.value) return
   open.value = false
   trigger.value?.focus()
+}
+
+function changeSavePreference(event: Event) {
+  const checkbox = event.currentTarget as HTMLInputElement
+  const skip = checkbox.checked
+  checkbox.checked = props.status?.skipExitIndexSave ?? false
+  emit('savePreference', skip)
 }
 
 onMounted(() => window.addEventListener('pointerdown', dismiss))
@@ -59,6 +66,11 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', dismiss))
           <span>{{ volume.root }}</span><span>{{ volume.message }}</span>
         </li>
       </ul>
+      <label class="index-exit-preference">
+        <input type="checkbox" :checked="status?.skipExitIndexSave" :disabled="!connected || !status || preferencePending"
+          @change="changeSavePreference">
+        退出时不保存索引
+      </label>
       <div class="index-actions">
         <button type="button" class="outlined-button" :disabled="!connected || status?.refreshing" @click="emit('action', 'rescan')">重新扫描磁盘</button>
         <button type="button" class="outlined-button" :disabled="!connected" @click="emit('action', 'cancel')">取消采集</button>

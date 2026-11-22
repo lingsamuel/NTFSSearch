@@ -12,6 +12,7 @@ internal sealed class DesktopSession
     private readonly Channel<Action> messages = Channel.CreateUnbounded<Action>(new() { SingleReader = true });
     private readonly SearchHost host;
     private readonly Action<object> publish;
+    private readonly string? settingsDirectory;
     private readonly SpaceAnalysisSession spaceAnalysis;
     private readonly QueryRefreshState queryState = new();
     private readonly FileTypeIcons fileTypeIcons = new();
@@ -22,14 +23,16 @@ internal sealed class DesktopSession
     private SearchOptions options = new(0, "", SortField.Name, false, true, 0);
     private string? progress = "正在发现本机 NTFS 磁盘…";
     private string? indexError;
-    private bool refreshing, discoveryComplete, collectionCancelled, saveOnExit;
+    private DesktopSettings settings = new();
+    private bool refreshing, discoveryComplete, collectionCancelled, quitRequested;
     private int catalogNoticeQueued;
     private int catalogRefreshRequested;
 
-    internal DesktopSession(SearchHost host, Action<object> publish)
+    internal DesktopSession(SearchHost host, Action<object> publish, string? settingsDirectory)
     {
         this.host = host;
         this.publish = publish;
+        this.settingsDirectory = settingsDirectory;
         spaceAnalysis = new(host, publish, Post);
     }
 
@@ -53,6 +56,10 @@ internal sealed class DesktopSession
             PublishStatus();
         });
 
+        if (settingsDirectory is not null)
+            try { settings = DesktopSettings.Load(settingsDirectory); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+            { PublishError("action", "无法读取应用设置：" + error.Message); }
         PublishStatus();
         RunQuery();
         _ = ReadInputAsync(input, lifetime.Token);
@@ -62,7 +69,7 @@ internal sealed class DesktopSession
             await foreach (var action in messages.Reader.ReadAllAsync())
             {
                 action();
-                if (saveOnExit) break;
+                if (quitRequested) break;
             }
         }
         finally
@@ -75,17 +82,13 @@ internal sealed class DesktopSession
             activeSearch?.Dispose();
         }
 
-        if (saveOnExit)
+        if (quitRequested)
         {
             string? error = null;
-            try
-            {
-                host.SaveExitSnapshot((written, total) => publish(new { Type = "saving", Written = written, Total = total }));
-            }
-            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException)
-            {
-                error = "无法保存退出快照：" + failure.Message;
-            }
+            if (!settings.SkipExitIndexSave)
+                try { host.SaveExitSnapshot((written, total) => publish(new { Type = "saving", Written = written, Total = total })); }
+                catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException)
+                { error = "无法保存退出快照：" + failure.Message; }
             publish(new { Type = "quit-complete", Error = error });
         }
     }
@@ -139,9 +142,13 @@ internal sealed class DesktopSession
                     RunQuery();
                     break;
                 case "quit":
-                    saveOnExit = true;
-                    publish(new { Type = "saving", Written = 0, Total = host.Catalog.VolumeCount });
+                    quitRequested = true;
+                    if (!settings.SkipExitIndexSave)
+                        publish(new { Type = "saving", Written = 0, Total = host.Catalog.VolumeCount });
                     messages.Writer.TryComplete();
+                    break;
+                case "setSkipExitIndexSave":
+                    SaveExitPreference(request.SkipExitIndexSave);
                     break;
                 case "fileTypeIcons":
                     if (request.Extensions is { Length: > 0 } extensions)
@@ -330,8 +337,26 @@ internal sealed class DesktopSession
             Active = metrics?.ActiveRoots.Length ?? 0,
             ScanLimit = metrics?.ScanLimit,
             Refreshing = refreshing, DiscoveryComplete = discoveryComplete, CollectionCancelled = collectionCancelled,
+            settings.SkipExitIndexSave,
             Progress = progress, Error = indexError
         });
+    }
+
+    private void SaveExitPreference(bool skip)
+    {
+        string? error = null;
+        if (settings.SkipExitIndexSave != skip)
+        {
+            var next = settings with { SkipExitIndexSave = skip };
+            try
+            {
+                if (settingsDirectory is not null) next.Save(settingsDirectory);
+                settings = next;
+            }
+            catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+            { error = "无法保存应用设置：" + failure.Message; }
+        }
+        publish(new { Type = "exitSavePreference", settings.SkipExitIndexSave, Error = error });
     }
 
     private void PublishError(string scope, string message, long? requestId = null) =>
@@ -342,5 +367,5 @@ internal sealed class DesktopSession
     private sealed record DesktopRequest(string Type, long RequestId, string Text = "", SortField Sort = SortField.Name,
         bool Descending = false, bool MatchPath = true, int Offset = 0, string Key = "", long WindowHandle = 0, string[]? Extensions = null,
         string Root = "", string DirectoryId = "", string Path = "", string? VolumeKey = null, string[]? BreadcrumbIds = null,
-        long DetailId = 0, string[]? DirectoryIds = null);
+        long DetailId = 0, string[]? DirectoryIds = null, bool SkipExitIndexSave = false);
 }

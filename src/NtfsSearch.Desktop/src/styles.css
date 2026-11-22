@@ -402,6 +402,8 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .volume-list li > :first-child { font-weight: 600; }
 
 .index-actions { display: flex; gap: 8px; margin-top: 10px; }
+.index-exit-preference { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.index-exit-preference input { accent-color: var(--accent); }
 .outlined-button {
   min-height: 29px;
   padding: 3px 10px;

@@ -9,6 +9,7 @@ internal sealed class SearchHost
     private readonly AutomaticVolumeLoader? demo;
     private readonly string cacheDirectory;
     private readonly string snapshotPath;
+    private readonly bool saveDemoSnapshot;
     private volatile MemoryVolumeBackend? windowsBackend;
 
     internal SearchCatalog Catalog => catalog;
@@ -29,6 +30,8 @@ internal sealed class SearchHost
         snapshotPath = Path.Combine(this.cacheDirectory, ExitSnapshotStore.FileName);
         if (demoCount is int count)
         {
+            // 只有隔离的演示数据目录可用于验证快照保存，普通演示不写入便携版 Data。
+            saveDemoSnapshot = cacheDirectory is not null;
             demo = new(new SmokeBackend(count), catalog);
             demo.StatusChanged += () => StatusChanged?.Invoke();
         }
@@ -93,8 +96,11 @@ internal sealed class SearchHost
     /// <summary>正常关闭且采集循环退出后保存，冻结每个卷的已发布视图与水位。</summary>
     internal void SaveExitSnapshot(Action<int, int> progress)
     {
-        if (windowsBackend is not { ReadyToSave: true } backend) return;
-        var volumes = backend.CapturePublishedViews();
+        IReadOnlyList<ExitSnapshotVolume> volumes;
+        if (windowsBackend is { ReadyToSave: true } backend) volumes = backend.CapturePublishedViews();
+        else if (saveDemoSnapshot)
+            volumes = CaptureAnalysisVolumes().Select(view => new ExitSnapshotVolume(view.Volume, new(0, 0), view.Layers)).ToArray();
+        else return;
         if (volumes.Count > 0) ExitSnapshotStore.Save(snapshotPath, volumes, progress: progress);
     }
 

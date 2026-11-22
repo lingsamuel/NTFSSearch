@@ -26,6 +26,7 @@ const queryError = ref('')
 const notice = ref('')
 const actionError = ref('')
 const saving = shallowRef<{ written: number; total: number }>()
+const preferencePending = ref(false)
 const showingSpace = ref(false)
 const space = shallowRef<SpaceAnalysisResult>()
 const spaceRoot = ref('')
@@ -99,6 +100,7 @@ function receive(message: DesktopMessage) {
       if (message.scope === 'fatal') {
         resetFileTypeIconRequest()
         saving.value = undefined
+        preferencePending.value = false
         connected.value = false
         pending.value = false
         fatal.value = message.message
@@ -118,6 +120,11 @@ function receive(message: DesktopMessage) {
       break
     case 'saving':
       saving.value = message
+      break
+    case 'exitSavePreference':
+      if (indexStatus.value) indexStatus.value = { ...indexStatus.value, skipExitIndexSave: message.skipExitIndexSave }
+      preferencePending.value = false
+      if (message.error) showFeedback(message.error, true)
       break
     case 'quit-complete':
       if (message.error) {
@@ -242,6 +249,16 @@ function sendAction(request: DesktopRequest) {
   void sendRequest(request).catch(error => showFeedback(String(error), true))
 }
 
+function updateSavePreference(skipExitIndexSave: boolean) {
+  if (!connected.value || saving.value || preferencePending.value) return
+  showFeedback('')
+  preferencePending.value = true
+  void sendRequest({ type: 'setSkipExitIndexSave', skipExitIndexSave }).catch(error => {
+    preferencePending.value = false
+    showFeedback(String(error), true)
+  })
+}
+
 function fileAction(type: FileAction, row: SearchRow) {
   if (!pending.value) sendAction({ type, key: row.key })
 }
@@ -307,7 +324,8 @@ onBeforeUnmount(() => {
           <span class="chevron right" aria-hidden="true"></span>
         </button>
       </div>
-      <IndexStatusPanel :status="indexStatus" :connected="connected" @action="sendAction({ type: $event })" />
+      <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending"
+        @save-preference="updateSavePreference" @action="sendAction({ type: $event })" />
     </footer>
     <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
       :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
