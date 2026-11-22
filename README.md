@@ -58,6 +58,6 @@ Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
 便携版构建后，可运行 `node tests/desktop-window.mjs artifacts/windows/app/NtfsSearch.App.exe artifacts/desktop-window`，在 Windows 窗口中验证搜索交互和退出。该自检使用独立的演示索引。
 
-命令行保留 EFU 导入、快照查询和显式扫描作为开发诊断能力，不属于桌面正常使用步骤。0.1.0容量数据和当前验证记录见 `docs/benchmarks`。
+便携版的 `app/NtfsSearch.Cli.exe` 提供 EFU 导入、快照查询和显式扫描等开发诊断能力，与桌面后端共用同目录的程序集。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
 
 参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。NTFS 数据流读取复用 DiscUtils，依赖与许可见 `docs/native-dependencies.md`。

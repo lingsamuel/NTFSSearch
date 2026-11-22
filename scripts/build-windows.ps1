@@ -9,6 +9,7 @@ $target = 'x86_64-pc-windows-msvc'
 $rustBuild = Join-Path $desktop 'src-tauri/target'
 $dotnetBuild = Join-Path $root 'artifacts/dotnet-win'
 $staging = Join-Path $dotnetBuild 'portable'
+$stagedApp = Join-Path $staging 'app'
 
 Push-Location $desktop
 try {
@@ -23,17 +24,18 @@ finally { Pop-Location }
 
 # 先独立产出完整包，避免增量发布混入旧 WPF 文件或自包含运行时。
 if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
-foreach ($item in @(@('NtfsSearch.App', 'app'), @('NtfsSearch.Cli', 'cli'))) {
-    $project = Join-Path $root ('src/' + $item[0])
-    & dotnet publish $project -c Release --artifacts-path $dotnetBuild -r win-x64 --self-contained $self -o (Join-Path $staging $item[1])
-    if ($LASTEXITCODE -ne 0) { throw "构建失败：$($item[0])" }
+foreach ($projectName in @('NtfsSearch.App', 'NtfsSearch.Cli')) {
+    $project = Join-Path $root ('src/' + $projectName)
+    & dotnet publish $project -c Release --artifacts-path $dotnetBuild -r win-x64 --self-contained $self -o $stagedApp
+    if ($LASTEXITCODE -ne 0) { throw "构建失败：$projectName" }
 }
-Copy-Item (Join-Path $rustBuild "$target/release/ntfs-search.exe") (Join-Path $staging 'app/NtfsSearch.App.exe') -Force
+Copy-Item (Join-Path $rustBuild "$target/release/ntfs-search.exe") (Join-Path $stagedApp 'NtfsSearch.App.exe') -Force
 Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $staging -Force
 Copy-Item (Join-Path $PSScriptRoot '启动搜索.cmd') $staging -Force
 Copy-Item (Join-Path $root 'manual') $staging -Recurse -Force
-$published = @('app', 'cli', 'manual', 'THIRD-PARTY-NOTICES.txt', '启动搜索.cmd')
-$replaced = $published
+$published = @('app', 'manual', 'THIRD-PARTY-NOTICES.txt', '启动搜索.cmd')
+# 升级时一并移走旧版 CLI 目录，失败回滚时也能恢复。
+$replaced = $published + 'cli'
 if ((Test-Path (Join-Path $OutputDirectory 'app/NtfsSearch.App.dll')) -and
     (Test-Path (Join-Path $OutputDirectory 'docs/native-dependencies.md'))) {
     $replaced += @('docs', 'README.md')
