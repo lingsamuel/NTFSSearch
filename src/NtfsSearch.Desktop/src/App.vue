@@ -84,6 +84,16 @@ function receive(message: DesktopMessage) {
       queryError.value = ''
       if (!message.rows.some(row => row.key === selectedKey.value)) selectedKey.value = null
       break
+    case 'directorySizes': {
+      const current = result.value
+      if (message.requestId !== requestId || current?.requestId !== message.requestId) return
+      const changed = new Map(message.rows.map(row => [row.key, row]))
+      result.value = { ...current, rows: current.rows.map(row => {
+        const size = changed.get(row.key)
+        return size ? { ...row, ...size } : row
+      }) }
+      break
+    }
     case 'status':
       indexStatus.value = message
       break
@@ -372,6 +382,10 @@ onBeforeUnmount(() => {
           <span class="result-count">{{ resultLabel }}</span>
           <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
             {{ result.userMilliseconds.toFixed(2) }} ms
+          </span>
+          <span v-if="!pending && (result?.directorySortPending || result?.directorySortFailed)" class="directory-sort-status"
+            :title="result.directorySortPending ? '正在计算目录大小，排序待更新' : '部分目录大小统计失败'">
+            {{ result.directorySortPending ? '正在计算目录大小，排序待更新' : '部分目录大小统计失败' }}
           </span>
         </div>
         <div class="page-controls" aria-label="分页">

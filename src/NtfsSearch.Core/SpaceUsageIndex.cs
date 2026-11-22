@@ -6,17 +6,19 @@ internal sealed record SpaceBreadcrumb(ulong Id, string Name);
 internal sealed record SpaceItem(ulong? DirectoryId, string Name, string? Path, Int128 Bytes, long Count = 1, ulong? FileReference = null);
 
 // 一个后台工作任务独占当前卷。索引层只读，统计只为目录保存对象。
-internal sealed partial class SpaceUsageIndex(string rootPath)
+internal sealed partial class SpaceUsageIndex(string rootPath, bool includeFileRows, Action<CancellationToken>? yieldToSearch)
 {
     private readonly Folder root = new(0) { Name = rootPath.AsMemory() };
     private readonly Dictionary<ulong, Folder> folders = [];
     private readonly HashSet<Folder> anchors = [];
     private Layer[] layers = [];
+    private readonly HashSet<ulong>? changedDirectories = includeFileRows ? null : [];
 
-    internal static SpaceUsageIndex Create(string rootPath, IReadOnlyList<SearchIndex> indexes, CancellationToken token = default)
+    internal static SpaceUsageIndex Create(string rootPath, IReadOnlyList<SearchIndex> indexes, CancellationToken token = default,
+        bool includeFileRows = true, Action<CancellationToken>? yieldToSearch = null)
     {
-        var result = new SpaceUsageIndex(rootPath);
-        result.layers = indexes.Select(index => new Layer(index, token)).ToArray();
+        var result = new SpaceUsageIndex(rootPath, includeFileRows, yieldToSearch);
+        result.layers = indexes.Select(index => new Layer(index, includeFileRows, token)).ToArray();
         foreach (var layer in result.layers) result.ReadInitialLayer(layer.Index, token);
         result.SumInitialTree(token);
         return result;
@@ -24,10 +26,11 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
 
     private void ReadInitialLayer(SearchIndex index, CancellationToken token)
     {
+        Checkpoint(token);
         var parents = new Folder?[index.Directories.Length];
         for (int id = 0; id < index.Count; id++)
         {
-            if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
+            if ((id & 4095) == 0) Checkpoint(token);
             if (!index.IsVisible(id)) continue;
             ref readonly var row = ref index.Records[id];
             var parent = parents[row.Directory] ??= GetParent(index, row.Directory);
@@ -50,9 +53,10 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
 
     private void SumInitialTree(CancellationToken token)
     {
+        int visited = 0;
         foreach (var folder in folders.Values)
         {
-            token.ThrowIfCancellationRequested();
+            if ((visited++ & 4095) == 0) Checkpoint(token);
             if (folder.Parent is { } parent) parent.AddChild(folder);
             else anchors.Add(folder);
         }
@@ -62,19 +66,34 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
         var order = new List<Folder>(folders.Count + 1) { root };
         for (int i = 0; i < order.Count; i++)
         {
-            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            if ((i & 4095) == 0) Checkpoint(token);
             for (var child = order[i].FirstChild; child is not null; child = child.NextSibling) order.Add(child);
         }
         if (order.Count != folders.Count + 1) throw new InvalidDataException("空间分析的目录层级不完整。");
         for (int i = order.Count - 1; i > 0; i--)
         {
-            if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
+            if ((i & 4095) == 0) Checkpoint(token);
             var folder = order[i];
             folder.Parent!.Usage += folder.Usage;
         }
     }
 
     internal bool Contains(ulong reference) => reference == 0 || folders.ContainsKey(reference);
+
+    internal IReadOnlySet<ulong> ChangedDirectories => changedDirectories!;
+
+    internal void Checkpoint(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        yieldToSearch?.Invoke(token);
+    }
+
+    /// <summary>在同一个卷视图中读取准确的逻辑大小。任何后代大小缺失时，合计仍为未知。</summary>
+    internal Int128? DirectorySize(ulong reference)
+    {
+        var folder = DirectoryPathResolver.IsRoot(reference) ? root : folders.GetValueOrDefault(reference);
+        return folder is { Usage.Unknown: 0 } ? folder.Usage.Bytes : null;
+    }
 
     /// <summary>按当前索引校验临时展开的父子关系，返回第一个已删除或移动的目录。</summary>
     internal ulong? FindBrokenBranch(ulong parent, IEnumerable<ulong> branch)
@@ -253,7 +272,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
     {
         foreach (var anchor in anchors.Where(folder => folder.Parent is null).OrderBy(folder => folder.AnchorPath?.Length))
         {
-            token.ThrowIfCancellationRequested();
+            Checkpoint(token);
             Attach(anchor, AnchorParent(anchor), updateUsage);
         }
     }
@@ -299,15 +318,29 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
 
     private sealed class Layer
     {
+        internal SearchIndex Index { get; }
+        private readonly ChildFiles? files;
+
+        internal Layer(SearchIndex index, bool includeFileRows, CancellationToken token)
+            : this(index, includeFileRows ? new ChildFiles(index, token) : null) { }
+
+        private Layer(SearchIndex index, ChildFiles? files) => (Index, this.files) = (index, files);
+
+        internal Layer WithView(SearchIndex index) => Index == index ? this : new(index, files);
+
+        internal void OfferFiles(ulong directory, Action<Candidate, Int128> offer, CancellationToken token)
+            => files!.OfferFiles(Index, directory, offer, token);
+    }
+
+    private sealed class ChildFiles
+    {
         private readonly int[] offsets;
         private readonly int[] rows;
         private readonly Dictionary<ulong, int> firstSlot = [];
         private readonly Dictionary<ulong, List<int>> otherSlots = [];
-        internal SearchIndex Index { get; }
 
-        internal Layer(SearchIndex index, CancellationToken token)
+        internal ChildFiles(SearchIndex index, CancellationToken token)
         {
-            Index = index;
             offsets = new int[index.Directories.Length + 1];
             for (int id = 0; id < index.Count; id++)
             {
@@ -341,18 +374,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
             }
         }
 
-        private Layer(SearchIndex index, Layer source)
-        {
-            Index = index;
-            offsets = source.offsets;
-            rows = source.rows;
-            firstSlot = source.firstSlot;
-            otherSlots = source.otherSlots;
-        }
-
-        internal Layer WithView(SearchIndex index) => Index == index ? this : new(index, this);
-
-        internal void OfferFiles(ulong directory, Action<Candidate, Int128> offer, CancellationToken token)
+        internal void OfferFiles(SearchIndex index, ulong directory, Action<Candidate, Int128> offer, CancellationToken token)
         {
             if (!firstSlot.TryGetValue(directory, out int first)) return;
             OfferSlot(first);
@@ -365,7 +387,7 @@ internal sealed partial class SpaceUsageIndex(string rootPath)
                 {
                     if ((i & 4095) == 0) token.ThrowIfCancellationRequested();
                     int id = rows[i];
-                    if (Index.IsVisible(id)) offer(new(null, Index, id), Index.Size(id));
+                    if (index.IsVisible(id)) offer(new(null, index, id), index.Size(id));
                 }
             }
         }

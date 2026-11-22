@@ -68,9 +68,22 @@ def check_backend(command):
             assert exact["total"] == 100 and query("目录009", match_path=False)["total"] == 0
             row = exact["rows"][0]
             assert base64.b64decode(row["key"]).decode("utf-16-le", "surrogatepass") == row["fullPath"]
-            largest = query("", sort=2, descending=True)["rows"][0]
-            assert largest["sizeText"] == "999 KB", largest["sizeText"]
-            assert largest["sizeBytesText"] == "1,022,976 B"
+            expected_folder_size = f"{sum(range(100, 200)) * 1024:,} B"
+            folder = query("深层1", match_path=False)["rows"][0]
+            assert folder["isDirectory"], folder
+            if folder.get("sizeHint") == "正在计算目录大小":
+                updates = receive("directorySizes", lambda event: event["requestId"] == request_id)["rows"]
+                folder.update(next(row for row in updates if row["key"] == folder["key"]))
+            assert folder["sizeBytesText"] == expected_folder_size, folder
+            sorted_page = query("", sort=2, descending=True)
+            if sorted_page.get("directorySortPending"):
+                sorted_page = receive("result", lambda event: event["requestId"] == request_id
+                                      and not event.get("directorySortPending"))
+            largest = sorted_page["rows"][0]
+            assert largest["isDirectory"] and largest["sizeBytesText"] == expected_folder_size, largest
+            largest_file = query("000999", sort=2, descending=True)["rows"][0]
+            assert largest_file["sizeText"] == "999 KB", largest_file
+            assert largest_file["sizeBytesText"] == "1,022,976 B"
             assert query("000000")["rows"][0]["sizeText"] == "0 B"
             tail = query("", offset=1200)
             assert tail["total"] == 1000 and tail["offset"] == 800 and len(tail["rows"]) == 200

@@ -2,7 +2,8 @@ namespace NtfsSearch.Core;
 
 internal static class SortIndex
 {
-    internal static int[] Sort(int[] order, Comparison<int> comparison, CancellationToken token, int[]? scratch = null)
+    internal static int[] Sort(int[] order, Comparison<int> comparison, CancellationToken token, int[]? scratch = null,
+        int maxParallelism = 16, Action? checkpoint = null)
     {
         token.ThrowIfCancellationRequested();
         void SortPart(int start, int length)
@@ -12,14 +13,18 @@ internal static class SortIndex
             {
                 Array.Sort(order, start, length, Comparer<int>.Create((a, b) =>
                 {
-                    if ((++calls & 4095) == 0) token.ThrowIfCancellationRequested();
+                    if ((++calls & 4095) == 0)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        checkpoint?.Invoke();
+                    }
                     return comparison(a, b);
                 }));
             }
             catch (InvalidOperationException e) when (e.InnerException is OperationCanceledException)
             { throw new OperationCanceledException(token); }
         }
-        int parts = (int)Math.Min(Math.Min(Environment.ProcessorCount, 16), Math.Max(1, ((long)order.Length + 999_999) / 1_000_000));
+        int parts = (int)Math.Min(Math.Min(Environment.ProcessorCount, maxParallelism), Math.Max(1, ((long)order.Length + 999_999) / 1_000_000));
         if (parts <= 1) { SortPart(0, order.Length); token.ThrowIfCancellationRequested(); return order; }
         int length = (int)(((long)order.Length + parts - 1) / parts);
         Parallel.For(0, parts, new ParallelOptions { CancellationToken = token, MaxDegreeOfParallelism = parts }, part =>

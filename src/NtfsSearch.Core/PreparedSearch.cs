@@ -8,10 +8,11 @@ internal sealed class PreparedSearch(SearchIndex index, ulong[]? bits, long tota
     private ulong[]? ownedBits = bits;
     private bool disposed;
     public long TotalCount { get; } = total;
-    public IEnumerable<int> Ids(SortField sort, bool descending, CancellationToken token)
+    public IEnumerable<int> Ids(SortField sort, bool descending, CancellationToken token,
+        DirectorySizeOrder? directorySizes = null)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        return index.EnumerateMatches(ownedBits, TotalCount, sort, descending, token);
+        return index.EnumerateMatches(ownedBits, TotalCount, sort, descending, token, directorySizes);
     }
     public void Dispose()
     {

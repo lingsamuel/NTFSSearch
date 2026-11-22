@@ -12,6 +12,7 @@ export interface SearchRow {
   isDirectory: boolean
   sizeText: string
   sizeBytesText: string | null
+  sizeHint: string | null
   modifiedText: string
 }
 
@@ -24,6 +25,8 @@ export interface SearchResult {
   pageSize: number
   userMilliseconds: number | null
   volumesReady: number
+  directorySortPending: boolean
+  directorySortFailed: boolean
   rows: SearchRow[]
 }
 
@@ -104,6 +107,7 @@ export type DesktopMessage =
   | IndexStatus
   | SpaceAnalysisResult
   | SearchServiceStatus
+  | { type: 'directorySizes'; requestId: number; rows: Pick<SearchRow, 'key' | 'sizeText' | 'sizeBytesText' | 'sizeHint'>[] }
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
   | { type: 'saving'; written: number; total: number }

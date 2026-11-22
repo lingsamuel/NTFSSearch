@@ -125,7 +125,8 @@ public sealed partial class SearchIndex
         finally { if (memo is not null) Names.ReturnWorkspace(); }
     }
 
-    internal IEnumerable<int> EnumerateMatches(ulong[]? bits, long total, SortField sort, bool descending, CancellationToken token)
+    internal IEnumerable<int> EnumerateMatches(ulong[]? bits, long total, SortField sort, bool descending, CancellationToken token,
+        DirectorySizeOrder? directorySizes = null)
     {
         if (bits is not null && total <= 16_384)
         {
@@ -141,12 +142,58 @@ public sealed partial class SearchIndex
                     mask &= mask - 1;
                 }
             }
-            Array.Sort(ids, (a, b) => CompareAcross(this, a, this, b, sort, descending));
+            Array.Sort(ids, (a, b) => directorySizes is null ? CompareAcross(this, a, this, b, sort, descending)
+                : CompareSizes(this, a, EffectiveSize(a, directorySizes), this, b, EffectiveSize(b, directorySizes), descending));
             foreach (int id in ids) { token.ThrowIfCancellationRequested(); yield return id; }
             yield break;
         }
-        foreach (int id in EnumerateOrdered(sort, descending, token))
-            if (IsVisible(id) && (bits is null || (bits[id / 64] & (1UL << (id % 64))) != 0)) yield return id;
+        if (directorySizes is not { HasKnownDirectories: true })
+        {
+            foreach (int id in EnumerateOrdered(sort, descending, token))
+                if (Matches(id)) yield return id;
+            yield break;
+        }
+
+        // 已知目录与文件归并完才访问未知段。大量目录命中时，第一页可直接从已知值开始。
+        using var regular = EnumerateOrdered(sort, descending, token, knownOnly: true).Where(Matches).GetEnumerator();
+        using var folders = directorySizes.Ordered(descending, token).Where(Matches).GetEnumerator();
+        bool hasRegular = KnownCount(sort) != 0 && (bits is null || HasMatchingFile()) && regular.MoveNext();
+        bool hasFolder = folders.MoveNext();
+        while (hasRegular || hasFolder)
+        {
+            if (hasFolder && (!hasRegular || CompareSizes(this, folders.Current, directorySizes.GetSize(folders.Current),
+                this, regular.Current, EffectiveSize(regular.Current, null), descending) < 0))
+            {
+                yield return folders.Current;
+                hasFolder = folders.MoveNext();
+            }
+            else
+            {
+                yield return regular.Current;
+                hasRegular = regular.MoveNext();
+            }
+        }
+        foreach (int id in EnumerateOrdered(sort, descending, token, knownOnly: false))
+            if (Matches(id) && (!Records[id].IsDirectory || !directorySizes.GetSize(id).HasValue)) yield return id;
+
+        bool Matches(int id) => IsVisible(id) && (bits is null || (bits[id / 64] & (1UL << (id % 64))) != 0);
+
+        // 目录独占的宽查询从位图确认没有文件，避免顺着文件排列遍历整卷。
+        bool HasMatchingFile()
+        {
+            int words = (int)(((long)Count + 63) / 64);
+            for (int word = 0; word < words; word++)
+            {
+                if ((word & 4095) == 0) token.ThrowIfCancellationRequested();
+                ulong mask = bits![word];
+                while (mask != 0)
+                {
+                    if (Records[word * 64 + BitOperations.TrailingZeroCount(mask)].HasSize) return true;
+                    mask &= mask - 1;
+                }
+            }
+            return false;
+        }
     }
 
     internal static void ValidateRequest(string text, SortField sort, int offset, int limit, CancellationToken token)

@@ -262,7 +262,7 @@ defineExpose({ focusSelection, scrollToStart })
                 <strong v-if="part.matched">{{ part.text }}</strong><template v-else>{{ part.text }}</template>
               </template>
             </td>
-            <td class="entry-size" :title="row.sizeBytesText ?? undefined">{{ row.sizeText }}</td>
+            <td class="entry-size" :title="row.sizeBytesText ?? row.sizeHint ?? undefined">{{ row.sizeText }}</td>
             <td class="entry-date">{{ row.modifiedText }}</td>
           </tr>
         </tbody>

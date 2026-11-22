@@ -37,6 +37,9 @@ public sealed record SearchRow(int Id, string Name, string FullPath, long? Size,
 public sealed record SearchResult(long TotalCount, IReadOnlyList<SearchRow> Rows, TimeSpan Elapsed)
 {
     public int VolumesReady { get; init; }
+    internal List<DirectorySearchRow>? DirectoryRows { get; init; }
+    internal bool DirectorySortPending { get; init; }
+    internal bool DirectorySortFailed { get; init; }
 }
 
 public sealed record IndexStatistics(int Entries, int Directories, long NameBytes,

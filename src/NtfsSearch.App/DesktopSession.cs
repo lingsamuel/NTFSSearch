@@ -18,6 +18,7 @@ internal sealed class DesktopSession
     private readonly object settingsGate = new();
     private readonly Queue<Func<Task>> searchServiceChanges = new();
     private readonly SpaceAnalysisSession spaceAnalysis;
+    private readonly DirectorySizeWorker directorySizes;
     private readonly QueryRefreshState queryState = new();
     private readonly FileTypeIcons fileTypeIcons = new();
     private CancellationTokenSource? search;
@@ -33,6 +34,10 @@ internal sealed class DesktopSession
     private bool refreshing, discoveryComplete, collectionCancelled, quitRequested;
     private int catalogNoticeQueued;
     private int catalogRefreshRequested;
+    private int directoryNoticeQueued;
+    private SearchResult? displayedResult;
+    private SearchOptions? displayedPage;
+    private DirectorySizeText[] displayedDirectorySizes = [];
 
     internal DesktopSession(SearchHost host, Action<object> publish, string? settingsDirectory,
         string? portOverride, bool enableServiceByDefault)
@@ -43,6 +48,7 @@ internal sealed class DesktopSession
         this.enableServiceByDefault = enableServiceByDefault;
         searchService = new(host, portOverride);
         spaceAnalysis = new(host, publish, Post);
+        directorySizes = new(host, QueueDirectoryRefresh);
     }
 
     private bool SearchServiceEnabled => settings.SearchServiceEnabled ?? enableServiceByDefault;
@@ -51,6 +57,7 @@ internal sealed class DesktopSession
     {
         using var lifetime = new CancellationTokenSource();
         host.Catalog.Changed += QueueCatalogRefresh;
+        host.Catalog.Changed += directorySizes.Notify;
         host.FileActivity += (observation, parents) =>
         {
             if (spaceAnalysis.QueueActivity(observation, parents)) QueueRefresh();
@@ -83,6 +90,7 @@ internal sealed class DesktopSession
         RunQuery();
         _ = ReadInputAsync(input, lifetime.Token);
         Task automatic = Task.Run(() => ObserveAutomaticAsync(lifetime.Token));
+        Task folderSizes = Task.Run(() => directorySizes.RunAsync(lifetime.Token));
         try
         {
             await foreach (var action in messages.Reader.ReadAllAsync())
@@ -97,7 +105,9 @@ internal sealed class DesktopSession
             var activeSearch = search;
             activeSearch?.Cancel();
             await lifetime.CancelAsync();
-            await Task.WhenAll(automatic, searchTask ?? Task.CompletedTask, spaceAnalysis.StopAsync(), StopSearchServiceAsync());
+            await Task.WhenAll(automatic, folderSizes, searchTask ?? Task.CompletedTask,
+                spaceAnalysis.StopAsync(), StopSearchServiceAsync());
+            directorySizes.Dispose();
             activeSearch?.Dispose();
         }
 
@@ -277,6 +287,21 @@ internal sealed class DesktopSession
         QueueRefresh();
     }
 
+    private void QueueDirectoryRefresh()
+    {
+        if (Interlocked.Exchange(ref directoryNoticeQueued, 1) != 0) return;
+        Post(() =>
+        {
+            Interlocked.Exchange(ref directoryNoticeQueued, 0);
+            if (options.Sort == SortField.Size)
+            {
+                if (search is not null || displayedResult?.DirectorySortPending == true) QueueCatalogRefresh();
+            }
+            else if (displayedPage == options)
+                PublishDirectorySizes(options);
+        });
+    }
+
     private void QueueRefresh()
     {
         // 层更新可能来自多个卷，队列最多保留一个尚未处理的通知。
@@ -309,6 +334,7 @@ internal sealed class DesktopSession
         if (!queryState.TryStart(out var request)) return;
         var source = new CancellationTokenSource();
         search = source;
+        if (request.UserInitiated) directorySizes.Pause();
         searchTask = ExecuteQueryAsync(request, options, source);
     }
 
@@ -321,7 +347,7 @@ internal sealed class DesktopSession
         {
             while (true)
             {
-                result = await Task.Run(() => host.Catalog.Search(snapshot.Text, snapshot.Sort, snapshot.Descending,
+                result = await Task.Run(() => host.Catalog.SearchDesktop(snapshot.Text, snapshot.Sort, snapshot.Descending,
                     snapshot.MatchPath, offset, PageSize, source.Token), source.Token);
                 source.Token.ThrowIfCancellationRequested();
                 if (offset == 0 || offset < result.TotalCount) break;
@@ -331,6 +357,10 @@ internal sealed class DesktopSession
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested) { }
         catch (Exception error) { failure = error.Message; }
+        finally
+        {
+            if (request.UserInitiated) directorySizes.Resume();
+        }
         Post(() =>
         {
             bool cancelled = source.IsCancellationRequested;
@@ -352,24 +382,70 @@ internal sealed class DesktopSession
     private void PublishResult(SearchResult result, SearchOptions page, bool userInitiated)
     {
         string[] terms = SearchQuery.Parse(page.Text);
+        displayedPage = page;
+        displayedResult = result;
+        displayedDirectorySizes = result.DirectoryRows?.Select(source => ReadDirectorySize(source,
+            page.Sort == SortField.Size ? source.SortSizes : source.Volume.DirectorySizes)).ToArray() ?? [];
+        int folder = 0;
         publish(new
         {
             Type = "result", page.RequestId, UserInitiated = userInitiated,
             page.Offset, Total = result.TotalCount, PageSize,
             UserMilliseconds = queryState.UserElapsed?.TotalMilliseconds,
             result.VolumesReady,
-            Rows = result.Rows.Select(row => new
+            result.DirectorySortPending, result.DirectorySortFailed,
+            Rows = result.Rows.Select((row, index) =>
             {
-                Key = DesktopFileActions.EncodePath(row.FullPath),
-                row.Name, row.FullPath, row.IsDirectory,
-                MatchRanges = SearchQuery.MatchRanges(row.FullPath, row.Name.Length, terms, page.MatchPath),
-                SizeText = FileSizeDisplay.Format(row.Size),
-                SizeBytesText = row.Size is long size ? $"{size:N0} B" : null,
-                ModifiedText = row.ModifiedUtcTicks is long ticks && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks
-                    ? new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "—"
+                var size = result.DirectoryRows is { } directories && folder < directories.Count && directories[folder].PageIndex == index
+                    ? displayedDirectorySizes[folder++] : new DirectorySizeText(FileSizeDisplay.Format(row.Size),
+                        row.Size is long bytes ? $"{bytes:N0} B" : null, null);
+                return new
+                {
+                    Key = DesktopFileActions.EncodePath(row.FullPath),
+                    row.Name, row.FullPath, row.IsDirectory,
+                    MatchRanges = SearchQuery.MatchRanges(row.FullPath, row.Name.Length, terms, page.MatchPath),
+                    size.SizeText, size.SizeBytesText, size.SizeHint,
+                    ModifiedText = row.ModifiedUtcTicks is long ticks && ticks >= DateTime.MinValue.Ticks && ticks <= DateTime.MaxValue.Ticks
+                        ? new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "—"
+                };
             }).ToArray()
         });
     }
+
+    private void PublishDirectorySizes(SearchOptions page)
+    {
+        if (displayedResult?.DirectoryRows is not { } folders) return;
+        var changes = new List<object>();
+        for (int index = 0; index < folders.Count; index++)
+        {
+            var source = folders[index];
+            if (host.Catalog.FindVolume(source.Volume.Id) != source.Volume) continue;
+            var size = ReadDirectorySize(source, source.Volume.DirectorySizes);
+            if (displayedDirectorySizes[index] == size) continue;
+            displayedDirectorySizes[index] = size;
+            var row = displayedResult.Rows[source.PageIndex];
+            changes.Add(new
+            {
+                Key = DesktopFileActions.EncodePath(row.FullPath), size.SizeText, size.SizeBytesText, size.SizeHint
+            });
+        }
+        if (changes.Count != 0) publish(new { Type = "directorySizes", page.RequestId, Rows = changes });
+    }
+
+    private static DirectorySizeText ReadDirectorySize(DirectorySearchRow source, DirectorySizeOrder[]? orders)
+    {
+        return orders switch
+        {
+            { Length: > 0 } sizes when sizes[source.Layer].GetSize(source.Row) is Int128 bytes =>
+                new(FileSizeDisplay.Format(bytes), $"{bytes:N0} B", null),
+            { Length: > 0 } => new("—", null, "部分后代文件大小未知"),
+            { Length: 0 } => new("—", null, "目录大小统计失败"),
+            _ when source.Volume.SupportsDirectorySizes => new("—", null, "正在计算目录大小"),
+            _ => new("—", null, null)
+        };
+    }
+
+    private readonly record struct DirectorySizeText(string SizeText, string? SizeBytesText, string? SizeHint);
 
     private void PublishStatus()
     {

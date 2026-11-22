@@ -6,9 +6,10 @@ internal sealed partial class SpaceUsageIndex
 {
     internal SpaceUsageIndex Update(IReadOnlyList<SearchIndex> indexes, CancellationToken token = default)
     {
-        token.ThrowIfCancellationRequested();
+        Checkpoint(token);
+        changedDirectories?.Clear();
         if (layers.Length == 0 || indexes.Count == 0 || layers[0].Index.Records != indexes[0].Records)
-            return Create(rootPath, indexes, token);
+            return Create(rootPath, indexes, token, includeFileRows, yieldToSearch);
         if (layers.Length == indexes.Count && layers.Select(layer => layer.Index).SequenceEqual(indexes)) return this;
 
         var previousLayers = layers.ToDictionary(layer => layer.Index.Records);
@@ -25,7 +26,7 @@ internal sealed partial class SpaceUsageIndex
             }
             else
             {
-                nextLayers[i] = new Layer(index, token);
+                nextLayers[i] = new Layer(index, includeFileRows, token);
                 CollectLayer(index, add: true);
             }
         }
@@ -35,7 +36,7 @@ internal sealed partial class SpaceUsageIndex
         var touched = new HashSet<Folder>(changedFolders);
         foreach (var folder in changedFolders)
         {
-            token.ThrowIfCancellationRequested();
+            Checkpoint(token);
             var (parent, name) = LocateDirectory(folder.Id, indexes);
             relations.Add((folder, parent, name));
             if (parent is not null) touched.Add(parent);
@@ -47,7 +48,7 @@ internal sealed partial class SpaceUsageIndex
                 && (change.Key.DirectFiles == 0 || change.Key.DirectFiles + change.Value.Count == 0)))
             foreach (var anchor in anchors)
             {
-                token.ThrowIfCancellationRequested();
+                Checkpoint(token);
                 Detach(anchor, anchor.Parent!);
                 touched.Add(anchor);
             }
@@ -75,7 +76,7 @@ internal sealed partial class SpaceUsageIndex
         }
         foreach (var folder in touched)
         {
-            token.ThrowIfCancellationRequested();
+            Checkpoint(token);
             if (folder == root || folder.Indexed) continue;
             if (folder.DirectFiles != 0 || folder.FirstChild is not null) anchors.Add(folder);
             else PruneAnchor(folder);
@@ -88,7 +89,7 @@ internal sealed partial class SpaceUsageIndex
         {
             for (int id = 0; id < index.Count; id++)
             {
-                if ((id & 65535) == 0) token.ThrowIfCancellationRequested();
+                if ((id & 4095) == 0) Checkpoint(token);
                 if (index.IsVisible(id)) Collect(index, id, add);
             }
         }
@@ -99,6 +100,7 @@ internal sealed partial class SpaceUsageIndex
             if (row.IsDirectory)
             {
                 ulong reference = index.FileReferences![id];
+                changedDirectories?.Add(reference);
                 if (!DirectoryPathResolver.IsRoot(reference)) changedFolders.Add(GetFolder(reference));
                 return;
             }
@@ -126,14 +128,14 @@ internal sealed partial class SpaceUsageIndex
         return default;
     }
 
-    private static void CompareVisibility(SearchIndex previous, SearchIndex current,
+    private void CompareVisibility(SearchIndex previous, SearchIndex current,
         Action<SearchIndex, int, bool> change, CancellationToken token)
     {
         if (previous.HiddenRows == current.HiddenRows) return;
         int words = (int)(((long)current.Count + 63) / 64);
         for (int i = 0; i < words; i++)
         {
-            if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
+            if ((i & 1023) == 0) Checkpoint(token);
             ulong oldHidden = previous.HiddenRows?[i] ?? 0;
             ulong newHidden = current.HiddenRows?[i] ?? 0;
             ulong changed = oldHidden ^ newHidden;
@@ -147,7 +149,7 @@ internal sealed partial class SpaceUsageIndex
         }
     }
 
-    private static void Attach(Folder folder, Folder parent, bool updateUsage = true)
+    private void Attach(Folder folder, Folder parent, bool updateUsage = true)
     {
         for (Folder? ancestor = parent; ancestor is not null; ancestor = ancestor.Parent)
             if (ancestor == folder) throw new InvalidDataException("空间分析的目录层级包含循环。");
@@ -168,17 +170,21 @@ internal sealed partial class SpaceUsageIndex
         }
     }
 
-    private static void Detach(Folder folder, Folder parent)
+    private void Detach(Folder folder, Folder parent)
     {
         Adjust(parent, default(Usage) - folder.Usage);
         parent.RemoveChild(folder);
         folder.Parent = null;
     }
 
-    private static void Adjust(Folder folder, Usage delta)
+    private void Adjust(Folder folder, Usage delta)
     {
         if (delta == default) return;
-        for (Folder? current = folder; current is not null; current = current.Parent) current.Usage += delta;
+        for (Folder? current = folder; current is not null; current = current.Parent)
+        {
+            current.Usage += delta;
+            changedDirectories?.Add(current.Id);
+        }
     }
 
     private readonly record struct FileChange(long Count, Usage Usage);

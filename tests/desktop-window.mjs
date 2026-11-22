@@ -336,7 +336,10 @@ try {
     await evaluate("document.querySelector('th:nth-child(3) button').click()")
     await until(() => evaluate("document.querySelector('.page-number').textContent.trim() === '1 / 5'"), '排序重置到第一页')
     await evaluate("document.querySelector('th:nth-child(3) button').click()")
-    await until(() => evaluate("document.querySelector('th:nth-child(3)').getAttribute('aria-sort') === 'descending' && document.querySelector('tbody tr td:nth-child(3)').textContent === '999 KB' && document.querySelector('tbody tr td:nth-child(3)').title === '1,022,976 B'"), '大小降序及精确字节数')
+    const largestSize = benchmark ? '1,023,998,976 B' : '15,308,800 B'
+    await until(() => evaluate(`document.querySelector('th:nth-child(3)').getAttribute('aria-sort') === 'descending'
+      && document.querySelector('tbody tr td:nth-child(3)').title === '${largestSize}'
+      && !document.querySelector('.directory-sort-status')`), '大小降序及精确字节数')
 
     await query('目录009', 100)
     await evaluate("const scope = document.querySelector('select'); scope.value = 'name'; scope.dispatchEvent(new Event('change'));")

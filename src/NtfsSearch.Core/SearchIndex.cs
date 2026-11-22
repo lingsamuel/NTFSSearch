@@ -199,33 +199,36 @@ public sealed partial class SearchIndex
     internal IEnumerable<int> EnumerateSortOrder(SortField field, CancellationToken token)
         => EnumerateOrdered(field, false, token);
 
-    private IEnumerable<int> EnumerateOrdered(SortField field, bool descending, CancellationToken token)
+    private IEnumerable<int> EnumerateOrdered(SortField field, bool descending, CancellationToken token, bool? knownOnly = null)
     {
         int f = (int)field;
+        int start = knownOnly == false ? knownCounts[f] : 0;
+        int end = knownOnly == true ? knownCounts[f] : Count;
         if (corrections is null)
         {
             var order = orders[f];
             int known = knownCounts[f];
-            for (int position = 0; position < Count; position++)
+            for (int position = start; position < end; position++)
             {
                 if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
                 yield return order[descending && position < known ? known - 1 - position : position];
             }
             yield break;
         }
-        int old = 0, next = 0, length = corrections[f].Length;
-        for (int position = 0; position < Count; position++)
+        int old = start, next = knownOnly == false ? correctionKnown![f] : 0;
+        int correctionsEnd = knownOnly == true ? correctionKnown![f] : corrections[f].Length;
+        for (int position = 0; old < end || next < correctionsEnd; position++)
         {
             if ((position & 4095) == 0) token.ThrowIfCancellationRequested();
-            while (old < Count && correctionDirectories![Records[OrderedId(field, descending, old)].Directory])
+            while (old < end && correctionDirectories![Records[OrderedId(field, descending, old)].Directory])
             {
                 if ((old & 4095) == 0) token.ThrowIfCancellationRequested();
                 old++;
             }
-            int corrected = next < length ? corrections[f][descending && next < correctionKnown![f] ? correctionKnown[f] - 1 - next : next] : -1;
-            if (next < length && (old == Count || CompareAcross(this, corrected, this, OrderedId(field, descending, old), field, descending) <= 0))
+            int corrected = next < correctionsEnd ? corrections[f][descending && next < correctionKnown![f] ? correctionKnown[f] - 1 - next : next] : -1;
+            if (next < correctionsEnd && (old == end || CompareAcross(this, corrected, this, OrderedId(field, descending, old), field, descending) <= 0))
             { next++; yield return corrected; }
-            else { yield return OrderedId(field, descending, old); old++; }
+            else if (old < end) { yield return OrderedId(field, descending, old); old++; }
         }
     }
     internal int KnownCount(SortField field) => knownCounts[(int)field];
@@ -251,9 +254,26 @@ public sealed partial class SearchIndex
             SortField.Modified => ak ? x.Modified.CompareTo(y.Modified) : 0,
             _ => 0
         };
-        if (compare == 0) compare = ComparePath(left, a, right, b);
-        if (compare == 0) compare = a.CompareTo(b);
+        compare = ComparePathAndRow(left, a, right, b, compare);
         return descending && ak && bk ? -Math.Sign(compare) : compare;
+    }
+
+    internal Int128? EffectiveSize(int id, DirectorySizeOrder? directories)
+        => Records[id].IsDirectory ? directories?.GetSize(id) : Records[id].HasSize ? Size(id) : null;
+
+    internal static int CompareSizes(SearchIndex left, int a, Int128? leftSize,
+        SearchIndex right, int b, Int128? rightSize, bool descending = false)
+    {
+        if (leftSize.HasValue != rightSize.HasValue) return leftSize.HasValue ? -1 : 1;
+        int comparison = ComparePathAndRow(left, a, right, b,
+            leftSize.HasValue ? leftSize.Value.CompareTo(rightSize.GetValueOrDefault()) : 0);
+        return descending && leftSize.HasValue ? -Math.Sign(comparison) : comparison;
+    }
+
+    private static int ComparePathAndRow(SearchIndex left, int a, SearchIndex right, int b, int comparison)
+    {
+        if (comparison == 0) comparison = ComparePath(left, a, right, b);
+        return comparison == 0 ? a.CompareTo(b) : comparison;
     }
 
     private static int CompareNames(SearchIndex left, int a, SearchIndex right, int b)
