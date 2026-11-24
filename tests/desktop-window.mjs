@@ -767,6 +767,13 @@ async function verifySpaceInteraction() {
 
   await click('空间分析')
   await until(() => visible('.space-total'), '等待首次空间分析')
+  const [levelInset, volumeInset] = await evaluate(`['.space-level', '.volume-trigger'].map(selector => {
+    const control = document.querySelector(selector);
+    const arrow = control.querySelector('.chevron') ?? control.nextElementSibling?.closest('.chevron');
+    return arrow ? control.getBoundingClientRect().right - arrow.getBoundingClientRect().right : null;
+  })`)
+  assert.ok(levelInset > 0 && volumeInset > 0 && Math.abs(levelInset - volumeInset) < 0.5,
+    `下拉箭头距右边框应一致，细节层级 ${levelInset}px，磁盘 ${volumeInset}px`)
   const address = "document.querySelector('.space-address input')"
   const setAddress = path => evaluate(`(() => {
     const input = ${address};

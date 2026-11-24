@@ -326,9 +326,12 @@ onBeforeUnmount(() => {
       <button ref="back" type="button" class="outlined-button" aria-label="返回搜索" @click="emit('close')">返回搜索</button>
       <SpaceVolumePicker :roots="result?.roots ?? []" :root="root" :visible="visible" :capacities="capacities"
         :settings="volumeSettings" @select="emit('view', $event)" @open="emit('refreshCapacities')" />
-      <select v-model.number="detailLevel" class="scope-select space-level" aria-label="细节层级">
-        <option v-for="level in 3" :key="level" :value="level">细节 {{ level }} 层</option>
-      </select>
+      <div class="space-level-control">
+        <select v-model.number="detailLevel" class="scope-select space-level" aria-label="细节层级">
+          <option v-for="level in 3" :key="level" :value="level">细节 {{ level }} 层</option>
+        </select>
+        <span class="chevron up flipped" aria-hidden="true"></span>
+      </div>
       <button v-if="result?.exclusions.length" type="button" class="outlined-button"
         :disabled="pending || pathPending" popovertarget="space-exclusions" @click.prevent="toggleExclusions">
         已排除 {{ formatCount(result.exclusions.length) }} 项
@@ -435,7 +438,13 @@ onBeforeUnmount(() => {
   background: var(--chrome);
 }
 .space-toolbar button { height: 39px; white-space: nowrap; }
-.space-level { min-width: 94px; }
+.space-level-control { position: relative; display: flex; align-items: center; }
+.space-level { appearance: none; min-width: 94px; padding-right: calc(var(--scope-select-padding) + 18px); }
+.space-level-control .chevron {
+  position: absolute;
+  right: calc(var(--scope-select-padding) + 1px);
+  pointer-events: none;
+}
 .space-total { margin-left: auto; white-space: nowrap; color: var(--muted); }
 .space-total strong { margin-left: 6px; color: #192538; font-variant-numeric: tabular-nums; }
 
