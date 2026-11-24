@@ -203,6 +203,10 @@ export function dragFiles(keys: string[]) {
   return invoke('drag_files', { keys })
 }
 
+export function deleteFiles(keys: string[], permanent: boolean) {
+  return invoke<boolean>('delete_files', { keys, permanent })
+}
+
 export function startBackend() {
   return invoke('start_backend')
 }

@@ -17,6 +17,7 @@ const emit = defineEmits<{
   sort: [field: SortField]
   action: [type: FileAction, row: SearchRow]
   drag: [keys: string[]]
+  delete: [keys: string[], permanent: boolean]
 }>()
 
 const columns = [
@@ -209,7 +210,7 @@ function moveResultDrag(event: PointerEvent) {
       resultDrag = undefined
       if (!props.rows.some(row => row.key === drag.rowKey)) return
       if (!selected.value.has(drag.rowKey)) selectRow(drag.rowKey)
-      emit('drag', props.rows.filter(row => selected.value.has(row.key)).map(row => row.key))
+      emit('drag', selectedKeys())
       return
     }
     area.setPointerCapture(event.pointerId)
@@ -305,6 +306,20 @@ function blockDragClick(event: MouseEvent) {
 function runAction(type: FileAction, key: string | null) {
   const row = props.rows.find(row => row.key === key)
   if (row && !props.pending) emit('action', type, row)
+  finishMenuAction()
+}
+
+function selectedKeys() {
+  return props.rows.filter(row => selected.value.has(row.key)).map(row => row.key)
+}
+
+function runDelete(permanent: boolean) {
+  const keys = selectedKeys()
+  finishMenuAction()
+  if (!props.pending && keys.length) emit('delete', keys, permanent)
+}
+
+function finishMenuAction() {
   if (menu.value) {
     closeMenu()
     grid.value?.focus({ preventScroll: true })
@@ -361,6 +376,10 @@ function handleGridKey(event: KeyboardEvent) {
     case 'Home': choose(0, event.shiftKey); break
     case 'End': choose(count - 1, event.shiftKey); break
     case 'Enter': runAction('open', activeKey.value); break
+    case 'Delete':
+      if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return
+      if (!event.repeat) runDelete(event.shiftKey)
+      break
     case 'a':
     case 'A':
       if (!event.ctrlKey) return
@@ -485,6 +504,10 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
       <button v-for="action in fileMenuActions" :key="action.type" type="button" role="menuitem" @click="runAction(action.type, menu.key)">
         {{ t(action.label) }}
         <kbd v-if="'shortcut' in action">{{ t(action.shortcut) }}</kbd>
+      </button>
+      <button type="button" role="menuitem" @click="runDelete(false)">
+        {{ t('file.delete') }}
+        <kbd>Delete</kbd>
       </button>
     </div>
   </section>

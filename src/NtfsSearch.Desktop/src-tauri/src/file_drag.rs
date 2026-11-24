@@ -1,21 +1,18 @@
-use crate::localization::{error as localized_error, format as localized_format, text};
-use base64::{engine::general_purpose::STANDARD, Engine};
+use crate::{
+    localization::{error as localized_error, format as localized_format, text},
+    shell_files::{decode_path, delete_items, ItemIdList, OleApartment},
+};
 use std::{
     cell::Cell,
-    ffi::OsString,
     fs,
     mem::size_of,
-    os::windows::{
-        ffi::{OsStrExt, OsStringExt},
-        fs::OpenOptionsExt,
-        io::AsRawHandle,
-    },
+    os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle},
     path::{Path, PathBuf},
     ptr, slice,
 };
 use tauri::{async_runtime::channel, WebviewWindow};
 use windows::{
-    core::{Error, BOOL, PCWSTR},
+    core::{Error, BOOL},
     Win32::{
         Foundation::{GlobalFree, HANDLE, HWND},
         Storage::FileSystem::{
@@ -24,23 +21,17 @@ use windows::{
         },
         System::{
             Com::{
-                CoCreateInstance, IDataObject, CLSCTX_INPROC_SERVER, DVASPECT_CONTENT, FORMATETC,
-                STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+                IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
             },
             DataExchange::RegisterClipboardFormatW,
             Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
-            Ole::{
-                OleInitialize, OleUninitialize, ReleaseStgMedium, CF_HDROP, DROPEFFECT,
-                DROPEFFECT_COPY, DROPEFFECT_MOVE,
-            },
+            Ole::{ReleaseStgMedium, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE},
         },
         UI::{
             Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON},
             Shell::{
-                Common::ITEMIDLIST, FileOperation, IFileOperation, ILFree, SHCreateDataObject,
-                SHCreateShellItemArrayFromIDLists, SHDoDragDrop, SHParseDisplayName,
-                CFSTR_PERFORMEDDROPEFFECT, DROPFILES, FOFX_RECYCLEONDELETE,
-                FOF_NO_CONNECTED_ELEMENTS,
+                Common::ITEMIDLIST, SHCreateDataObject, SHDoDragDrop, CFSTR_PERFORMEDDROPEFFECT,
+                DROPFILES, FOFX_RECYCLEONDELETE, FOF_NO_CONNECTED_ELEMENTS,
             },
             WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON},
         },
@@ -133,14 +124,11 @@ fn start_drag(
         OleApartment::enter().map_err(|error| localized_error("native.drag.startError", error))?;
     // Explorer 可通过桌面下的绝对 PIDL 识别不同父目录中的 Shell 条目。
     // 无法解析为 Shell 条目的路径仍可通过 CF_HDROP 供接收方读取。
-    let item_ids = paths
-        .iter()
-        .map(|path| ItemIdList::from_path(path))
-        .collect::<windows::core::Result<Vec<_>>>();
+    let item_ids = ItemIdList::from_paths(paths);
     let id_ptrs = item_ids
         .as_ref()
         .ok()
-        .map(|items| items.iter().map(|id| id.0.cast_const()).collect::<Vec<_>>());
+        .map(|items| items.iter().map(ItemIdList::as_ptr).collect::<Vec<_>>());
     let data = file_data_object(paths, id_ptrs.as_deref())
         .map_err(|error| localized_error("native.drag.startError", error))?;
     let performed = performed_effect_format()
@@ -177,38 +165,6 @@ fn start_drag(
     Ok(())
 }
 
-struct OleApartment;
-
-impl OleApartment {
-    fn enter() -> windows::core::Result<Self> {
-        unsafe { OleInitialize(None)? };
-        Ok(Self)
-    }
-}
-
-impl Drop for OleApartment {
-    fn drop(&mut self) {
-        unsafe { OleUninitialize() };
-    }
-}
-
-struct ItemIdList(*mut ITEMIDLIST);
-
-impl ItemIdList {
-    fn from_path(path: &Path) -> windows::core::Result<Self> {
-        let wide: Vec<_> = path.as_os_str().encode_wide().chain([0]).collect();
-        let mut id = ptr::null_mut();
-        unsafe { SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut id, 0, None)? };
-        Ok(Self(id))
-    }
-}
-
-impl Drop for ItemIdList {
-    fn drop(&mut self) {
-        unsafe { ILFree(Some(self.0)) };
-    }
-}
-
 fn file_data_object(
     paths: &[PathBuf],
     ids: Option<&[*const ITEMIDLIST]>,
@@ -237,28 +193,6 @@ fn file_data_object(
     bytes.extend(0u16.to_le_bytes());
     set_global_data(&data, CF_HDROP.0, &bytes)?;
     Ok(data)
-}
-
-fn decode_path(key: &str) -> Result<PathBuf, String> {
-    let bytes = STANDARD
-        .decode(key)
-        .map_err(|_| text("native.drag.invalidKey").to_owned())?;
-    if bytes.len() % 2 != 0 {
-        return Err(text("native.drag.invalidKey").into());
-    }
-    let units: Vec<_> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
-    if units.contains(&0) {
-        return Err(text("native.drag.nullInPath").into());
-    }
-    // 与后端的路径标识约定一致，保留单独的 UTF-16 代理项和原路径写法。
-    let path = PathBuf::from(OsString::from_wide(&units));
-    if !path.is_absolute() {
-        return Err(text("native.drag.absolutePathRequired").into());
-    }
-    Ok(path)
 }
 
 fn global_format(format: u16) -> FORMATETC {
@@ -330,19 +264,13 @@ fn needs_source_cleanup(data: &IDataObject, format: u16, returned: DROPEFFECT) -
 }
 
 fn complete_move(hwnd: HWND, id_ptrs: &[*const ITEMIDLIST]) -> Result<(), String> {
-    let operation = || unsafe {
-        let items = SHCreateShellItemArrayFromIDLists(id_ptrs)?;
-        let operation: IFileOperation =
-            CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)?;
-        operation.SetOwnerWindow(hwnd)?;
-        operation.SetOperationFlags(FOFX_RECYCLEONDELETE | FOF_NO_CONNECTED_ELEMENTS)?;
-        operation.DeleteItems(&items)?;
-        operation.PerformOperations()?;
-        operation.GetAnyOperationsAborted()
-    };
-    match operation() {
-        Ok(aborted) if !aborted.as_bool() => Ok(()),
-        Ok(_) => Err(text("native.drag.sourceCleanupIncomplete").into()),
+    match delete_items(
+        hwnd,
+        id_ptrs,
+        FOFX_RECYCLEONDELETE | FOF_NO_CONNECTED_ELEMENTS,
+    ) {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(text("native.drag.sourceCleanupIncomplete").into()),
         Err(error) => Err(localized_error("native.drag.sourceCleanupError", error)),
     }
 }
@@ -350,8 +278,12 @@ fn complete_move(hwnd: HWND, id_ptrs: &[*const ITEMIDLIST]) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
     use windows::Win32::System::Ole::DROPEFFECT_NONE;
-    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+    use windows::Win32::UI::Shell::{
+        DragQueryFileW, FileOperation, IFileOperation, SHCreateShellItemArrayFromIDLists, HDROP,
+    };
 
     #[test]
     fn shell_data_preserves_utf16_paths_from_multiple_volumes() {
@@ -415,10 +347,8 @@ mod tests {
             file_identity(&paths[0]).unwrap(),
             file_identity(&paths[1]).unwrap()
         );
-        let ids = paths
-            .each_ref()
-            .map(|path| ItemIdList::from_path(path).unwrap());
-        let id_ptrs = ids.each_ref().map(|id| id.0.cast_const());
+        let ids = ItemIdList::from_paths(&paths).unwrap();
+        let id_ptrs: Vec<_> = ids.iter().map(ItemIdList::as_ptr).collect();
         let data = file_data_object(&[windows_dir.join("raw-hdrop-path")], Some(&id_ptrs)).unwrap();
         unsafe {
             let mut medium = data.GetData(&global_format(CF_HDROP.0)).unwrap();

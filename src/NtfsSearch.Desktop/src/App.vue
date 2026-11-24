@@ -8,7 +8,7 @@ import SpaceAnalysis from './SpaceAnalysis.vue'
 import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import { formatCount, formatMilliseconds, setLanguage, t } from './localization'
 import {
-  dragFiles, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
+  deleteFiles, dragFiles, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
   type AdvancedSearchCriteria,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
   type SettingsRequest, type SettingsStatus, type SettingsTab, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
@@ -69,6 +69,7 @@ let unlistenActivation: (() => void) | undefined
 let focusBeforeSettings: HTMLElement | undefined
 let focusBeforeAdvanced: HTMLElement | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
+let deletePending = false
 
 const hasAvailableIndex = computed(() => (result.value?.volumesReady ?? 0) > 0)
 const indexCreationTime = computed(() => indexStatus.value?.indexCreationTime ?? false)
@@ -392,7 +393,7 @@ function closeSettings() {
 }
 
 async function activateSearch() {
-  if (saving.value || showingSpace.value || showingAdvanced.value) return
+  if (deletePending || saving.value || showingSpace.value || showingAdvanced.value) return
   if (showingSettings.value) {
     // 重新进入前台时保留设置组件，未应用的表单值仍可继续编辑。
     keepSettingsDraft.value = true
@@ -525,6 +526,19 @@ function startFileDrag(keys: string[]) {
   void dragFiles(keys).catch(error => showFeedback(String(error), true))
 }
 
+async function deleteSearchResults(keys: string[], permanent: boolean) {
+  if (deletePending || !connected.value || pending.value || saving.value || showingSpace.value) return
+  deletePending = true
+  showFeedback('')
+  try {
+    await deleteFiles(keys, permanent)
+  } catch (error) {
+    showFeedback(String(error), true)
+  } finally {
+    deletePending = false
+  }
+}
+
 onMounted(async () => {
   await nextTick()
   queryInput.value?.focus()
@@ -591,7 +605,7 @@ onBeforeUnmount(() => {
       <SearchResults v-show="!showingSpace" ref="resultsTable" :rows="fatal ? [] : result?.rows ?? []"
         :sort="sort" :descending="descending" :pending="pending" :empty-message="emptyMessage"
         :index-file-size="indexFileSize" :index-modified-time="indexModifiedTime"
-        @sort="sortBy" @action="fileAction" @drag="startFileDrag">
+        @sort="sortBy" @action="fileAction" @drag="startFileDrag" @delete="deleteSearchResults">
         <div v-if="fatal" class="startup-error" role="alert">
           <strong>{{ t('search.serviceError') }}</strong>
           <span>{{ fatal }}</span>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search | --localization]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-delete | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search | --localization]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -17,6 +17,7 @@ const trayTest = mode === '--tray'
 const searchResultsTest = mode === '--search-results'
 const desktopInteractionTest = mode === '--desktop-interaction'
 const nativeFileDragTest = mode === '--native-file-drag'
+const searchDeleteTest = mode === '--search-delete'
 const searchServiceSettingsTest = mode === '--search-service-settings'
 const withoutHttpTest = mode === '--without-http'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
@@ -49,7 +50,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest || localizationTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchDeleteTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest || localizationTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -327,7 +328,7 @@ async function verifyDesktopInteraction() {
   assert.ok((await selection()).at(-1) > 10, '框选包含滚动后的结果')
 
   const missing = 'drag-missing-fixture.txt'
-  await showDragFixtures([
+  await showFileFixtures([
     { name: '已存在.txt', path: settingsPath },
     { name: missing, path: join(testData, missing) },
   ])
@@ -345,23 +346,202 @@ async function verifyDesktopInteraction() {
   assert.deepEqual(await selection(), [0, 1], '拖动选中行保留整组选中项')
 }
 
-async function showDragFixtures(files) {
+async function showFileFixtures(files) {
   await evaluate(`(async () => {
     const tauri = window.__TAURI_INTERNALS__;
     const handler = tauri.transformCallback(({ payload }) => {
-      if (payload.type === 'result') window.dragFixtureResult = payload;
+      if (payload.type === 'result') window.fileFixtureResult = payload;
     });
     await tauri.invoke('plugin:event|listen', { event: 'backend-message', target: { kind: 'Any' }, handler });
   })()`)
   await query('HELLO 000901', 1)
-  const rows = files.map(file => ({ name: file.name, fullPath: file.path, key: Buffer.from(file.path, 'utf16le').toString('base64') }))
+  const rows = files.map(file => ({
+    name: file.name, fullPath: file.path, key: Buffer.from(file.path, 'utf16le').toString('base64'),
+    isDirectory: file.isDirectory ?? false,
+  }))
   await evaluate(`(() => {
     const event = 'backend-message';
-    const result = window.dragFixtureResult;
+    const result = window.fileFixtureResult;
     const rows = ${JSON.stringify(rows)}.map(row => ({ ...result.rows[0], ...row, matchRanges: [] }));
     const ids = Object.getOwnPropertyNames(window.__internal_unstable_listeners_object_id__[event]).map(Number);
     window.__internal_unstable_listeners_function_id__({ event, payload: { ...result, rows, total: rows.length } }, ids);
   })()`)
+}
+
+async function verifySearchDelete() {
+  const folder = await mkdtemp(join(output, 'delete-fixtures-'))
+  const files = ['回收 甲.txt', '回收 乙', '永久 丙.txt', '回收 丁.txt', '占用 戊.txt'].map((name, index) => ({
+    name, path: join(folder, String(index), name), isDirectory: index === 1,
+  }))
+  for (const file of files) {
+    if (file.isDirectory) await mkdir(file.path, { recursive: true })
+    else {
+      await mkdir(dirname(file.path), { recursive: true })
+      await writeFile(file.path, '隔离删除测试')
+    }
+  }
+  await writeFile(join(files[1].path, '子文件.txt'), '测试非空文件夹')
+  await showFileFixtures(files)
+  const row = index => `document.querySelectorAll('tbody tr')[${index}]`
+  const select = (index, ctrlKey = false) => evaluate(`${row(index)}.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: ${ctrlKey} }))`)
+  const menu = index => evaluate(`${row(index)}.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 120 }))`)
+  const deleteItem = "document.querySelector('.file-menu[role=menu] button:last-child')"
+  const key = async (modifiers = 0) => {
+    const press = { key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, modifiers }
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', ...press })
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...press })
+  }
+  const exists = file => access(file.path).then(() => true, error => {
+    if (error.code === 'ENOENT') return false
+    throw error
+  })
+  const inBin = async (file, restore = false) => {
+    const originalFolder = dirname(file.path).replaceAll("'", "''")
+    const { stdout } = await powerShell(`
+      $bin = (New-Object -ComObject Shell.Application).NameSpace(10)
+      $item = @($bin.Items() | Where-Object { $_.ExtendedProperty('System.Recycle.DeletedFrom') -eq '${originalFolder}' })
+      if ($item.Count) {
+        if (${restore ? '$true' : '$false'}) { $item[0].InvokeVerb('undelete') }
+        'found'
+      }
+    `)
+    return stdout.trim() === 'found'
+  }
+  const owner = await windowWithTitle(application.pid, 'NTFS Search')
+  assert.ok(owner, '找到删除确认的所有者窗口')
+  const answer = async (accept, required = true, confirmation = true) => {
+    const { stdout } = await powerShell(`
+      $ErrorActionPreference = 'Stop'
+      Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class ShellDeleteDialog {
+  delegate bool WindowCallback(IntPtr window, IntPtr parameter);
+  [DllImport("user32")] static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
+  [DllImport("user32")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
+  [DllImport("user32")] static extern bool IsWindowVisible(IntPtr window);
+  [DllImport("user32")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+  [DllImport("user32", CharSet=CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+  [DllImport("user32")] static extern IntPtr GetDlgItem(IntPtr window, int button);
+  [DllImport("user32")] static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
+  public static bool Answer(IntPtr owner, int button, bool confirmation) {
+    bool answered = false;
+    uint ownerProcess;
+    GetWindowThreadProcessId(owner, out ownerProcess);
+    EnumWindows((window, parameter) => {
+      if (window == owner || !IsWindowVisible(window)) return true;
+      if (confirmation) {
+        if (GetAncestor(window, 3) != owner || GetDlgItem(window, 6) == IntPtr.Zero) return true;
+        var control = GetDlgItem(window, button);
+        if (control == IntPtr.Zero) return true;
+        answered = PostMessage(window, 0x0111, new IntPtr(button), control);
+      } else {
+        uint process;
+        GetWindowThreadProcessId(window, out process);
+        var className = new StringBuilder(64);
+        GetClassName(window, className, className.Capacity);
+        if (process != ownerProcess || className.ToString() != "OperationStatusWindow") return true;
+        answered = PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
+      }
+      return false;
+    }, IntPtr.Zero);
+    return answered;
+  }
+}
+'@
+      $deadline = [DateTime]::UtcNow.AddMilliseconds(${required ? 8000 : 700})
+      do {
+        if ([ShellDeleteDialog]::Answer([IntPtr]${owner}, ${accept ? 6 : 2}, ${confirmation ? '$true' : '$false'})) {
+          'answered'; return
+        }
+        Start-Sleep -Milliseconds 70
+      } while ([DateTime]::UtcNow -lt $deadline)
+    `)
+    if (required) assert.equal(stdout.trim(), 'answered', confirmation ? '收到 Windows 原生永久删除确认' : '收到 Windows 文件占用提示')
+  }
+
+  // 监听实际 IPC 响应，避免在上一次模态对话框的操作尚未返回时发起下一次删除。
+  await evaluate(`(() => {
+    const fetchResponse = window.fetch;
+    window.deleteResponses = [];
+    window.fetch = async (...args) => {
+      const response = await fetchResponse(...args);
+      if (String(args[0]).endsWith('/delete_files'))
+        void response.clone().json().then(result => setTimeout(() => window.deleteResponses.push(result), 0));
+      return response;
+    };
+  })()`)
+  const finished = async completed => {
+    await until(() => evaluate('window.deleteResponses.length > 0'), 'Windows 删除操作返回')
+    assert.equal(await evaluate('window.deleteResponses.shift()'), completed)
+  }
+
+  await menu(0)
+  assert.equal(await evaluate(`${deleteItem}?.firstChild.textContent.trim()`),
+    '删除', '结果右键提供删除入口')
+  await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
+  await select(0)
+  await select(1, true)
+  await menu(0)
+  await evaluate(`${deleteItem}.click()`)
+  await answer(true, false)
+  await finished(true)
+  await until(async () => !(await exists(files[0])) && !(await exists(files[1])), '右键回收跨目录的多选文件和文件夹')
+  assert.equal(await exists(files[2]), true, '右键删除保留未选中项')
+  assert.equal(await exists(files[3]), true, '右键删除保留未选中项')
+  assert.equal(await inBin(files[0]), true, '右键删除把文件送入回收站')
+  assert.equal(await inBin(files[1]), true, '右键删除把文件夹送入回收站')
+  await select(3)
+  await key()
+  await answer(true, false)
+  await finished(true)
+  await until(async () => !(await exists(files[3])), 'Delete 完成普通删除')
+  assert.equal(await inBin(files[3]), true, 'Delete 把文件送入回收站')
+
+  await select(2)
+  await key(8)
+  await answer(false)
+  await finished(false)
+  assert.equal(await exists(files[2]), true, '取消原生确认后保留文件')
+  await select(2)
+  await key(8)
+  await answer(true)
+  await finished(true)
+  await until(async () => !(await exists(files[2])), '确认后完成永久删除')
+  assert.equal(await inBin(files[2]), false, 'Shift+Delete 绕过回收站')
+
+  const locked = files[4].path.replaceAll("'", "''")
+  const lockScript = `
+    $ErrorActionPreference = 'Stop'
+    $file = [IO.File]::Open('${locked}', 'Open', 'Read', 'Read')
+    try { [Console]::WriteLine('locked'); [void][Console]::ReadLine() } finally { $file.Dispose() }
+  `
+  const locker = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+    Buffer.from(lockScript, 'utf16le').toString('base64')], { stdio: ['pipe', 'pipe', 'ignore'] })
+  const closed = once(locker, 'exit')
+  try {
+    const message = await Promise.race([once(locker.stdout, 'data').then(([data]) => data.toString().trim()), closed])
+    assert.equal(message, 'locked', '另一个进程以禁止删除共享的方式打开文件')
+    await select(4)
+    await key(8)
+    await answer(true)
+    await answer(false, true, false)
+    await finished(false)
+    assert.equal(await exists(files[4]), true, 'Windows 占用检查保留文件')
+  } finally {
+    if (locker.exitCode === null) locker.stdin.end('\n')
+    await closed
+  }
+
+  const input = "document.querySelector('.search-field input')"
+  await evaluate(`${input}.focus(); ${input}.setSelectionRange(0, 0)`)
+  await key()
+  assert.equal(await evaluate(`${input}.value`), 'ELLO 000901', '搜索框中的 Delete 编辑文字')
+  for (const index of [0, 1, 3]) {
+    await inBin(files[index], true)
+    await until(() => exists(files[index]), '还原测试回收站条目')
+  }
 }
 
 async function verifyNativeFileDrag() {
@@ -372,7 +552,7 @@ async function verifyNativeFileDrag() {
     await mkdir(dirname(file.path), { recursive: true })
     await writeFile(file.path, file.text)
   }
-  await showDragFixtures(files)
+  await showFileFixtures(files)
   let received
   let pageRequested = false
   const server = createHttpServer(async (request, response) => {
@@ -767,7 +947,7 @@ async function verifySpaceInteraction() {
   }))`)
   await openMenu("document.querySelector('tbody tr')")
   const searchActions = await labels(menu)
-  assert.deepEqual(searchActions, ['打开', '打开所在目录', '复制完整路径'])
+  assert.deepEqual(searchActions, ['打开', '打开所在目录', '复制完整路径', '删除'])
   await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
 
   await click('空间分析')
@@ -795,7 +975,7 @@ async function verifySpaceInteraction() {
   await go('C:\\演示\\目录009')
   await openMenu("document.querySelector('.space-tile:not(.others)')")
   await until(() => visible(tileMenu), '打开文件菜单')
-  assert.deepEqual(await labels(tileMenu), [...searchActions, '打开方式…', '临时排除'])
+  assert.deepEqual(await labels(tileMenu), [...searchActions.slice(0, -1), '打开方式…', '临时排除'])
   await click('临时排除')
   const exclusions = '[popovertarget=space-exclusions]'
   await until(() => visible(exclusions), '排除一个文件')
@@ -803,7 +983,7 @@ async function verifySpaceInteraction() {
   await go('C:\\演示\\目录001')
   await openMenu(folder)
   await until(() => visible(tileMenu), '打开目录菜单')
-  assert.deepEqual(await labels(tileMenu), [...searchActions, '临时排除'])
+  assert.deepEqual(await labels(tileMenu), [...searchActions.slice(0, -1), '临时排除'])
   const expanded = () => evaluate(`${folder}?.getAttribute('aria-expanded') === 'true'`)
   await evaluate(`${folder}.click(); const level = document.querySelector('.space-level');
     level.value = '3'; level.dispatchEvent(new Event('change'))`)
@@ -1179,6 +1359,8 @@ try {
     await verifyDesktopInteraction()
   } else if (nativeFileDragTest) {
     await verifyNativeFileDrag()
+  } else if (searchDeleteTest) {
+    await verifySearchDelete()
   } else if (searchServiceSettingsTest) {
     await verifySearchServiceSettings()
   } else if (spaceFlashTest) {
@@ -1434,7 +1616,7 @@ try {
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }))")
     assert.equal(await evaluate("document.activeElement.getAttribute('aria-label')"), '搜索文件和文件夹')
     await evaluate("document.querySelector('tbody tr').dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 115, bubbles: true, cancelable: true }))")
-    await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 3"), '右键菜单')
+    await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 4"), '右键菜单')
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
     assert.equal(await evaluate("document.querySelector('[role=menu]') === null"), true)
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))")
@@ -1442,7 +1624,7 @@ try {
     await evaluate("document.querySelector('button[aria-label=关闭提示]').click()")
     if (mode === '--desktop-test') {
       await evaluate("document.querySelector('tbody tr').dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 115, bubbles: true, cancelable: true }))")
-      await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 3"), '重新打开结果菜单')
+      await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 4"), '重新打开结果菜单')
       await evaluate("[...document.querySelectorAll('[role=menuitem]')].find(button => button.textContent.trim() === '打开所在目录').click()")
       await until(() => evaluate("document.querySelector('.operation-feedback.error')?.textContent.length > 1"), '定位不存在的文件反馈')
       await evaluate("document.querySelector('button[aria-label=关闭提示]').click()")
@@ -1560,6 +1742,7 @@ try {
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
   else if (desktopInteractionTest) console.log('Windows 前台聚焦、结果多选与框选通过。')
   else if (nativeFileDragTest) console.log('Windows 向浏览器拖出跨目录多选文件通过。')
+  else if (searchDeleteTest) console.log('Windows 搜索删除、回收站及永久删除确认和取消通过。')
   else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
   else if (indexMemorySettingsTest) console.log('Windows 预计算排序即时切换、元数据列重启生效和文件夹大小偏好通过。')
   else if (exitSaveSkipTest) console.log('Windows 退出保存按钮、状态、旧快照保留及再次退出保存通过。')

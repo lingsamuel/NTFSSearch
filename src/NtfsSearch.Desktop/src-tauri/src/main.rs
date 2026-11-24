@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod file_delete;
 mod file_drag;
 mod localization;
+mod shell_files;
 
 use backend::Backend;
 use localization::{error as localized_error, text};
@@ -81,6 +83,15 @@ fn start_backend(
 #[tauri::command]
 async fn drag_files(window: WebviewWindow, keys: Vec<String>) -> Result<(), String> {
     file_drag::drag_files(window, keys).await
+}
+
+#[tauri::command]
+async fn delete_files(
+    window: WebviewWindow,
+    keys: Vec<String>,
+    permanent: bool,
+) -> Result<bool, String> {
+    file_delete::delete_files(window, keys, permanent).await
 }
 
 #[tauri::command]
@@ -294,7 +305,8 @@ fn main() {
             desktop_language,
             start_backend,
             send_request,
-            drag_files
+            drag_files,
+            delete_files
         ])
         .build(context)
         .expect(text("native.window.start"));
