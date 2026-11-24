@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { fileMenuActions, formatCount, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion } from './desktop'
+import SpaceVolumePicker from './SpaceVolumePicker.vue'
+import { fileMenuActions, formatCount, formatPercent, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry,
+  type SpaceExclusion, type SpaceVolumeCapacity, type SpaceVolumeSettings } from './desktop'
 import { layoutSpaceItems } from './space-treemap'
 
 const props = defineProps<{
@@ -12,12 +14,15 @@ const props = defineProps<{
   pathPending: boolean
   pathError: string
   indexStatus?: IndexStatus
+  capacities: Record<string, SpaceVolumeCapacity>
+  volumeSettings?: SpaceVolumeSettings
 }>()
 const emit = defineEmits<{
   view: [root: string, directoryId?: string]
   path: [value: string]
   close: []
   settings: []
+  refreshCapacities: []
   action: [type: FileAction, key: string]
   exclude: [item: SpaceEntry]
   restore: [item?: SpaceExclusion]
@@ -56,12 +61,7 @@ const flashTokens = ref<Record<string, number>>({})
 const flashTimers = new Map<string, ReturnType<typeof setTimeout>>()
 let flashSequence = 0
 let previousClick: { item: SpaceEntry; x: number; y: number; time: number } | undefined
-const formatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 })
 const folder = computed(() => props.result?.folder)
-const selectedRoot = computed({
-  get: () => props.root,
-  set: root => emit('view', root),
-})
 const active = computed(() => drawing.value.tiles.find(tile => tile.key === (hovered.value ?? focused.value)))
 const preview = computed(() => branch.value.at(-1))
 const expandedIds = computed(() => new Set(branch.value.map(item => item.directoryId!)))
@@ -209,7 +209,7 @@ function itemKey(item: SpaceEntry) {
 }
 
 function sizeAndShare(tile: Tile) {
-  return tile.item.sizeText + ' (' + formatter.format(tile.fraction) + ')'
+  return tile.item.sizeText + ' (' + formatPercent(tile.fraction) + ')'
 }
 
 function tileTitle(tile: Tile, includeShare = false) {
@@ -324,10 +324,8 @@ onBeforeUnmount(() => {
   <section class="space-workspace" aria-label="空间分析" @keydown="detailShortcut">
     <header class="space-toolbar">
       <button ref="back" type="button" class="outlined-button" aria-label="返回搜索" @click="emit('close')">返回搜索</button>
-      <select v-model="selectedRoot" class="scope-select" aria-label="分析磁盘" :disabled="!result?.roots.length">
-        <option v-if="!result?.roots.length" value="">等待索引</option>
-        <option v-for="drive in result?.roots" :key="drive" :value="drive">{{ drive }}</option>
-      </select>
+      <SpaceVolumePicker :roots="result?.roots ?? []" :root="root" :visible="visible" :capacities="capacities"
+        :settings="volumeSettings" @select="emit('view', $event)" @open="emit('refreshCapacities')" />
       <select v-model.number="detailLevel" class="scope-select space-level" aria-label="细节层级">
         <option v-for="level in 3" :key="level" :value="level">细节 {{ level }} 层</option>
       </select>
@@ -429,6 +427,7 @@ onBeforeUnmount(() => {
 
 .space-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 13px 16px;

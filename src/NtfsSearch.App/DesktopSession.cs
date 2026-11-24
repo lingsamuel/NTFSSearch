@@ -243,6 +243,12 @@ internal sealed class DesktopSession
                 case "spaceAnalysis":
                     spaceAnalysis.View(request.RequestId, request.Root, request.DirectoryId);
                     break;
+                case "spaceCapacities":
+                    if (settings.ShowSpaceVolumeCapacity && IndexesFileSize)
+                        _ = PublishSpaceCapacitiesAsync(request.RequestId, token);
+                    else
+                        PublishSpaceCapacities(request.RequestId, new());
+                    break;
                 case "spacePath":
                     spaceAnalysis.ViewPath(request.RequestId, request.Path, request.Root, request.BreadcrumbIds, request.VolumeKey);
                     break;
@@ -579,7 +585,10 @@ internal sealed class DesktopSession
             PrecomputeSort = request.PrecomputeSort ?? settings.PrecomputeSort,
             IndexCreationTime = request.IndexCreationTime ?? settings.IndexCreationTime,
             IndexModifiedTime = request.IndexModifiedTime ?? settings.IndexModifiedTime,
-            IndexFileSize = request.IndexFileSize ?? settings.IndexFileSize
+            IndexFileSize = request.IndexFileSize ?? settings.IndexFileSize,
+            ShowSpaceVolumeCapacity = request.ShowSpaceVolumeCapacity ?? settings.ShowSpaceVolumeCapacity,
+            SpaceVolumeShowFree = request.SpaceVolumeShowFree ?? settings.SpaceVolumeShowFree,
+            SpaceVolumeCapacityBar = request.SpaceVolumeCapacityBar ?? settings.SpaceVolumeCapacityBar
         };
 #if HTTP_SEARCH_SERVICE
         if (request.Enabled is not bool enable) throw new ArgumentException("设置项不完整。");
@@ -615,9 +624,29 @@ internal sealed class DesktopSession
 #endif
             Busy: false, error, settings.SearchDirectorySizes, settings.SkipExitIndexSave,
             settings.PrecomputeSort, settings.IndexCreationTime, settings.IndexModifiedTime, settings.IndexFileSize,
-            settings.Metadata != host.Metadata);
+            settings.Metadata != host.Metadata, settings.ShowSpaceVolumeCapacity, settings.SpaceVolumeShowFree,
+            settings.SpaceVolumeCapacityBar);
         publish(settingsStatus);
     }
+
+    private Task PublishSpaceCapacitiesAsync(long requestId, CancellationToken token)
+    {
+        // 可移动卷的容量查询可能等待 I/O，在线程池读取以免阻塞导航和设置保存。
+        var volumes = host.CaptureAnalysisVolumes().Select(view => view.Volume).ToArray();
+        return Task.Run(() =>
+        {
+            var capacities = new Dictionary<string, SpaceVolumeCapacity>(StringComparer.OrdinalIgnoreCase);
+            foreach (var volume in volumes)
+            {
+                if (token.IsCancellationRequested) return;
+                if (host.ReadSpaceVolumeCapacity(volume) is { } capacity) capacities[volume.Root] = capacity;
+            }
+            if (!token.IsCancellationRequested) PublishSpaceCapacities(requestId, capacities);
+        }, token);
+    }
+
+    private void PublishSpaceCapacities(long requestId, Dictionary<string, SpaceVolumeCapacity> capacities)
+        => publish(new { Type = "spaceCapacities", RequestId = requestId, Capacities = capacities });
 
     private async Task StopSettingsAsync(ExitSave exitSave)
     {
@@ -720,7 +749,8 @@ internal sealed class DesktopSession
 
     private sealed record SettingsStatus(bool SearchServiceAvailable, bool Enabled, int Port, string? Address, bool PortOverridden,
         bool Running, bool Busy, string? Error, bool SearchDirectorySizes, bool SkipExitIndexSave,
-        bool PrecomputeSort, bool IndexCreationTime, bool IndexModifiedTime, bool IndexFileSize, bool IndexRestartRequired)
+        bool PrecomputeSort, bool IndexCreationTime, bool IndexModifiedTime, bool IndexFileSize, bool IndexRestartRequired,
+        bool ShowSpaceVolumeCapacity, bool SpaceVolumeShowFree, bool SpaceVolumeCapacityBar)
     {
         public string Type => "settingsStatus";
     }
@@ -731,5 +761,6 @@ internal sealed class DesktopSession
         long DetailId = 0, string[]? DirectoryIds = null, string[]? ManualDirectoryIds = null, string[]? BranchIds = null,
         bool SkipExitIndexSave = false, string? FileReference = null, bool? Enabled = null, int Port = 0,
         bool? SearchDirectorySizes = null, bool? PrecomputeSort = null, bool? IndexCreationTime = null,
-        bool? IndexModifiedTime = null, bool? IndexFileSize = null);
+        bool? IndexModifiedTime = null, bool? IndexFileSize = null, bool? ShowSpaceVolumeCapacity = null,
+        bool? SpaceVolumeShowFree = null, bool? SpaceVolumeCapacityBar = null);
 }

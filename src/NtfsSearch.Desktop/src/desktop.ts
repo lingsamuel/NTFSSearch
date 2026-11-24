@@ -94,6 +94,25 @@ export interface SpaceAnalysisResult {
   } | null
 }
 
+export interface SpaceVolumeCapacity {
+  usedFraction: number
+  usedText: string
+  freeText: string
+  totalText: string
+}
+
+export interface SpaceVolumeSettings {
+  showSpaceVolumeCapacity: boolean
+  spaceVolumeShowFree: boolean
+  spaceVolumeCapacityBar: boolean
+}
+
+export const defaultSpaceVolumeSettings: SpaceVolumeSettings = {
+  showSpaceVolumeCapacity: true, spaceVolumeShowFree: false, spaceVolumeCapacityBar: true,
+}
+
+export type SettingsTab = 'search' | 'index' | 'space' | 'service'
+
 interface IndexSettings {
   precomputeSort?: boolean
   indexCreationTime?: boolean
@@ -101,7 +120,7 @@ interface IndexSettings {
   indexFileSize?: boolean
 }
 
-export interface SettingsStatus extends IndexSettings {
+export interface SettingsStatus extends IndexSettings, SpaceVolumeSettings {
   type: 'settingsStatus'
   searchDirectorySizes: boolean
   skipExitIndexSave: boolean
@@ -118,12 +137,14 @@ export interface SettingsStatus extends IndexSettings {
 
 export type SettingsRequest =
   | { type: 'getSettings' | 'restartSearchService' }
-  | ({ type: 'applySettings'; enabled?: boolean; port?: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean } & IndexSettings)
+  | ({ type: 'applySettings'; enabled?: boolean; port?: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean }
+    & IndexSettings & SpaceVolumeSettings)
 
 export type DesktopMessage =
   | SearchResult
   | IndexStatus
   | SpaceAnalysisResult
+  | { type: 'spaceCapacities'; requestId: number; capacities: Record<string, SpaceVolumeCapacity> }
   | SettingsStatus
   | { type: 'directorySizes'; requestId: number; rows: Pick<SearchRow, 'key' | 'sizeText' | 'sizeBytesText' | 'sizeHint'>[] }
   | { type: 'spacePathError'; requestId: number; message: string }
@@ -138,6 +159,7 @@ export type DesktopRequest =
   | SettingsRequest
   | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
+  | { type: 'spaceCapacities'; requestId: number }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }
   | { type: 'spaceDetails'; requestId: number; detailId: number; directoryIds: string[]; manualDirectoryIds: string[]; branchIds: string[] }
   | { type: 'spaceExclude'; requestId: number; volumeKey: string; key: string; fileReference: string | null }
@@ -174,3 +196,4 @@ export function sendRequest(request: DesktopRequest) {
 }
 
 export const formatCount = new Intl.NumberFormat('zh-CN').format
+export const formatPercent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 }).format

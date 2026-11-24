@@ -8,7 +8,8 @@ import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
   dragFiles, formatCount, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
-  type SettingsRequest, type SettingsStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
+  type SettingsRequest, type SettingsStatus, type SettingsTab, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
+  type SpaceVolumeCapacity,
 } from './desktop'
 
 const queryInput = ref<HTMLInputElement>()
@@ -32,6 +33,7 @@ const preferencePending = ref(false)
 const showingSpace = ref(false)
 const spaceStarted = ref(false)
 const space = shallowRef<SpaceAnalysisResult>()
+const spaceCapacities = shallowRef<Record<string, SpaceVolumeCapacity>>({})
 const spaceRoot = ref('')
 const spacePending = ref(false)
 const spaceError = ref('')
@@ -41,10 +43,12 @@ const showingSettings = ref(false)
 const keepSettingsDraft = ref(false)
 const settingsPanel = ref<InstanceType<typeof Settings>>()
 const settingsStatus = shallowRef<SettingsStatus>()
+const settingsTab = ref<SettingsTab>('search')
 const settingsPending = ref(false)
 const settingsError = ref('')
 let requestId = Date.now()
 let spaceRequestId = requestId
+let spaceCapacityRequestId = 0
 let spaceDetailId = 0
 let unlisten: (() => void) | undefined
 let unlistenOpenSettings: (() => void) | undefined
@@ -56,6 +60,12 @@ const hasAvailableIndex = computed(() => (result.value?.volumesReady ?? 0) > 0)
 const indexFileSize = computed(() => indexStatus.value?.indexFileSize ?? true)
 const indexModifiedTime = computed(() => indexStatus.value?.indexModifiedTime ?? true)
 const canViewSpace = computed(() => connected.value && !!indexStatus.value && indexFileSize.value && !saving.value)
+const showSpaceCapacities = computed(() => canViewSpace.value && showingSpace.value && !showingSettings.value
+  && (settingsStatus.value?.showSpaceVolumeCapacity ?? true))
+watch([showSpaceCapacities, () => space.value?.roots.join('|')], ([enabled]) => {
+  if (enabled) refreshSpaceCapacities()
+  else ++spaceCapacityRequestId
+})
 const savePhase = computed(() => {
   const phase = saving.value?.phase ?? 'writing'
   return phase === 'writing' && skipSavePending.value ? 'skipping' : phase
@@ -135,6 +145,10 @@ function receive(message: DesktopMessage) {
       spaceError.value = message.error ?? ''
       spacePending.value = false
       spacePathPending.value = false
+      break
+    case 'spaceCapacities':
+      if (showSpaceCapacities.value && message.requestId === spaceCapacityRequestId)
+        spaceCapacities.value = message.capacities
       break
     case 'spacePathError':
       if (!spaceStarted.value || message.requestId !== spaceRequestId) return
@@ -260,9 +274,10 @@ function handleShortcut(event: KeyboardEvent) {
   }
 }
 
-function openSettings() {
+function openSettings(tab: SettingsTab = 'search') {
   if (showingSettings.value) return
   if (document.activeElement instanceof HTMLElement) focusBeforeSettings = document.activeElement
+  settingsTab.value = tab
   showingSettings.value = true
   requestSettings({ type: 'getSettings' })
   void nextTick(() => settingsPanel.value?.focusBack())
@@ -311,6 +326,14 @@ function openSpace() {
     spaceStarted.value = true
     viewSpace()
   }
+}
+
+function refreshSpaceCapacities() {
+  if (!showSpaceCapacities.value || !space.value?.roots.length) return
+  const id = ++spaceCapacityRequestId
+  void sendRequest({ type: 'spaceCapacities', requestId: id }).catch(() => {
+    if (id === spaceCapacityRequestId) spaceCapacities.value = {}
+  })
 }
 
 function viewSpace(root = '', directoryId = '', path?: string) {
@@ -408,7 +431,7 @@ onMounted(async () => {
   await nextTick()
   queryInput.value?.focus()
   try {
-    unlistenOpenSettings = await listenToOpenSettings(openSettings)
+    unlistenOpenSettings = await listenToOpenSettings(() => openSettings())
     unlistenActivation = await listenToSearchActivation(activateSearch)
     unlisten = await listenToBackend(receive)
     await connect()
@@ -443,7 +466,7 @@ onBeforeUnmount(() => {
         <button type="button" class="outlined-button toolbar-button" aria-label="空间分析"
           :disabled="!canViewSpace" :title="indexFileSize ? undefined : spaceUnavailable"
           :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="openSpace">空间分析</button>
-        <button type="button" class="outlined-button toolbar-button" @click="openSettings">设置</button>
+        <button type="button" class="outlined-button toolbar-button" @click="openSettings()">设置</button>
       </header>
 
       <SearchResults v-show="!showingSpace" ref="resultsTable" :rows="fatal ? [] : result?.rows ?? []"
@@ -483,13 +506,14 @@ onBeforeUnmount(() => {
       <SpaceAnalysis v-if="spaceStarted" v-show="showingSpace" :visible="showingSpace" :result="space" :root="spaceRoot"
         :pending="spacePending && !fatal"
         :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
+        :capacities="spaceCapacities" :volume-settings="settingsStatus" @refresh-capacities="refreshSpaceCapacities"
         :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
-        @settings="openSettings"
+        @settings="openSettings('space')"
         @details="requestSpaceDetails"
         @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
     </div>
     <Settings v-if="showingSettings || keepSettingsDraft" v-show="showingSettings" ref="settingsPanel"
-      :inert="!!saving" :status="settingsStatus" :pending="settingsPending || preferencePending"
+      v-model:tab="settingsTab" :inert="!!saving" :status="settingsStatus" :pending="settingsPending || preferencePending"
       :connected="connected" :error="fatal || settingsError" @close="closeSettings" @request="requestSettings" />
     <div v-if="!saving && (notice || actionError)" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>

@@ -5,7 +5,8 @@ namespace NtfsSearch.Core;
 // 旧设置没有 HTTP 开关，正式桌面与隔离演示可各自决定启动默认值。
 internal sealed record DesktopSettings(bool SkipExitIndexSave = false, bool? SearchServiceEnabled = null,
     int SearchServicePort = LocalSearchEndpoint.DefaultPort, bool SearchDirectorySizes = true,
-    bool PrecomputeSort = true, bool IndexCreationTime = false, bool IndexModifiedTime = true, bool IndexFileSize = true)
+    bool PrecomputeSort = true, bool IndexCreationTime = false, bool IndexModifiedTime = true, bool IndexFileSize = true,
+    bool ShowSpaceVolumeCapacity = true, bool SpaceVolumeShowFree = false, bool SpaceVolumeCapacityBar = true)
 {
     internal const string FileName = "settings.json";
 

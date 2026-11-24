@@ -152,7 +152,49 @@ def check_skip_exit_save(command):
         assert snapshot.read_bytes() != previous
 
 
-if __name__ == "__main__":
+def check_space_capacity_settings(command):
+    artifacts = Path(__file__).resolve().parents[1] / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=artifacts) as directory:
+        env = os.environ | {"NTFS_SEARCH_TEST_DATA": directory}
+        env.pop("NTFS_SEARCH_PORT", None)
+        settings = Path(directory) / "settings.json"
+        settings.write_text('{"SkipExitIndexSave":true}', encoding="utf-8")
+
+        def verify(backend, send, receive):
+            send(dict(type="getSettings"))
+            status = receive("settingsStatus")
+            assert status.get("showSpaceVolumeCapacity") is True, status
+            assert status.get("spaceVolumeShowFree") is False
+            assert status.get("spaceVolumeCapacityBar") is True
+            send(dict(type="spaceAnalysis", requestId=1))
+            receive("spaceAnalysis", lambda event: len(event["roots"]) == 2)
+            send(dict(type="spaceCapacities", requestId=1))
+            volumes = receive("spaceCapacities", lambda event: event["requestId"] == 1)["capacities"]
+            assert volumes["C:\\"] == dict(usedFraction=0.75, usedText="768 GB", freeText="256 GB", totalText="1 TB")
+            assert volumes["D:\\"]["usedFraction"] == 0.25
+
+            send(dict(type="applySettings", enabled=status["enabled"], port=status["port"],
+                      searchDirectorySizes=True, skipExitIndexSave=True, showSpaceVolumeCapacity=False,
+                      spaceVolumeShowFree=True, spaceVolumeCapacityBar=False))
+            saved = receive("settingsStatus", lambda event: not event["busy"] and event.get("spaceVolumeShowFree"))
+            assert not saved["showSpaceVolumeCapacity"] and not saved["spaceVolumeCapacityBar"]
+            persisted = json.loads(settings.read_text(encoding="utf-8"))
+            assert persisted["ShowSpaceVolumeCapacity"] is False
+            assert persisted["SpaceVolumeShowFree"] is True
+            assert persisted["SpaceVolumeCapacityBar"] is False
+            send(dict(type="spaceCapacities", requestId=2))
+            assert receive("spaceCapacities", lambda event: event["requestId"] == 2)["capacities"] == {}
+            send(dict(type="quit"))
+            assert receive("quit-complete").get("error") is None
+
+        check_backend(command, env, verify_quit=verify)
+        print("磁盘容量、兼容旧设置和偏好持久化通过。")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--space-capacity-settings"]:
+    check_space_capacity_settings(sys.argv[2:])
+elif __name__ == "__main__":
     command = sys.argv[1:]
     check_backend(command)
     check_skip_exit_save(command)

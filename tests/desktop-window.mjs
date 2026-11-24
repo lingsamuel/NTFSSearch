@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -23,6 +23,7 @@ const indexMemorySettingsTest = mode === '--index-memory-settings'
 const exitSaveSkipTest = mode === '--exit-save-skip'
 const spaceFlashTest = mode === '--space-flash'
 const spaceInteractionTest = mode === '--space-interaction'
+const spaceCapacitySettingsTest = mode === '--space-capacity-settings'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
   : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
@@ -45,7 +46,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -497,6 +498,8 @@ async function verifySearchServiceSettings() {
 
   await query('HELLO 000901', 1)
   await click('设置')
+  await until(() => visible('#service-settings-title'), '搜索服务标签')
+  await click('搜索服务')
   await until(() => status('运行中'), '设置页显示 HTTP 服务状态')
   assert.equal(await visible('.search-toolbar'), false)
   assert.equal(await evaluate(`document.querySelector('${enabled}').checked`), true)
@@ -544,6 +547,7 @@ async function verifySearchServiceSettings() {
   await until(() => checked(quickSkip), '索引状态即时保存')
   await click('关闭索引状态')
   await click('设置')
+  await click('搜索服务')
   await until(() => status('运行中'), '重新打开设置')
   assert.equal(await checked(saveExit), false)
   assert.equal(await checked(searchSizes), false)
@@ -559,6 +563,7 @@ async function verifySearchServiceSettings() {
     const ids = Object.getOwnPropertyNames(listeners ?? {}).map(Number);
     window.__internal_unstable_listeners_function_id__({ event, payload: null }, ids);
   })()`)
+  await click('搜索服务')
   await until(() => status('运行中'), '托盘事件打开同一设置页')
   assert.equal(await checked(searchSizes), false, '返回时丢弃未保存的目录设置')
   assert.equal(await visible('.space-map'), false)
@@ -746,6 +751,7 @@ async function verifyIndexMemorySettings(total) {
   async function openSettings() {
     await click('设置')
     await until(ready, '索引设置加载完成')
+    await click('索引')
   }
   async function checkSwitches(values) {
     for (const [name, checked] of Object.entries(values)) {
@@ -846,6 +852,74 @@ async function verifyIndexMemorySettings(total) {
       && / B$/.test(row.querySelector('.entry-size').title))`), '恢复保存的文件夹大小统计')
 }
 
+async function verifySpaceCapacitySettings() {
+  const picker = 'document.querySelector("button[aria-label=分析磁盘]")'
+  const selectedTab = () => evaluate('document.querySelector("[role=tab][aria-selected=true]")?.textContent.trim()')
+  const diskText = () => evaluate(`${picker}?.textContent.trim() ?? ''`)
+  const diskFill = () => evaluate(`getComputedStyle(${picker}).getPropertyValue('--volume-fill').trim()`)
+  const field = name => `document.querySelector('[name=${name}]')`
+  const ready = () => evaluate("document.querySelector('.settings-footer button')?.disabled === false")
+  const openSettings = async () => {
+    await click('设置')
+    await until(ready, '空间分析设置已加载')
+    assert.equal(await selectedTab(), '空间分析')
+  }
+  const save = async () => {
+    await click('保存并应用')
+    await until(ready, '保存设置')
+    assert.equal(await evaluate("document.querySelector('.settings-error')?.textContent ?? ''"), '')
+  }
+  await click('空间分析')
+  await until(async () => (await diskText()).includes('768 GB / 1 TB (75%)'), '已用容量文字')
+  assert.equal(await diskFill(), '75%')
+  await click('分析磁盘')
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('[role=listbox] [role=option]')]
+    .map(option => [option.getAttribute('aria-selected'), ...[...option.children].map(label => label.textContent)])`),
+  [['true', 'C:\\', '768 GB / 1 TB (75%)'], ['false', 'D:\\', '512 GB / 2 TB (25%)']])
+  const activeRoot = () => evaluate("document.activeElement?.closest('[role=option]')?.firstElementChild.textContent")
+  const key = async (key, windowsVirtualKeyCode) => {
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key, windowsVirtualKeyCode })
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key, code: key, windowsVirtualKeyCode })
+  }
+  assert.equal(await activeRoot(), 'C:\\')
+  await key('ArrowDown', 40)
+  assert.equal(await activeRoot(), 'D:\\')
+  await key('Enter', 13)
+  await until(async () => (await diskText()).includes('D:\\'), '键盘切换磁盘')
+  assert.equal(await diskFill(), '25%')
+  await click('分析磁盘')
+  assert.equal(await activeRoot(), 'D:\\')
+  await evaluate(`${picker}.focus(); document.querySelector('.space-level').focus();`)
+  assert.equal(await visible('#space-volume-options'), false, '焦点离开磁盘下拉框后收起')
+
+  await openSettings()
+  await evaluate(`const select = ${field('space-volume-display')};
+    select.value = 'free'; select.dispatchEvent(new Event('change'));`)
+  await click('搜索')
+  assert.equal(await selectedTab(), '搜索')
+  assert.equal(await visible('#settings-panel-space'), false)
+  await save()
+  await click('返回')
+  assert.match(await diskText(), /1\.5 TB \/ 2 TB \(75%\)/)
+  assert.equal(await diskFill(), '75%')
+
+  await openSettings()
+  await evaluate(`${field('space-volume-capacity-bar')}.click()`)
+  await save()
+  await click('返回')
+  assert.match(await diskText(), /1\.5 TB \/ 2 TB \(75%\)/)
+  assert.equal(await diskFill(), '')
+
+  await openSettings()
+  await evaluate(`${field('show-space-volume-capacity')}.click()`)
+  assert.equal(await evaluate(`${field('space-volume-display')}.disabled`), true)
+  await save()
+  await click('返回')
+  assert.equal(await diskText(), 'D:\\')
+  assert.equal(await diskFill(), '')
+  assert.equal(JSON.parse(await readFile(settingsPath, 'utf8')).SpaceVolumeShowFree, true)
+}
+
 async function verifyExitSaveSkip() {
   // 先用正常退出保存一份较小的快照，再用现有的大型演示索引留出写入时的操作窗口。
   await quitApplication()
@@ -929,11 +1003,14 @@ try {
     await verifySpaceFlash()
   } else if (spaceInteractionTest) {
     await verifySpaceInteraction()
+  } else if (spaceCapacitySettingsTest) {
+    await verifySpaceCapacitySettings()
   } else if (withoutHttpTest) {
     await click('设置')
     const settingsReady = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
     await until(settingsReady, '无查询服务版设置加载完成')
     assert.equal(await evaluate("Boolean(document.querySelector('.settings-service'))"), false)
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('[role=tab]')].map(tab => tab.textContent)"), ['搜索', '索引', '空间分析'])
     await evaluate("document.querySelector('input[name=search-directory-sizes]').click()")
     await click('保存并应用')
     await until(async () => await settingsReady() && JSON.parse(await readFile(settingsPath, 'utf8')).SearchDirectorySizes === false,
@@ -1085,9 +1162,9 @@ try {
         };
         const pendingDrive = ${JSON.stringify(pendingDrive ?? null)};
         if (pendingDrive) {
-          const drive = document.querySelector('select[aria-label="分析磁盘"]');
-          drive.value = pendingDrive;
-          drive.dispatchEvent(new Event('change', { bubbles: true }));
+          document.querySelector('button[aria-label="分析磁盘"]').click();
+          [...document.querySelectorAll('[role=listbox] [role=option]')]
+            .find(option => option.textContent.trim().startsWith(pendingDrive)).click();
         }
         replaceAddress(${JSON.stringify(path)});
         input.form.requestSubmit();
@@ -1104,7 +1181,7 @@ try {
       assert.equal(await evaluate("document.querySelector('.space-total strong').textContent"), '92.72 MB')
       await openAddress('无效地址', undefined, 'D:\\')
       await until(() => evaluate("document.querySelector('.space-path-feedback')?.textContent.includes('绝对目录路径')"), '处理切卷期间的无效地址')
-      assert.equal(await evaluate("document.querySelector('select[aria-label=分析磁盘]').value"), 'C:\\')
+      assert.match(await evaluate("document.querySelector('button[aria-label=分析磁盘]').textContent.trim()"), /^C:\\/)
       await openAddress('D:', 'C:\\下一条输入')
       await until(() => evaluate("document.querySelector('.space-message')?.textContent.includes('当前目录为空')"), '跨卷进入空目录')
       assert.equal(await readAddress(), 'C:\\下一条输入')
@@ -1302,6 +1379,7 @@ try {
   else if (exitSaveSkipTest) console.log('Windows 退出保存按钮、状态、旧快照保留及再次退出保存通过。')
   else if (spaceFlashTest) console.log('Windows 空间分析自动及手动展开、同批多处闪烁、收起回退通过。')
   else if (spaceInteractionTest) console.log('Windows 空间分析右键、返回搜索后恢复会话以及前台激活通过。')
+  else if (spaceCapacitySettingsTest) console.log('Windows 磁盘容量、背景比例、键盘选盘和跨标签保存通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

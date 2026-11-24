@@ -140,6 +140,9 @@ internal sealed class SearchHost
         return views.ToArray();
     }
 
+    internal SpaceVolumeCapacity? ReadSpaceVolumeCapacity(NtfsVolume volume)
+        => demo is null ? SpaceVolumeCapacity.Read(volume) : SmokeBackend.ReadCapacity(volume);
+
     /// <summary>正常关闭且采集循环退出后保存，冻结每个卷的已发布视图与水位。</summary>
     internal void SaveExitSnapshot(Action<int, int> progress, CancellationToken token = default, Action? beginCommit = null)
     {
@@ -259,7 +262,9 @@ internal sealed class SearchHost
     private sealed class SmokeBackend(int count, SearchHost host) : IAutomaticVolumeBackend
     {
         internal static readonly NtfsVolume[] Volumes =
-            [new("smoke-volume", @"C:\", 100, "测试"), new("smoke-empty", @"D:\", 100, "空卷")];
+            [new("smoke-volume", @"C:\", 1L << 40, "测试"), new("smoke-empty", @"D:\", 2L << 40, "空卷")];
+        internal static SpaceVolumeCapacity? ReadCapacity(NtfsVolume volume) =>
+            SpaceVolumeCapacity.FromBytes(volume.TotalBytes, volume.TotalBytes / 4 * (volume == Volumes[0] ? 1 : 3));
         public IReadOnlyList<NtfsVolume> Discover() => count == 1000 ? Volumes : [Volumes[0]];
         public string CacheRevision(NtfsVolume volume) => "v1";
         public Task<CachedVolume?> LoadAsync(NtfsVolume volume, CancellationToken token) =>
