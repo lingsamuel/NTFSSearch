@@ -203,6 +203,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 }
 .sort-caret.descending { transform: rotate(180deg); }
 
+.results-table tbody { user-select: none; }
 .results-table tbody tr { scroll-margin-top: 35px; }
 .results-table tbody tr:nth-child(even) { background: #fafbfe; }
 .results-table tbody tr:hover { background: #f0f4fc; }
@@ -219,6 +220,13 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 }
 
 .entry-name { font-weight: 500; }
+.results-selection-box {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .results-table td strong { font-weight: 700; }
 .entry-path, .entry-date, .entry-size { color: var(--muted); }
 .entry-size { text-align: right; }

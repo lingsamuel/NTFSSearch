@@ -142,11 +142,7 @@ impl Backend {
                             }
                             return;
                         }
-                        if message["type"] == "saving" && !saving {
-                            saving = true;
-                            // 从托盘退出时窗口可能隐藏，只在首次收到进度时恢复窗口。
-                            crate::show_window(&window);
-                        }
+                        let show_saving = message["type"] == "saving" && !saving;
                         if message["scope"] == "fatal" {
                             reader_failed.store(true, Ordering::Release);
                             if reader_quitting.load(Ordering::Acquire) {
@@ -157,6 +153,11 @@ impl Backend {
                             reported_fatal = true;
                         }
                         let _ = window.emit(EVENT, message);
+                        if show_saving {
+                            saving = true;
+                            // 先显示保存状态，再激活托盘隐去的窗口，避免焦点切到搜索框。
+                            crate::show_window(&window);
+                        }
                     }
                     Err(error) => {
                         reader_failed.store(true, Ordering::Release);

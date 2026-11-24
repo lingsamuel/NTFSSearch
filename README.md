@@ -71,6 +71,8 @@ Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
 便携版构建后，可运行 `node tests/desktop-window.mjs artifacts/windows/NtfsSearch.App.exe artifacts/desktop-window`，在 Windows 窗口中验证搜索交互和退出。追加 `--search-results` 可单独验证匹配加粗和结果表滚动。该自检使用独立的演示索引。
 
+`--desktop-interaction` 验证窗口激活、设置草稿、多选、框选和文件拖放的原生调用，可在独立的非输入桌面运行。`--native-file-drag` 使用 Edge 测试跨目录文件上传，并在运行过程中移动真实鼠标，请在独立 Windows 虚拟机或专用测试会话运行。
+
 便携版顶层的 `NtfsSearch.Cli.exe` 可查询实时索引。EFU 导入、静态快照查询和显式扫描也可用于开发诊断。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
 
 参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。NTFS 数据流读取复用 DiscUtils，依赖与许可见 `docs/native-dependencies.md`。

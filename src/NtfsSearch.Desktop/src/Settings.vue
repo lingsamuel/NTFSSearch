@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import type { SettingsRequest, SettingsStatus } from './desktop'
 
 const props = defineProps<{
@@ -82,7 +82,11 @@ async function copy() {
   }
 }
 
-onMounted(() => back.value?.focus())
+function focusBack() {
+  back.value?.focus()
+}
+
+defineExpose({ focusBack })
 </script>
 
 <template>

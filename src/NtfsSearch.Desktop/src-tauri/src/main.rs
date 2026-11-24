@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod file_drag;
 
 use backend::Backend;
 use serde_json::Value;
@@ -11,6 +12,13 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Emitter, Manager, State, WebviewWindow, WindowEvent,
 };
+use windows::Win32::{
+    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+    UI::{
+        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        WindowsAndMessaging::{WA_INACTIVE, WM_ACTIVATE, WM_NCDESTROY},
+    },
+};
 
 enum SettingsNavigation {
     Loading,
@@ -18,16 +26,21 @@ enum SettingsNavigation {
     Ready,
 }
 
+struct WindowNavigation {
+    settings: SettingsNavigation,
+    activate_settings: bool,
+}
+
 #[tauri::command]
 fn start_backend(
     window: WebviewWindow,
     backend: State<'_, Backend>,
-    navigation: State<'_, Mutex<SettingsNavigation>>,
+    navigation: State<'_, Mutex<WindowNavigation>>,
 ) -> Result<(), String> {
     let pending = {
         let mut state = navigation.lock().map_err(|error| error.to_string())?;
         matches!(
-            std::mem::replace(&mut *state, SettingsNavigation::Ready),
+            std::mem::replace(&mut state.settings, SettingsNavigation::Ready),
             SettingsNavigation::Pending
         )
     };
@@ -35,6 +48,11 @@ fn start_backend(
         let _ = window.emit("open-settings", ());
     }
     backend.start(window)
+}
+
+#[tauri::command]
+async fn drag_files(window: WebviewWindow, keys: Vec<String>) -> Result<(), String> {
+    file_drag::drag_files(window, keys).await
 }
 
 #[tauri::command]
@@ -76,25 +94,75 @@ fn show_window(window: &WebviewWindow) {
 
 fn open_main_window(app: &AppHandle, settings: bool) {
     if let Some(window) = app.get_webview_window("main") {
-        show_window(&window);
-        if settings {
-            let navigation = app.state::<Mutex<SettingsNavigation>>();
-            let ready = {
-                let Ok(mut state) = navigation.lock() else {
-                    return;
-                };
-                let ready = matches!(*state, SettingsNavigation::Ready);
-                // 页面先注册事件再启动后端。冷启动时暂存从托盘打开设置的请求。
-                if !ready {
-                    *state = SettingsNavigation::Pending;
-                }
-                ready
+        let navigation = app.state::<Mutex<WindowNavigation>>();
+        let open_settings = {
+            let Ok(mut state) = navigation.lock() else {
+                return;
             };
-            if ready {
-                let _ = window.emit("open-settings", ());
+            state.activate_settings = settings;
+            let ready = matches!(state.settings, SettingsNavigation::Ready);
+            // 页面先注册事件再启动后端。冷启动时暂存从托盘打开设置的请求。
+            if settings && !ready {
+                state.settings = SettingsNavigation::Pending;
+            } else if !settings && matches!(state.settings, SettingsNavigation::Pending) {
+                state.settings = SettingsNavigation::Loading;
+            }
+            settings && ready
+        };
+        show_window(&window);
+        // 显式设置入口只覆盖这次恢复窗口，拒绝激活时也释放标记。
+        if settings {
+            if let Ok(mut state) = navigation.lock() {
+                state.activate_settings = false;
             }
         }
+        if open_settings {
+            let _ = window.emit("open-settings", ());
+        }
     }
+}
+
+// 单 WebView 模式下 Tauri 的 Focused 来自 WebView2。主窗口激活消息只反映顶层切换。
+unsafe extern "system" fn search_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    subclass: usize,
+    reference: usize,
+) -> LRESULT {
+    let app = reference as *mut AppHandle;
+    if message == WM_NCDESTROY {
+        let _ = unsafe { RemoveWindowSubclass(hwnd, Some(search_window_proc), subclass) };
+        drop(unsafe { Box::from_raw(app) });
+    } else if message == WM_ACTIVATE && (wparam.0 & 0xffff) != WA_INACTIVE as usize && wparam.0 >> 16 == 0 {
+        let app = unsafe { &*app };
+        let navigation = app.state::<Mutex<WindowNavigation>>();
+        let settings = navigation.lock().is_ok_and(|mut state| {
+            if state.activate_settings {
+                return true;
+            }
+            if matches!(state.settings, SettingsNavigation::Pending) {
+                state.settings = SettingsNavigation::Loading;
+            }
+            false
+        });
+        if !settings {
+            let _ = app.emit("activate-search", ());
+        }
+    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+fn install_search_activation(app: &App) -> Result<(), Box<dyn std::error::Error>> {
+    let window = app.get_webview_window("main").expect("桌面程序缺少主窗口");
+    let hwnd = window.hwnd()?;
+    let handle = Box::into_raw(Box::new(app.handle().clone()));
+    if !unsafe { SetWindowSubclass(hwnd, Some(search_window_proc), 1, handle as usize) }.as_bool() {
+        drop(unsafe { Box::from_raw(handle) });
+        return Err(io::Error::other("无法监听主窗口激活").into());
+    }
+    Ok(())
 }
 
 fn quit_from_tray(app: &AppHandle) {
@@ -151,15 +219,21 @@ fn main() {
             open_main_window(app, false)
         }))
         .manage(Backend::default())
-        .manage(Mutex::new(SettingsNavigation::Loading))
-        .setup(setup_tray)
+        .manage(Mutex::new(WindowNavigation {
+            settings: SettingsNavigation::Loading,
+            activate_settings: false,
+        }))
+        .setup(|app| {
+            install_search_activation(app)?;
+            setup_tray(app)
+        })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_backend, send_request])
+        .invoke_handler(tauri::generate_handler![start_backend, send_request, drag_files])
         .build(context)
         .expect("无法启动 NTFS Search 桌面窗口");
 

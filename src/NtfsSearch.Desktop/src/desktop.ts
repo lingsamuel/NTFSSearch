@@ -151,6 +151,14 @@ export function listenToOpenSettings(callback: () => void) {
   return listen('open-settings', callback)
 }
 
+export function listenToSearchActivation(callback: () => void) {
+  return listen('activate-search', callback)
+}
+
+export function dragFiles(keys: string[]) {
+  return invoke('drag_files', { keys })
+}
+
 export function startBackend() {
   return invoke('start_backend')
 }

@@ -6,7 +6,7 @@ import Settings from './Settings.vue'
 import SpaceAnalysis from './SpaceAnalysis.vue'
 import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
-  formatCount, listenToBackend, listenToOpenSettings, sendRequest, startBackend,
+  dragFiles, formatCount, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
   type SettingsRequest, type SettingsStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
 } from './desktop'
@@ -17,7 +17,6 @@ const text = ref('')
 const matchPath = ref('path')
 const sort = ref<SortField>(0)
 const descending = ref(false)
-const selectedKey = ref<string | null>(null)
 const result = shallowRef<SearchResult>()
 const indexStatus = shallowRef<IndexStatus>()
 const pending = ref(false)
@@ -38,6 +37,8 @@ const spaceError = ref('')
 const spacePathPending = ref(false)
 const spacePathError = ref('')
 const showingSettings = ref(false)
+const keepSettingsDraft = ref(false)
+const settingsPanel = ref<InstanceType<typeof Settings>>()
 const settingsStatus = shallowRef<SettingsStatus>()
 const settingsPending = ref(false)
 const settingsError = ref('')
@@ -46,6 +47,7 @@ let spaceRequestId = requestId
 let spaceDetailId = 0
 let unlisten: (() => void) | undefined
 let unlistenOpenSettings: (() => void) | undefined
+let unlistenActivation: (() => void) | undefined
 let focusBeforeSettings: HTMLElement | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -97,7 +99,6 @@ function receive(message: DesktopMessage) {
       result.value = message
       pending.value = false
       queryError.value = ''
-      if (!message.rows.some(row => row.key === selectedKey.value)) selectedKey.value = null
       break
     case 'directorySizes': {
       const current = result.value
@@ -203,7 +204,7 @@ function query(offset = 0) {
   if (!connected.value || saving.value) return
   pending.value = true
   queryError.value = ''
-  selectedKey.value = null
+  resultsTable.value?.clearSelection()
   resultsTable.value?.scrollToStart()
   const id = ++requestId
   void sendRequest({
@@ -238,9 +239,9 @@ function turnPage(direction: number) {
   if (offset >= 0 && offset < current.total) query(offset)
 }
 
-function focusQuery() {
+function focusQuery(selectText = true) {
   queryInput.value?.focus()
-  queryInput.value?.select()
+  if (selectText) queryInput.value?.select()
 }
 
 function clearQuery() {
@@ -262,16 +263,31 @@ function openSettings() {
   if (document.activeElement instanceof HTMLElement) focusBeforeSettings = document.activeElement
   showingSettings.value = true
   requestSettings({ type: 'getSettings' })
+  void nextTick(() => settingsPanel.value?.focusBack())
 }
 
 function closeSettings() {
   showingSettings.value = false
+  keepSettingsDraft.value = false
   const previous = focusBeforeSettings
   focusBeforeSettings = undefined
   void nextTick(() => {
     previous?.focus({ preventScroll: true })
     if (!showingSpace.value && document.activeElement === document.body) focusQuery()
   })
+}
+
+async function activateSearch() {
+  if (saving.value) return
+  if (showingSettings.value) {
+    // 重新进入前台时保留设置组件，未应用的表单值仍可继续编辑。
+    keepSettingsDraft.value = true
+    showingSettings.value = false
+    focusBeforeSettings = undefined
+  }
+  if (showingSpace.value) closeSpace(false)
+  await nextTick()
+  if (!saving.value && !showingSettings.value) focusQuery(false)
 }
 
 function requestSettings(request: SettingsRequest) {
@@ -310,11 +326,11 @@ function viewSpace(root = '', directoryId = '', path?: string) {
   })
 }
 
-function closeSpace() {
+function closeSpace(restoreQueryFocus = true) {
   showingSpace.value = false
   space.value = undefined
   if (connected.value) sendAction({ type: 'closeSpaceAnalysis', requestId: ++spaceRequestId })
-  void nextTick(focusQuery)
+  if (restoreQueryFocus) void nextTick(() => focusQuery())
 }
 
 function requestSpaceDetails(id: number, directoryIds: string[], manualDirectoryIds: string[], branchIds: string[]) {
@@ -365,11 +381,18 @@ function fileAction(type: FileAction, row: SearchRow) {
   if (!pending.value) sendAction({ type, key: row.key })
 }
 
+function startFileDrag(keys: string[]) {
+  if (!connected.value || pending.value || saving.value || !keys.length) return
+  showFeedback('')
+  void dragFiles(keys).catch(error => showFeedback(String(error), true))
+}
+
 onMounted(async () => {
   await nextTick()
   queryInput.value?.focus()
   try {
     unlistenOpenSettings = await listenToOpenSettings(openSettings)
+    unlistenActivation = await listenToSearchActivation(activateSearch)
     unlisten = await listenToBackend(receive)
     await connect()
   } catch (error) {
@@ -380,6 +403,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unlisten?.()
   unlistenOpenSettings?.()
+  unlistenActivation?.()
   clearTimeout(noticeTimer)
 })
 </script>
@@ -405,10 +429,10 @@ onBeforeUnmount(() => {
         <button type="button" class="outlined-button toolbar-button" @click="openSettings">设置</button>
       </header>
 
-      <SearchResults v-show="!showingSpace" ref="resultsTable" v-model:selected-key="selectedKey" :rows="fatal ? [] : result?.rows ?? []"
+      <SearchResults v-show="!showingSpace" ref="resultsTable" :rows="fatal ? [] : result?.rows ?? []"
         :sort="sort" :descending="descending" :pending="pending" :empty-message="emptyMessage"
         :index-file-size="indexFileSize" :index-modified-time="indexModifiedTime"
-        @sort="sortBy" @action="fileAction">
+        @sort="sortBy" @action="fileAction" @drag="startFileDrag">
         <div v-if="fatal" class="startup-error" role="alert">
           <strong>搜索服务异常</strong>
           <span>{{ fatal }}</span>
@@ -446,7 +470,8 @@ onBeforeUnmount(() => {
         @details="requestSpaceDetails"
         @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
     </div>
-    <Settings v-if="showingSettings" :inert="!!saving" :status="settingsStatus" :pending="settingsPending || preferencePending"
+    <Settings v-if="showingSettings || keepSettingsDraft" v-show="showingSettings" ref="settingsPanel"
+      :inert="!!saving" :status="settingsStatus" :pending="settingsPending || preferencePending"
       :connected="connected" :error="fatal || settingsError" @close="closeSettings" @request="requestSettings" />
     <div v-if="!saving && (notice || actionError)" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>

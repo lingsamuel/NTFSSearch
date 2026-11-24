@@ -2,18 +2,21 @@ import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
 const trayTest = mode === '--tray'
 const searchResultsTest = mode === '--search-results'
+const desktopInteractionTest = mode === '--desktop-interaction'
+const nativeFileDragTest = mode === '--native-file-drag'
 const searchServiceSettingsTest = mode === '--search-service-settings'
 const withoutHttpTest = mode === '--without-http'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
@@ -41,7 +44,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -74,10 +77,46 @@ public static class DesktopUi {
 }
 '@
     $main = [IntPtr]${hwnd}
-    if ('${action}' -eq 'visible') { [DesktopUi]::IsWindowVisible($main) }
-    else { [DesktopUi]::PostMessage($main, 0x0112, [IntPtr]0xf060, [IntPtr]::Zero) }
+    switch ('${action}') {
+      'visible' { [DesktopUi]::IsWindowVisible($main) }
+      'activate' { [DesktopUi]::PostMessage($main, 0x0006, [IntPtr]1, [IntPtr]::Zero) }
+      'close' { [DesktopUi]::PostMessage($main, 0x0112, [IntPtr]0xf060, [IntPtr]::Zero) }
+    }
   `)
   return stdout.trim() === 'True'
+}
+
+async function windowWithTitle(pid, title) {
+  const { stdout } = await powerShell(`
+    $ErrorActionPreference = 'Stop'
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class TitledWindow {
+  delegate bool WindowCallback(IntPtr hwnd, IntPtr arg);
+  [DllImport("user32")] static extern bool EnumWindows(WindowCallback callback, IntPtr arg);
+  [DllImport("user32")] static extern int GetWindowThreadProcessId(IntPtr hwnd, out int pid);
+  [DllImport("user32", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder title, int capacity);
+  public static long Find(int pid, string title) {
+    long result = 0;
+    EnumWindows((hwnd, arg) => {
+      int owner;
+      GetWindowThreadProcessId(hwnd, out owner);
+      if (owner != pid) return true;
+      var text = new StringBuilder(260);
+      GetWindowText(hwnd, text, text.Capacity);
+      if (!text.ToString().StartsWith(title, StringComparison.Ordinal)) return true;
+      result = hwnd.ToInt64();
+      return false;
+    }, IntPtr.Zero);
+    return result;
+  }
+}
+'@
+    [TitledWindow]::Find(${pid}, '${title}')
+  `)
+  return Number(stdout.trim())
 }
 
 async function until(fn, label, milliseconds = 15_000) {
@@ -211,6 +250,219 @@ async function verifySearchResults() {
   await wheel(150, 0)
   await until(async () => (await dimensions()).top > 0, '普通滚轮纵向滚动')
   assert.equal((await dimensions()).left, 0)
+}
+
+async function verifyDesktopInteraction() {
+  const point = index => evaluate(`(() => {
+    const { left, top, height } = document.querySelectorAll('tbody .entry-path')[${index}].getBoundingClientRect();
+    return { x: left + 10, y: top + height / 2 };
+  })()`)
+  const mouse = (type, position, modifiers = 0) => cdp('Input.dispatchMouseEvent', {
+    type, ...position, modifiers, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1,
+  })
+  const rowClick = async (index, modifiers = 0) => {
+    const position = await point(index)
+    await mouse('mousePressed', position, modifiers)
+    await mouse('mouseReleased', position, modifiers)
+  }
+  const selection = () => evaluate("[...document.querySelectorAll('tbody tr')].flatMap((row, index) => row.getAttribute('aria-selected') === 'true' ? [index] : [])")
+  const key = (key, modifiers = 0) => cdp('Input.dispatchKeyEvent', { type: 'keyDown', key, modifiers })
+  const beginFrame = async () => {
+    await mouse('mousePressed', await point(3))
+    await mouse('mouseMoved', await point(6))
+  }
+
+  await rowClick(0)
+  await rowClick(2, 2)
+  assert.deepEqual(await selection(), [0, 2], 'Ctrl 保留非连续选中项')
+  await rowClick(4, 8)
+  assert.deepEqual(await selection(), [2, 3, 4], 'Shift 从活动行选取范围')
+  await key('a', 2)
+  assert.equal((await selection()).length, 200, 'Ctrl+A 选中当前页')
+
+  await beginFrame()
+  assert.deepEqual(await selection(), [3, 4, 5, 6], '辅助列起框实时选中相交行')
+  await key('Escape')
+  await mouse('mouseReleased', await point(6))
+  assert.equal((await selection()).length, 200, 'Esc 恢复画框前的选择')
+  await beginFrame()
+  await mouse('mouseReleased', await point(6))
+  assert.deepEqual(await selection(), [3, 4, 5, 6], '松开鼠标完成框选')
+
+  const hwnd = await windowWithTitle(application.pid, 'NTFS Search')
+  assert.ok(hwnd, '找到了 NTFS Search 主窗口')
+  const searchFocused = () => evaluate("document.activeElement === document.querySelector('.search-field input')")
+  assert.equal(await searchFocused(), false)
+  assert.equal(await mainWindowAction(hwnd, 'activate'), true)
+  await until(searchFocused, 'Windows 激活后聚焦搜索框')
+  assert.deepEqual(await selection(), [3, 4, 5, 6], '前台激活保留所选结果')
+
+  await click('设置')
+  const draft = "document.querySelector('input[name=search-directory-sizes]')"
+  await until(() => evaluate(`${draft}?.matches(':enabled')`), '设置草稿可编辑')
+  const previous = await evaluate(`${draft}.checked`)
+  await evaluate(`${draft}.click()`)
+  assert.equal(await mainWindowAction(hwnd, 'activate'), true)
+  await until(searchFocused, '设置页激活后回搜索')
+  await click('设置')
+  await until(() => evaluate(`${draft}?.matches(':enabled')`), '恢复后设置草稿可编辑')
+  assert.equal(await evaluate(`${draft}.checked`), !previous, '重新打开设置可继续编辑草稿')
+  await click('返回')
+
+  const bottom = await evaluate(`(() => {
+    const area = document.querySelector('.results-scroll');
+    return area.getBoundingClientRect().top + area.clientHeight - 2;
+  })()`)
+  const origin = await point(3)
+  const edge = { x: origin.x, y: bottom }
+  await mouse('mousePressed', origin)
+  await mouse('mouseMoved', edge)
+  await until(() => evaluate("document.querySelector('.results-scroll').scrollTop >= 60"), '框选靠近下缘自动滚动')
+  await mouse('mouseReleased', edge)
+  assert.ok((await selection()).at(-1) > 10, '框选包含滚动后的结果')
+
+  const missing = 'drag-missing-fixture.txt'
+  await showDragFixtures([
+    { name: '已存在.txt', path: settingsPath },
+    { name: missing, path: join(testData, missing) },
+  ])
+  await rowClick(0)
+  await rowClick(1, 2)
+  const name = await evaluate(`(() => {
+    const { left, top, height } = document.querySelector('.entry-drag-source').getBoundingClientRect();
+    return { x: left + 8, y: top + height / 2 };
+  })()`)
+  await mouse('mousePressed', name)
+  await mouse('mouseMoved', { x: name.x + 12, y: name.y })
+  await mouse('mouseReleased', { x: name.x + 12, y: name.y })
+  await until(() => evaluate(`document.querySelector('.operation-feedback.error')?.textContent.includes('${missing}')`),
+    '拖动文件名时原生桥接收到整组路径')
+  assert.deepEqual(await selection(), [0, 1], '拖动选中行保留整组选中项')
+}
+
+async function showDragFixtures(files) {
+  await evaluate(`(async () => {
+    const tauri = window.__TAURI_INTERNALS__;
+    const handler = tauri.transformCallback(({ payload }) => {
+      if (payload.type === 'result') window.dragFixtureResult = payload;
+    });
+    await tauri.invoke('plugin:event|listen', { event: 'backend-message', target: { kind: 'Any' }, handler });
+  })()`)
+  await query('HELLO 000901', 1)
+  const rows = files.map(file => ({ name: file.name, fullPath: file.path, key: Buffer.from(file.path, 'utf16le').toString('base64') }))
+  await evaluate(`(() => {
+    const event = 'backend-message';
+    const result = window.dragFixtureResult;
+    const rows = ${JSON.stringify(rows)}.map(row => ({ ...result.rows[0], ...row, matchRanges: [] }));
+    const ids = Object.getOwnPropertyNames(window.__internal_unstable_listeners_object_id__[event]).map(Number);
+    window.__internal_unstable_listeners_function_id__({ event, payload: { ...result, rows, total: rows.length } }, ids);
+  })()`)
+}
+
+async function verifyNativeFileDrag() {
+  const files = ['拖放 甲.txt', '拖放 乙.txt'].map((name, index) => ({
+    name, text: `文件内容 ${index + 1}`, path: join(output, 'drag-files', String(index), name),
+  }))
+  for (const file of files) {
+    await mkdir(dirname(file.path), { recursive: true })
+    await writeFile(file.path, file.text)
+  }
+  await showDragFixtures(files)
+  let received
+  let pageRequested = false
+  const server = createHttpServer(async (request, response) => {
+    if (request.method === 'POST') {
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      received = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      response.end()
+      return
+    }
+    pageRequested = true
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    response.end(`<title>NTFS Search 拖放验收</title><style>body { min-height: 90vh }</style><p>拖入两个测试文件</p><script>
+      document.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy' });
+      document.addEventListener('drop', async event => {
+        event.preventDefault();
+        const files = [...event.dataTransfer.files];
+        const received = await Promise.all(files.map(async file => ({ name: file.name, text: await file.text() })));
+        await fetch(location.href, { method: 'POST', body: JSON.stringify(received) });
+      });
+    </script>`)
+  }).listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const browser = spawn(join(process.env['ProgramFiles(x86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    [`--user-data-dir=${join(output, 'Edge')}`, '--no-first-run', '--no-default-browser-check',
+      `http://127.0.0.1:${server.address().port}/`], { stdio: 'ignore' })
+  try {
+    await once(browser, 'spawn')
+    await until(() => pageRequested, 'Edge 上传页加载')
+    const edge = await until(() => windowWithTitle(browser.pid, 'NTFS Search 拖放验收'), 'Edge 上传页窗口')
+    const hwnd = await windowWithTitle(application.pid, 'NTFS Search')
+    assert.ok(hwnd, '找到了拖放源主窗口')
+    await evaluate(`(() => {
+      const rows = document.querySelectorAll('tbody tr');
+      rows[0].click();
+      rows[1].dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    })()`)
+    assert.equal(await evaluate("document.querySelectorAll('tbody tr[aria-selected=true]').length"), files.length)
+    const source = await evaluate(`(() => {
+      const { left, top, height } = document.querySelector('.entry-drag-source').getBoundingClientRect();
+      return { x: Math.ceil((left + 8) * devicePixelRatio), y: Math.round((top + height / 2) * devicePixelRatio) };
+    })()`)
+    // 真实鼠标按键经过 WebView2 和 Shell 发送给独立的浏览器进程。
+    await powerShell(`
+      $ErrorActionPreference = 'Stop'
+      Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class DesktopDrag {
+  [StructLayout(LayoutKind.Sequential)] public struct Point { public int X, Y; }
+  [DllImport("user32")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32")] public static extern int GetSystemMetrics(int index);
+  [DllImport("user32")] public static extern bool MoveWindow(IntPtr hwnd, int x, int y, int width, int height, bool repaint);
+  [DllImport("user32")] public static extern bool ShowWindow(IntPtr hwnd, int command);
+  [DllImport("user32")] public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
+  [DllImport("user32")] public static extern bool GetCursorPos(out Point point);
+  [DllImport("user32")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32")] public static extern void mouse_event(uint flags, int x, int y, uint data, UIntPtr extra);
+}
+'@
+      [void][DesktopDrag]::SetProcessDPIAware()
+      $screen = [DesktopDrag]::GetSystemMetrics(0)
+      if ($screen -lt 1100) { throw '拖放验收需要至少 1100 个屏幕像素' }
+      $middle = [int]($screen / 2)
+      $height = [Math]::Min(620, [DesktopDrag]::GetSystemMetrics(1) - 60)
+      [void][DesktopDrag]::ShowWindow([IntPtr]${edge}, 9)
+      [void][DesktopDrag]::MoveWindow([IntPtr]${edge}, $middle, 30, ($screen - $middle - 15), $height, $true)
+      [void][DesktopDrag]::MoveWindow([IntPtr]${hwnd}, 0, 30, ($middle - 10), $height, $true)
+      if (!(New-Object -ComObject WScript.Shell).AppActivate(${application.pid})) { throw '未找到拖放源窗口' }
+      Start-Sleep -Milliseconds 250
+      $source = New-Object DesktopDrag+Point
+      $source.X = ${source.x}; $source.Y = ${source.y}
+      if (![DesktopDrag]::ClientToScreen([IntPtr]${hwnd}, [ref]$source)) { throw '无法转换源坐标' }
+      $original = New-Object DesktopDrag+Point
+      [void][DesktopDrag]::GetCursorPos([ref]$original)
+      try {
+        [void][DesktopDrag]::SetCursorPos($source.X, $source.Y)
+        [DesktopDrag]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 90
+        [void][DesktopDrag]::SetCursorPos(($source.X + 12), $source.Y)
+        Start-Sleep -Milliseconds 400
+        [void][DesktopDrag]::SetCursorPos(($middle + 100), 230)
+        Start-Sleep -Milliseconds 350
+      } finally {
+        [DesktopDrag]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 150
+        [void][DesktopDrag]::SetCursorPos($original.X, $original.Y)
+      }
+    `)
+    assert.deepEqual(await until(() => received, '浏览器接收拖放文件'), files.map(({ name, text }) => ({ name, text })))
+    for (const file of files) assert.equal(await readFile(file.path, 'utf8'), file.text)
+  } finally {
+    browser.kill()
+    server.close()
+  }
 }
 
 const visible = selector => evaluate(`(() => {
@@ -591,6 +843,10 @@ try {
     await writeFile(join(output, 'benchmark.json'), JSON.stringify({ rows: total, processes: JSON.parse(memory.stdout), samples }, null, 2))
   } else if (searchResultsTest) {
     await verifySearchResults()
+  } else if (desktopInteractionTest) {
+    await verifyDesktopInteraction()
+  } else if (nativeFileDragTest) {
+    await verifyNativeFileDrag()
   } else if (searchServiceSettingsTest) {
     await verifySearchServiceSettings()
   } else if (spaceFlashTest) {
@@ -961,6 +1217,8 @@ try {
   }
   if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
+  else if (desktopInteractionTest) console.log('Windows 前台聚焦、结果多选与框选通过。')
+  else if (nativeFileDragTest) console.log('Windows 向浏览器拖出跨目录多选文件通过。')
   else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
   else if (indexMemorySettingsTest) console.log('Windows 预计算排序即时切换、元数据列重启生效和文件夹大小偏好通过。')
   else if (exitSaveSkipTest) console.log('Windows 退出保存按钮、状态、旧快照保留及再次退出保存通过。')
