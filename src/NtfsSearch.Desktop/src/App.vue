@@ -29,6 +29,7 @@ const showingAdvanced = ref(false)
 const extensions = shallowRef<string[]>([])
 const extensionsPending = ref(false)
 const extensionsError = ref('')
+let extensionRequestId = 0
 const sort = ref<SortField>(0)
 const descending = ref(false)
 const result = shallowRef<SearchResult>()
@@ -200,6 +201,7 @@ function receive(message: DesktopMessage) {
         connected.value = false
         pending.value = false
         extensionsPending.value = false
+        extensions.value = []
         fatal.value = message.message
       } else if (message.scope === 'query' && message.requestId === requestId) {
         pending.value = false
@@ -216,6 +218,7 @@ function receive(message: DesktopMessage) {
       applyFileTypeIcons(message.icons)
       break
     case 'searchExtensions':
+      if (!showingAdvanced.value || message.requestId !== extensionRequestId) return
       extensionsPending.value = false
       extensionsError.value = message.error ?? ''
       if (message.extensions) extensions.value = message.extensions
@@ -339,7 +342,9 @@ function loadExtensions() {
   if (!connected.value || !indexStatus.value?.volumesReady || extensionsPending.value) return
   extensionsPending.value = true
   extensionsError.value = ''
-  void sendRequest({ type: 'searchExtensions' }).catch(error => {
+  const requestId = ++extensionRequestId
+  void sendRequest({ type: 'searchExtensions', requestId }).catch(error => {
+    if (requestId !== extensionRequestId) return
     extensionsPending.value = false
     extensionsError.value = String(error)
   })
@@ -356,6 +361,13 @@ function openAdvancedSearch() {
 
 function closeAdvancedSearch() {
   showingAdvanced.value = false
+  const requestId = extensionRequestId
+  extensionRequestId++
+  if (extensionsPending.value && connected.value)
+    void sendRequest({ type: 'cancelSearchExtensions', requestId }).catch(() => {})
+  extensionsPending.value = false
+  extensionsError.value = ''
+  extensions.value = []
   const previous = focusBeforeAdvanced
   focusBeforeAdvanced = undefined
   void nextTick(() => {

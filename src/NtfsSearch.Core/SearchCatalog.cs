@@ -10,7 +10,6 @@ public sealed class SearchCatalog
     private readonly Dictionary<string, string?> generations = new(StringComparer.Ordinal);
     private PublishedSearchVolume[] published = [];
     private long version;
-    private (long Version, string[] Extensions)? fileExtensions;
     private SearchSortSelection? desktopSort;
     private SearchSortSelection[]? precomputedSorts;
     private HashSet<object> sortOwners = NoSortOwners;
@@ -24,19 +23,11 @@ public sealed class SearchCatalog
     internal bool PrecomputeSort => Volatile.Read(ref precomputedSorts) is not null;
     public event Action? Changed;
 
-    /// <summary>按已发布视图汇总可见文件后缀。调用者应在后台执行，只有同一版本能命中缓存。</summary>
-    internal string[] GetFileExtensions(CancellationToken token)
+    /// <summary>按当前已发布视图汇总可见文件后缀，可按注册后缀缩小候选。调用者应在后台执行。</summary>
+    internal string[] GetFileExtensions(CancellationToken token, string[]? registeredExtensions = null)
     {
         token.ThrowIfCancellationRequested();
-        PublishedSearchVolume[] snapshot;
-        long capturedVersion;
-        lock (gate)
-        {
-            capturedVersion = version;
-            if (fileExtensions is { } cached && cached.Version == capturedVersion) return cached.Extensions;
-            snapshot = published;
-        }
-
+        var snapshot = Volatile.Read(ref published);
         var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var lookup = extensions.GetAlternateLookup<ReadOnlySpan<char>>();
         Span<char> scratch = stackalloc char[255];
@@ -50,10 +41,9 @@ public sealed class SearchCatalog
                 }
 
         token.ThrowIfCancellationRequested();
-        var result = extensions.Select(extension => extension.ToLowerInvariant()).Order(StringComparer.Ordinal).ToArray();
-        lock (gate)
-            if (version == capturedVersion) fileExtensions = (capturedVersion, result);
-        return result;
+        var registered = registeredExtensions is null ? null : new HashSet<string>(registeredExtensions, StringComparer.OrdinalIgnoreCase);
+        return extensions.Where(extension => registered is null || extension.Length == 0 || registered.Contains(extension))
+            .Select(extension => extension.ToLowerInvariant()).Order(StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>即时切换当前目录的排序策略，沿用桌面当前列已经完成的排列。</summary>

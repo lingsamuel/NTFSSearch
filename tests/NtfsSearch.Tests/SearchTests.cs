@@ -194,6 +194,22 @@ public class SearchTests
         Assert.Equal(new[] { "", ".txt" }, catalog.GetFileExtensions(default));
     }
 
+    [Fact]
+    public void RegisteredExtensionChoicesRequireAnIndexedFile()
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", "report.TXT");
+        builder.Add(@"C:\", "report.007");
+        builder.Add(@"C:\", "README");
+        builder.Add(@"C:\", "folder.jpg", isDirectory: true);
+        var catalog = new SearchCatalog();
+        catalog.Publish("disk", builder.Build());
+
+        Assert.Equal(new[] { "", ".txt" }, catalog.GetFileExtensions(default, [".tXt", ".png", ".jpg"]));
+        var manual = catalog.Search("", filter: new(IncludeDirectories: false, FileExtensions: [".007"]));
+        Assert.Equal("report.007", Assert.Single(manual.Rows).Name);
+    }
+
     [Theory]
     [InlineData("DotNetty.Common, Version=0.7.0.0, Culture=neutral, PublicKeyToken=bc13ca065fa06c29", "")]
     [InlineData("Microsoft.Identity.Client.Desktop, Version=4.42.1.0, Culture=neutral, PublicKeyToken=0a613f4dd989e8ae", "")]

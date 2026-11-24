@@ -31,7 +31,22 @@ const choices = computed(() => {
   return [...new Set([...props.extensions, ...(draft.value.extensions ?? [])])]
     .filter(extension => (extension || noExtension).toLowerCase().includes(text))
 })
+const manualExtension = computed(() => {
+  const text = extensionText.value.replace(/^ +| +$/g, '')
+  const extension = text.startsWith('.') ? text : '.' + text
+  if (extension.length < 2 || /[.\\/:*?"<>|\u0000-\u001f ]/.test(extension.slice(1))) return ''
+  const match = extension.toLowerCase()
+  return [...props.extensions, ...(draft.value.extensions ?? [])]
+    .some(existing => existing.toLowerCase() === match) ? '' : extension
+})
 watch(extensionText, () => { extensionLimit.value = extensionPageSize })
+
+function addExtension() {
+  const extension = manualExtension.value
+  if (!extension) return
+  draft.value.extensions = [...(draft.value.extensions ?? []), extension]
+  extensionText.value = ''
+}
 
 function apply() {
   const { createdFrom, createdThrough, modifiedFrom, modifiedThrough, minSizeBytes, maxSizeBytes, extensions } = draft.value
@@ -94,10 +109,14 @@ onMounted(() => dialog.value?.showModal())
       <fieldset>
         <legend>{{ t('advanced.extensions') }}</legend>
         <div class="advanced-extensions-header">
-          <input v-model="extensionText" type="search" :aria-label="t('advanced.findExtensions')" :placeholder="t('advanced.findExtensions')" @keydown.enter.prevent>
+          <input v-model="extensionText" type="search" :aria-label="t('advanced.findExtensions')" :placeholder="t('advanced.findExtensions')"
+            @keydown.enter.prevent="addExtension">
           <span class="advanced-hint">{{ draft.extensions?.length
             ? t('advanced.selectedExtensions', { count: formatCount(draft.extensions.length) }) : t('advanced.allExtensions') }}</span>
         </div>
+        <button v-if="manualExtension" class="outlined-button manual-extension" type="button" @click="addExtension">
+          {{ t('advanced.addExtension', { extension: manualExtension }) }}
+        </button>
         <div v-if="!indexReady" class="advanced-hint" role="status">{{ t('advanced.waitingForIndex') }}</div>
         <div v-else-if="extensionsPending" class="advanced-hint" role="status">{{ t('advanced.loadingExtensions') }}</div>
         <div v-else-if="extensionsError" class="extension-error">
@@ -152,6 +171,7 @@ legend { padding: 0 4px; font-weight: 600; }
 }
 .advanced-extensions-header, .extension-error { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; }
 .advanced-extensions-header span { white-space: nowrap; }
+.manual-extension { max-width: 100%; margin-bottom: 6px; overflow-wrap: anywhere; }
 .advanced-hint { color: var(--muted); }
 .advanced-extensions { max-height: 120px; overflow: auto; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .advanced-extensions label { display: flex; align-items: center; gap: 4px; min-width: 0; padding: 2px 4px 2px 0; }

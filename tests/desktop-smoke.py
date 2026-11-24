@@ -237,7 +237,40 @@ def check_localization(command):
         print("跟随系统、双语切换和语言偏好持久化通过。")
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["--localization"]:
+def check_search_extensions(command):
+    import winreg
+
+    fixture_extensions = {".txt", ".dll", ".png", ".json", ".md", ".exe", ".zip", ".log"}
+    count = winreg.QueryInfoKey(winreg.HKEY_CLASSES_ROOT)[0]
+    registered = {winreg.EnumKey(winreg.HKEY_CLASSES_ROOT, i).lower() for i in range(count)}
+    expected = sorted(fixture_extensions & registered)
+    artifacts = Path(__file__).resolve().parents[1] / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=artifacts) as directory:
+        (Path(directory) / "settings.json").write_text('{"SkipExitIndexSave":true}', encoding="utf-8")
+        env = os.environ | {"NTFS_SEARCH_TEST_DATA": directory}
+        env.pop("NTFS_SEARCH_PORT", None)
+
+        def verify(backend, send, receive):
+            send(dict(type="cancelSearchExtensions", requestId=10),
+                 dict(type="searchExtensions", requestId=10),
+                 dict(type="searchExtensions", requestId=11))
+            result = receive("searchExtensions")
+            assert result == dict(type="searchExtensions", requestId=11, extensions=expected), result
+            send(dict(type="cancelSearchExtensions", requestId=11),
+                 dict(type="searchExtensions", requestId=12))
+            result = receive("searchExtensions")
+            assert result == dict(type="searchExtensions", requestId=12, extensions=expected), result
+            send(dict(type="quit"))
+            assert receive("quit-complete").get("error") is None
+
+        check_backend(command, env, verify_quit=verify)
+    print("后缀注册交集、取消过期请求和重新汇总通过。")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--search-extensions"]:
+    check_search_extensions(sys.argv[2:])
+elif __name__ == "__main__" and sys.argv[1:2] == ["--localization"]:
     check_localization(sys.argv[2:])
 elif __name__ == "__main__" and sys.argv[1:2] == ["--space-capacity-settings"]:
     check_space_capacity_settings(sys.argv[2:])

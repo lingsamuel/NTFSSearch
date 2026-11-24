@@ -1,6 +1,7 @@
 {
   "name": "English",
   "messages": {
+    "advanced.addExtension": "Add {extension}",
     "advanced.allExtensions": "All extensions",
     "advanced.clear": "Clear filters",
     "advanced.createdDate": "Date created",

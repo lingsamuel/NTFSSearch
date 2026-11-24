@@ -162,7 +162,7 @@ export type DesktopMessage =
   | { type: 'directorySizes'; requestId: number; rows: Pick<SearchRow, 'key' | 'sizeText' | 'sizeBytesText' | 'sizeHint'>[] }
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
-  | { type: 'searchExtensions'; extensions?: string[]; error?: string }
+  | { type: 'searchExtensions'; requestId: number; extensions?: string[]; error?: string }
   | { type: 'saving'; written: number; total: number; phase?: 'writing' | 'skipping' | 'committing' }
   | { type: 'exitSavePreference'; skipExitIndexSave: boolean; error: string | null }
   | { type: 'quit-complete'; error?: string }
@@ -173,7 +173,7 @@ export type DesktopRequest =
   | SettingsRequest
   | ({ type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean
     offset: number; includeFiles: boolean; includeDirectories: boolean } & AdvancedSearchCriteria)
-  | { type: 'searchExtensions' }
+  | { type: 'searchExtensions' | 'cancelSearchExtensions'; requestId: number }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
   | { type: 'spaceCapacities'; requestId: number }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }

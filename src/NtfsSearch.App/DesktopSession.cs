@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.Win32;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
@@ -25,6 +26,8 @@ internal sealed class DesktopSession
     private CancellationTokenSource? search;
     private Task? searchTask;
     private Task? fileExtensionTask;
+    private CancellationTokenSource? fileExtensionCancellation;
+    private long fileExtensionRequestId;
     private long refreshGeneration;
     private bool refreshPending;
     private SearchOptions options = new(0, "", SortField.Name, false, true, 0);
@@ -138,6 +141,7 @@ internal sealed class DesktopSession
                     fileExtensionTask ?? Task.CompletedTask, spaceAnalysis.StopAsync(), StopSettingsAsync(exitSave));
                 directorySizes.Dispose();
                 activeSearch?.Dispose();
+                fileExtensionCancellation?.Dispose();
             }
 
             if (quitRequested && !settings.SkipExitIndexSave)
@@ -254,8 +258,18 @@ internal sealed class DesktopSession
                         _ = PublishFileTypeIconsAsync(extensions, token);
                     break;
                 case "searchExtensions":
-                    if (fileExtensionTask is not { IsCompleted: false })
-                        fileExtensionTask = PublishSearchExtensionsAsync(token);
+                    if (request.RequestId <= fileExtensionRequestId) break;
+                    fileExtensionRequestId = request.RequestId;
+                    var previousExtensionCancellation = fileExtensionCancellation;
+                    previousExtensionCancellation?.Cancel();
+                    fileExtensionCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    fileExtensionTask = PublishSearchExtensionsAsync(request.RequestId, fileExtensionTask,
+                        previousExtensionCancellation, fileExtensionCancellation.Token);
+                    break;
+                case "cancelSearchExtensions":
+                    if (request.RequestId < fileExtensionRequestId) break;
+                    fileExtensionRequestId = request.RequestId;
+                    fileExtensionCancellation?.Cancel();
                     break;
                 case "spaceAnalysis":
                     spaceAnalysis.View(request.RequestId, request.Root, request.DirectoryId);
@@ -330,16 +344,21 @@ internal sealed class DesktopSession
         return date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Local).ToUniversalTime().Ticks;
     }
 
-    private async Task PublishSearchExtensionsAsync(CancellationToken token)
+    private async Task PublishSearchExtensionsAsync(long requestId, Task? previous, CancellationTokenSource? previousCancellation,
+        CancellationToken token)
     {
         try
         {
-            var extensions = await Task.Run(() => host.Catalog.GetFileExtensions(token), token);
-            publish(new { Type = "searchExtensions", Extensions = extensions });
+            // 快速关闭并重开时先等取消的汇总结束，避免并发遍历同一份索引。
+            if (previous is not null) await previous;
+            var extensions = await Task.Run(() => host.Catalog.GetFileExtensions(token, Registry.ClassesRoot.GetSubKeyNames()), token);
+            token.ThrowIfCancellationRequested();
+            publish(new { Type = "searchExtensions", RequestId = requestId, Extensions = extensions });
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception error)
-        { publish(new { Type = "searchExtensions", Error = error.Message }); }
+        { publish(new { Type = "searchExtensions", RequestId = requestId, Error = error.Message }); }
+        finally { previousCancellation?.Dispose(); }
     }
 
     private async Task PublishFileTypeIconsAsync(string[] extensions, CancellationToken token)

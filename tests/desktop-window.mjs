@@ -715,16 +715,16 @@ async function verifyAdvancedSearch() {
   await screenshot('search-menu.png')
   await clickButton('搜索')
   await open()
-  const found = await until(() => evaluate("document.querySelector('input[name=file-extension][value=\".json\"]') !== null"),
+  const found = await until(() => evaluate("document.querySelector('input[name=file-extension][value=\".txt\"]') !== null"),
     '已从后端加载动态后缀')
   assert.ok(found)
   const localDay = instant => new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short' }).format(new Date(instant))
   const entry = {
-    'created-from': localDay('2025-12-31T00:03:00Z'),
-    'created-through': localDay('2025-12-31T00:03:00Z'),
-    'modified-from': localDay('2026-01-01T00:03:00Z'),
-    'modified-through': localDay('2026-01-01T00:03:00Z'),
-    'min-size': '3072', 'max-size': '3072',
+    'created-from': localDay('2025-12-31T00:00:00Z'),
+    'created-through': localDay('2025-12-31T00:00:00Z'),
+    'modified-from': localDay('2026-01-01T00:00:00Z'),
+    'modified-through': localDay('2026-01-01T00:00:00Z'),
+    'min-size': '0', 'max-size': '0',
   }
   await evaluate(`(() => {
     for (const [name, value] of Object.entries(${JSON.stringify(entry)})) {
@@ -732,11 +732,11 @@ async function verifyAdvancedSearch() {
       input.value = value;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
-    document.querySelector('input[name=file-extension][value=".json"]').click();
+    document.querySelector('input[name=file-extension][value=".txt"]').click();
   })()`)
   await click('应用')
   await count(1)
-  assert.match(await evaluate("document.querySelector('tbody tr').textContent"), /000003\.json/)
+  assert.match(await evaluate("document.querySelector('tbody tr').textContent"), /000000\.txt/)
   assert.match(await evaluate("document.querySelector('.result-summary').textContent"), /高级筛选 4 项/)
   await click('空间分析')
   await until(() => visible('button[aria-label="返回搜索"]'), '空间分析主界面入口')
@@ -748,6 +748,20 @@ async function verifyAdvancedSearch() {
   await click('取消')
   await count(1)
   await open()
+  await click('清除条件')
+  await click('应用')
+  await count(995)
+  await open()
+  await evaluate(`(() => {
+    const input = document.querySelector('input[aria-label="查找后缀"]');
+    input.value = 'ntfs-search-unregistered-fixture';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  await click('添加 .ntfs-search-unregistered-fixture')
+  await click('应用')
+  await count(0)
+  await open()
+  assert.equal(await evaluate("document.querySelector('input[name=file-extension][value=\".ntfs-search-unregistered-fixture\"]')?.checked"), true)
   await click('清除条件')
   await click('应用')
   await count(995)

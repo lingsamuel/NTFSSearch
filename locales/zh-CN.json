@@ -1,6 +1,7 @@
 {
   "name": "简体中文",
   "messages": {
+    "advanced.addExtension": "添加 {extension}",
     "advanced.allExtensions": "所有后缀",
     "advanced.clear": "清除条件",
     "advanced.createdDate": "创建日期",
