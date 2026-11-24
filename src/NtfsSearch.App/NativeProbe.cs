@@ -1,4 +1,3 @@
-using System.Security.Principal;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
@@ -7,8 +6,7 @@ internal static class NativeProbe
 {
     public static async Task<int> RunAsync(string reportPath)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+        if (!AppProcess.HasAdministratorRights())
         {
             using var child = AppProcess.Start(["--probe-volumes", reportPath], elevate: true);
             await child.WaitForExitAsync(); return child.ExitCode;

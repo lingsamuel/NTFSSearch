@@ -1,6 +1,6 @@
 [package]
 name = "ntfs-search"
-version = "0.25.0"
+version = "0.25.1"
 description = "NTFS 文件搜索"
 edition = "2021"
 

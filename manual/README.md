@@ -2,7 +2,7 @@
 
 ## 启动
 
-解压到 Windows 本地的可写目录，双击 `NtfsSearch.App.exe`。出现 UAC 提示时，授权程序读取磁盘。NTFS 磁盘的索引就绪后即可搜索。
+解压到 Windows 本地的可写目录，双击 `NtfsSearch.App.exe`。出现 UAC 提示时，授权程序读取磁盘。若已从托盘退出并以管理员身份重新启动，采集器会继承管理员权限。NTFS 磁盘的索引就绪后即可搜索。
 
 所有版本都需要 WebView2 Runtime。`framework-dependent` 还需安装 x64 的 .NET Runtime 10 和 ASP.NET Core Runtime 10，`framework-dependent-no-http` 只需前者。`self-contained` 系列自带 .NET 运行时。
 

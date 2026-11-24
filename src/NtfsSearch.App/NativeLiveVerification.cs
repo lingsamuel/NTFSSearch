@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
@@ -10,8 +9,7 @@ internal static class NativeLiveVerification
 {
     public static async Task<int> RunAsync(string reportPath)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator))
+        if (!AppProcess.HasAdministratorRights())
         {
             using var child = AppProcess.Start(["--verify-live", reportPath], elevate: true);
             await child.WaitForExitAsync(); return child.ExitCode;

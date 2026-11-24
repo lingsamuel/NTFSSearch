@@ -3,7 +3,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
-using System.Security.Principal;
 using NtfsSearch.Core;
 
 namespace NtfsSearch.App;
@@ -12,8 +11,7 @@ internal static class MemoryCollector
 {
     internal static async Task<int> RunAsync(string name, int parentPid)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        if (!new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator)) return 5;
+        if (!AppProcess.HasAdministratorRights()) return 5;
         using var lifetime = new CancellationTokenSource();
         using var pipe = await MemoryCollectorPipe.ConnectAsync(name, parentPid, lifetime.Token);
         var control = new CollectorFrameReader(pipe);
