@@ -2,6 +2,16 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
 export type SortField = 0 | 1 | 2 | 3
+export interface AdvancedSearchCriteria {
+  createdFrom?: string
+  createdThrough?: string
+  modifiedFrom?: string
+  modifiedThrough?: string
+  minSizeBytes?: string
+  maxSizeBytes?: string
+  extensions?: string[]
+}
+
 export type FileAction = 'open' | 'openWith' | 'reveal' | 'copy'
 export const fileMenuActions = [
   { type: 'open', label: '打开', shortcut: 'Enter' },
@@ -46,6 +56,7 @@ export interface IndexStatus {
   discoveryComplete: boolean
   collectionCancelled: boolean
   skipExitIndexSave: boolean
+  indexCreationTime: boolean
   indexModifiedTime: boolean
   indexFileSize: boolean
   progress: string | null
@@ -149,6 +160,7 @@ export type DesktopMessage =
   | { type: 'directorySizes'; requestId: number; rows: Pick<SearchRow, 'key' | 'sizeText' | 'sizeBytesText' | 'sizeHint'>[] }
   | { type: 'spacePathError'; requestId: number; message: string }
   | { type: 'fileTypeIcons'; icons: Record<string, string | null> }
+  | { type: 'searchExtensions'; extensions?: string[]; error?: string }
   | { type: 'saving'; written: number; total: number; phase?: 'writing' | 'skipping' | 'committing' }
   | { type: 'exitSavePreference'; skipExitIndexSave: boolean; error: string | null }
   | { type: 'quit-complete'; error?: string }
@@ -157,7 +169,9 @@ export type DesktopMessage =
 
 export type DesktopRequest =
   | SettingsRequest
-  | { type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean; offset: number }
+  | ({ type: 'query'; requestId: number; text: string; sort: SortField; descending: boolean; matchPath: boolean
+    offset: number; includeFiles: boolean; includeDirectories: boolean } & AdvancedSearchCriteria)
+  | { type: 'searchExtensions' }
   | { type: 'spaceAnalysis'; requestId: number; root: string; directoryId: string }
   | { type: 'spaceCapacities'; requestId: number }
   | { type: 'spacePath'; requestId: number; path: string; root: string; breadcrumbIds: string[]; volumeKey: string | null }

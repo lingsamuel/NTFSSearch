@@ -10,6 +10,7 @@ public sealed class SearchCatalog
     private readonly Dictionary<string, string?> generations = new(StringComparer.Ordinal);
     private PublishedSearchVolume[] published = [];
     private long version;
+    private (long Version, string[] Extensions)? fileExtensions;
     private SearchSortSelection? desktopSort;
     private SearchSortSelection[]? precomputedSorts;
     private HashSet<object> sortOwners = NoSortOwners;
@@ -22,6 +23,38 @@ public sealed class SearchCatalog
     public long Version => Interlocked.Read(ref version);
     internal bool PrecomputeSort => Volatile.Read(ref precomputedSorts) is not null;
     public event Action? Changed;
+
+    /// <summary>按已发布视图汇总可见文件后缀。调用者应在后台执行，只有同一版本能命中缓存。</summary>
+    internal string[] GetFileExtensions(CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        PublishedSearchVolume[] snapshot;
+        long capturedVersion;
+        lock (gate)
+        {
+            capturedVersion = version;
+            if (fileExtensions is { } cached && cached.Version == capturedVersion) return cached.Extensions;
+            snapshot = published;
+        }
+
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lookup = extensions.GetAlternateLookup<ReadOnlySpan<char>>();
+        Span<char> scratch = stackalloc char[255];
+        foreach (var volume in snapshot)
+            foreach (var index in volume.Layers)
+                for (int id = 0; id < index.Count; id++)
+                {
+                    if ((id & 4095) == 0) token.ThrowIfCancellationRequested();
+                    if (!index.IsVisible(id) || index.Records[id].IsDirectory) continue;
+                    lookup.Add(Path.GetExtension(index.Name(id, scratch)));
+                }
+
+        token.ThrowIfCancellationRequested();
+        var result = extensions.Select(extension => extension.ToLowerInvariant()).Order(StringComparer.Ordinal).ToArray();
+        lock (gate)
+            if (version == capturedVersion) fileExtensions = (capturedVersion, result);
+        return result;
+    }
 
     /// <summary>即时切换当前目录的排序策略，沿用桌面当前列已经完成的排列。</summary>
     internal bool SetPrecomputeSort(bool enabled)
@@ -196,8 +229,9 @@ public sealed class SearchCatalog
         => Search(text, sort, descending, matchPath, offset, limit, cancellationToken, filter, includeDirectorySizes: false, desktop: false);
 
     internal SearchResult SearchDesktop(string text, SortField sort, bool descending,
-        bool matchPath, int offset, int limit, CancellationToken cancellationToken, bool includeDirectorySizes = true)
-        => Search(text, sort, descending, matchPath, offset, limit, cancellationToken, null, includeDirectorySizes, desktop: true);
+        bool matchPath, int offset, int limit, CancellationToken cancellationToken, bool includeDirectorySizes = true,
+        SearchFilter? filter = null)
+        => Search(text, sort, descending, matchPath, offset, limit, cancellationToken, filter, includeDirectorySizes, desktop: true);
 
     internal SearchResult SearchHttp(string text, SortField sort, bool descending, bool matchPath, int offset, int limit,
         CancellationToken cancellationToken, SearchFilter filter, Action beforeColdSort)

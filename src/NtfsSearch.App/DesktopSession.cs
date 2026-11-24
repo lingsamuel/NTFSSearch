@@ -24,6 +24,7 @@ internal sealed class DesktopSession
     private readonly FileTypeIcons fileTypeIcons = new();
     private CancellationTokenSource? search;
     private Task? searchTask;
+    private Task? fileExtensionTask;
     private long refreshGeneration;
     private bool refreshPending;
     private SearchOptions options = new(0, "", SortField.Name, false, true, 0);
@@ -61,6 +62,7 @@ internal sealed class DesktopSession
 #endif
     private bool IndexesFileSize => host.Metadata.HasFlag(IndexMetadata.FileSize);
     private bool IndexesModifiedTime => host.Metadata.HasFlag(IndexMetadata.ModifiedTime);
+    private bool IndexesCreationTime => host.Metadata.HasFlag(IndexMetadata.CreationTime);
     private bool SearchDirectorySizesEnabled => IndexesFileSize && settings.SearchDirectorySizes;
 
     internal async Task RunAsync(TextReader input)
@@ -126,7 +128,7 @@ internal sealed class DesktopSession
                 activeSearch?.Cancel();
                 await lifetime.CancelAsync();
                 await Task.WhenAll(automatic, folderSizes, searchTask ?? Task.CompletedTask,
-                    spaceAnalysis.StopAsync(), StopSettingsAsync(exitSave));
+                    fileExtensionTask ?? Task.CompletedTask, spaceAnalysis.StopAsync(), StopSettingsAsync(exitSave));
                 directorySizes.Dispose();
                 activeSearch?.Dispose();
             }
@@ -211,7 +213,11 @@ internal sealed class DesktopSession
                         _ => false
                     };
                     options = new(request.RequestId, request.Text, unavailableSort ? SortField.Name : request.Sort,
-                        !unavailableSort && request.Descending, request.MatchPath, request.Offset);
+                        !unavailableSort && request.Descending, request.MatchPath, request.Offset, new SearchFilter(
+                            request.MinSizeBytes, request.MaxSizeBytes, LocalDayBoundary(request.ModifiedFrom),
+                            LocalDayBoundary(request.ModifiedThrough, afterDay: true), LocalDayBoundary(request.CreatedFrom),
+                            LocalDayBoundary(request.CreatedThrough, afterDay: true), request.IncludeFiles,
+                            request.IncludeDirectories, request.Extensions));
                     RunQuery();
                     break;
                 case "quit":
@@ -239,6 +245,10 @@ internal sealed class DesktopSession
                 case "fileTypeIcons":
                     if (request.Extensions is { Length: > 0 } extensions)
                         _ = PublishFileTypeIconsAsync(extensions, token);
+                    break;
+                case "searchExtensions":
+                    if (fileExtensionTask is not { IsCompleted: false })
+                        fileExtensionTask = PublishSearchExtensionsAsync(token);
                     break;
                 case "spaceAnalysis":
                     spaceAnalysis.View(request.RequestId, request.Root, request.DirectoryId);
@@ -302,6 +312,27 @@ internal sealed class DesktopSession
     {
         try { await DesktopFileActions.RunShellActionAsync(request.Type, request.Key); }
         catch (Exception error) { Post(() => PublishError("action", error.Message)); }
+    }
+
+    private static long? LocalDayBoundary(DateOnly? value, bool afterDay = false)
+    {
+        if (value is not DateOnly date) return null;
+        // 界面两端都是包含的本地日期，查询引擎比较下一个本地午夜的 UTC 值。
+        if (afterDay && date == DateOnly.MaxValue) return DateTime.MaxValue.Ticks + 1;
+        if (afterDay) date = date.AddDays(1);
+        return date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Local).ToUniversalTime().Ticks;
+    }
+
+    private async Task PublishSearchExtensionsAsync(CancellationToken token)
+    {
+        try
+        {
+            var extensions = await Task.Run(() => host.Catalog.GetFileExtensions(token), token);
+            publish(new { Type = "searchExtensions", Extensions = extensions });
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception error)
+        { publish(new { Type = "searchExtensions", Error = error.Message }); }
     }
 
     private async Task PublishFileTypeIconsAsync(string[] extensions, CancellationToken token)
@@ -413,7 +444,7 @@ internal sealed class DesktopSession
             while (true)
             {
                 result = await Task.Run(() => host.Catalog.SearchDesktop(snapshot.Text, snapshot.Sort, snapshot.Descending,
-                    snapshot.MatchPath, offset, PageSize, source.Token, includeDirectorySizes), source.Token);
+                    snapshot.MatchPath, offset, PageSize, source.Token, includeDirectorySizes, snapshot.Filter), source.Token);
                 source.Token.ThrowIfCancellationRequested();
                 if (offset == 0 || offset < result.TotalCount) break;
                 // 删除可能使最后一页失效，只回退到仍存在的最后一页。
@@ -527,6 +558,7 @@ internal sealed class DesktopSession
             ScanLimit = metrics?.ScanLimit,
             Refreshing = refreshing, DiscoveryComplete = discoveryComplete, CollectionCancelled = collectionCancelled,
             settings.SkipExitIndexSave, IndexFileSize = IndexesFileSize, IndexModifiedTime = IndexesModifiedTime,
+            IndexCreationTime = IndexesCreationTime,
             Progress = progress, Error = indexError
         });
     }
@@ -745,7 +777,8 @@ internal sealed class DesktopSession
     private void PublishError(string scope, string message, long? requestId = null) =>
         publish(new { Type = "error", Scope = scope, Message = message, RequestId = requestId });
 
-    private sealed record SearchOptions(long RequestId, string Text, SortField Sort, bool Descending, bool MatchPath, int Offset);
+    private sealed record SearchOptions(long RequestId, string Text, SortField Sort, bool Descending, bool MatchPath, int Offset,
+        SearchFilter? Filter = null);
 
     private sealed record SettingsStatus(bool SearchServiceAvailable, bool Enabled, int Port, string? Address, bool PortOverridden,
         bool Running, bool Busy, string? Error, bool SearchDirectorySizes, bool SkipExitIndexSave,
@@ -762,5 +795,7 @@ internal sealed class DesktopSession
         bool SkipExitIndexSave = false, string? FileReference = null, bool? Enabled = null, int Port = 0,
         bool? SearchDirectorySizes = null, bool? PrecomputeSort = null, bool? IndexCreationTime = null,
         bool? IndexModifiedTime = null, bool? IndexFileSize = null, bool? ShowSpaceVolumeCapacity = null,
-        bool? SpaceVolumeShowFree = null, bool? SpaceVolumeCapacityBar = null);
+        bool? SpaceVolumeShowFree = null, bool? SpaceVolumeCapacityBar = null, bool IncludeFiles = true, bool IncludeDirectories = true,
+        long? MinSizeBytes = null, long? MaxSizeBytes = null, DateOnly? CreatedFrom = null, DateOnly? CreatedThrough = null,
+        DateOnly? ModifiedFrom = null, DateOnly? ModifiedThrough = null);
 }

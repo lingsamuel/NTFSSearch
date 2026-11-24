@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import AdvancedSearch from './AdvancedSearch.vue'
 import IndexStatusPanel from './IndexStatus.vue'
 import SearchResults from './SearchResults.vue'
 import Settings from './Settings.vue'
@@ -7,6 +8,7 @@ import SpaceAnalysis from './SpaceAnalysis.vue'
 import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
 import {
   dragFiles, formatCount, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
+  type AdvancedSearchCriteria,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
   type SettingsRequest, type SettingsStatus, type SettingsTab, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
   type SpaceVolumeCapacity,
@@ -14,8 +16,18 @@ import {
 
 const queryInput = ref<HTMLInputElement>()
 const resultsTable = ref<InstanceType<typeof SearchResults>>()
+const searchMenu = ref<HTMLElement>()
+const toolsMenu = ref<HTMLElement>()
+const typeMenu = ref<HTMLElement>()
 const text = ref('')
-const matchPath = ref('path')
+const matchPath = ref(true)
+const includeFiles = ref(true)
+const includeDirectories = ref(true)
+const advanced = shallowRef<AdvancedSearchCriteria>({})
+const showingAdvanced = ref(false)
+const extensions = shallowRef<string[]>([])
+const extensionsPending = ref(false)
+const extensionsError = ref('')
 const sort = ref<SortField>(0)
 const descending = ref(false)
 const result = shallowRef<SearchResult>()
@@ -54,9 +66,11 @@ let unlisten: (() => void) | undefined
 let unlistenOpenSettings: (() => void) | undefined
 let unlistenActivation: (() => void) | undefined
 let focusBeforeSettings: HTMLElement | undefined
+let focusBeforeAdvanced: HTMLElement | undefined
 let noticeTimer: ReturnType<typeof setTimeout> | undefined
 
 const hasAvailableIndex = computed(() => (result.value?.volumesReady ?? 0) > 0)
+const indexCreationTime = computed(() => indexStatus.value?.indexCreationTime ?? false)
 const indexFileSize = computed(() => indexStatus.value?.indexFileSize ?? true)
 const indexModifiedTime = computed(() => indexStatus.value?.indexModifiedTime ?? true)
 const canViewSpace = computed(() => connected.value && !!indexStatus.value && indexFileSize.value && !saving.value)
@@ -79,6 +93,19 @@ const spaceUnavailable = '空间分析需要启用「索引文件大小」。'
 const page = computed(() => result.value ? Math.floor(result.value.offset / result.value.pageSize) + 1 : 1)
 const pages = computed(() => result.value ? Math.max(1, Math.ceil(result.value.total / result.value.pageSize)) : 1)
 const canPage = computed(() => connected.value && !pending.value && !queryError.value)
+const resultTypesLabel = computed(() => {
+  if (includeDirectories.value) return includeFiles.value ? '全部' : '文件夹'
+  return includeFiles.value ? '文件' : '无'
+})
+const advancedCount = computed(() => {
+  const criteria = advanced.value
+  return [
+    criteria.createdFrom || criteria.createdThrough,
+    criteria.modifiedFrom || criteria.modifiedThrough,
+    criteria.minSizeBytes || criteria.maxSizeBytes,
+    criteria.extensions?.length,
+  ].filter(Boolean).length
+})
 const emptyMessage = computed(() => {
   if (fatal.value) return ''
   if (queryError.value) return queryError.value
@@ -121,14 +148,17 @@ function receive(message: DesktopMessage) {
       }) }
       break
     }
-    case 'status':
+    case 'status': {
+      const firstReady = !indexStatus.value?.volumesReady && message.volumesReady > 0
       indexStatus.value = message
+      if (firstReady && showingAdvanced.value) loadExtensions()
       if ((sort.value === 2 && !indexFileSize.value) || (sort.value === 3 && !indexModifiedTime.value)) {
         sort.value = 0
         descending.value = false
       }
       if (spaceStarted.value && !indexFileSize.value) resetSpace()
       break
+    }
     case 'settingsStatus':
       settingsStatus.value = message
       settingsPending.value = message.busy
@@ -164,6 +194,7 @@ function receive(message: DesktopMessage) {
         settingsPending.value = false
         connected.value = false
         pending.value = false
+        extensionsPending.value = false
         fatal.value = message.message
       } else if (message.scope === 'query' && message.requestId === requestId) {
         pending.value = false
@@ -179,7 +210,13 @@ function receive(message: DesktopMessage) {
     case 'fileTypeIcons':
       applyFileTypeIcons(message.icons)
       break
+    case 'searchExtensions':
+      extensionsPending.value = false
+      extensionsError.value = message.error ?? ''
+      if (message.extensions) extensions.value = message.extensions
+      break
     case 'saving':
+      if (showingAdvanced.value) closeAdvancedSearch()
       if (!saving.value) skipSavePending.value = false
       saving.value = message
       break
@@ -208,6 +245,7 @@ async function connect() {
     if (fatal.value) return
     connected.value = true
     query()
+    if (showingAdvanced.value) loadExtensions()
     if (showingSettings.value) requestSettings({ type: 'getSettings' })
   } catch (error) {
     fatal.value ||= String(error)
@@ -225,7 +263,8 @@ function query(offset = 0) {
   const id = ++requestId
   void sendRequest({
     type: 'query', requestId: id, text: text.value, sort: sort.value,
-    descending: descending.value, matchPath: matchPath.value === 'path', offset,
+    descending: descending.value, matchPath: matchPath.value, offset,
+    includeFiles: includeFiles.value, includeDirectories: includeDirectories.value, ...advanced.value,
   }).catch(error => {
     if (requestId !== id) return
     connected.value = false
@@ -234,7 +273,7 @@ function query(offset = 0) {
   })
 }
 
-watch([text, matchPath, sort, descending], () => query())
+watch([text, matchPath, sort, descending, includeFiles, includeDirectories, advanced], () => query())
 watch(skipSaveButton, button => {
   if (button && !button.disabled) button.focus()
 }, { flush: 'post' })
@@ -266,7 +305,7 @@ function clearQuery() {
 }
 
 function handleShortcut(event: KeyboardEvent) {
-  if (showingSettings.value || saving.value) return
+  if (showingSettings.value || showingAdvanced.value || saving.value) return
   if (event.ctrlKey && event.key.toLowerCase() === 'f') {
     event.preventDefault()
     if (showingSpace.value) closeSpace()
@@ -274,8 +313,62 @@ function handleShortcut(event: KeyboardEvent) {
   }
 }
 
+function positionMenu(event: MouseEvent) {
+  if (!(event.currentTarget instanceof HTMLButtonElement)) return
+  const menu = event.currentTarget.popoverTargetElement
+  if (!(menu instanceof HTMLElement)) return
+  const button = event.currentTarget.getBoundingClientRect()
+  // 旧 WebView 按触发按钮的位置显示，新版本由 CSS 锚定以便随窗口调整。
+  menu.style.setProperty('--menu-top', `${button.bottom}px`)
+  menu.style.setProperty('--menu-left', `${button.left}px`)
+  menu.style.setProperty('--menu-right', `${window.innerWidth - button.right}px`)
+}
+
+function setMatchPath(value: boolean) {
+  searchMenu.value?.hidePopover()
+  matchPath.value = value
+  if (!showingSpace.value) focusQuery(false)
+}
+
+function loadExtensions() {
+  if (!connected.value || !indexStatus.value?.volumesReady || extensionsPending.value) return
+  extensionsPending.value = true
+  extensionsError.value = ''
+  void sendRequest({ type: 'searchExtensions' }).catch(error => {
+    extensionsPending.value = false
+    extensionsError.value = String(error)
+  })
+}
+
+function openAdvancedSearch() {
+  if (showingAdvanced.value || showingSettings.value || saving.value) return
+  searchMenu.value?.hidePopover()
+  if (showingSpace.value) closeSpace()
+  else if (document.activeElement instanceof HTMLElement) focusBeforeAdvanced = document.activeElement
+  showingAdvanced.value = true
+  loadExtensions()
+}
+
+function closeAdvancedSearch() {
+  showingAdvanced.value = false
+  const previous = focusBeforeAdvanced
+  focusBeforeAdvanced = undefined
+  void nextTick(() => {
+    previous?.focus({ preventScroll: true })
+    if (document.activeElement === document.body && !saving.value) focusQuery(false)
+  })
+}
+
+function applyAdvancedSearch(criteria: AdvancedSearchCriteria) {
+  advanced.value = criteria
+  closeAdvancedSearch()
+}
+
 function openSettings(tab: SettingsTab = 'search') {
-  if (showingSettings.value) return
+  if (showingSettings.value || showingAdvanced.value || saving.value) return
+  searchMenu.value?.hidePopover()
+  toolsMenu.value?.hidePopover()
+  typeMenu.value?.hidePopover()
   if (document.activeElement instanceof HTMLElement) focusBeforeSettings = document.activeElement
   settingsTab.value = tab
   showingSettings.value = true
@@ -295,7 +388,7 @@ function closeSettings() {
 }
 
 async function activateSearch() {
-  if (saving.value || showingSpace.value) return
+  if (saving.value || showingSpace.value || showingAdvanced.value) return
   if (showingSettings.value) {
     // 重新进入前台时保留设置组件，未应用的表单值仍可继续编辑。
     keepSettingsDraft.value = true
@@ -319,6 +412,7 @@ function requestSettings(request: SettingsRequest) {
 
 function openSpace() {
   if (!canViewSpace.value) return
+  typeMenu.value?.hidePopover()
   showingSpace.value = true
   if (spaceStarted.value) {
     sendAction({ type: 'spaceVisibility', enabled: true })
@@ -450,6 +544,23 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="workspace" @keydown="handleShortcut" @contextmenu.prevent>
+    <nav v-show="!showingSettings" class="top-menu" aria-label="应用菜单" :inert="showingAdvanced || !!saving">
+      <button type="button" popovertarget="search-menu" @click="positionMenu">搜索</button>
+      <div id="search-menu" ref="searchMenu" class="file-menu anchored-menu" popover role="group" aria-label="搜索命令">
+        <button type="button" autofocus @click="openAdvancedSearch">高级搜索…</button>
+        <div class="menu-separator" role="separator"></div>
+        <button type="button" aria-label="匹配完整路径" :aria-pressed="matchPath" @click="setMatchPath(true)">
+          匹配完整路径 <span v-if="matchPath" class="menu-check" aria-hidden="true">✓</span>
+        </button>
+        <button type="button" aria-label="仅匹配名称" :aria-pressed="!matchPath" @click="setMatchPath(false)">
+          仅匹配名称 <span v-if="!matchPath" class="menu-check" aria-hidden="true">✓</span>
+        </button>
+      </div>
+      <button type="button" popovertarget="tools-menu" @click="positionMenu">工具</button>
+      <div id="tools-menu" ref="toolsMenu" class="file-menu anchored-menu" popover role="group" aria-label="工具命令">
+        <button type="button" autofocus @click="openSettings()">设置…</button>
+      </div>
+    </nav>
     <div class="workspace-content" :class="{ 'settings-open': showingSettings }" :inert="showingSettings || !!saving">
       <header v-show="!showingSpace" class="search-toolbar">
         <div class="search-field">
@@ -459,14 +570,18 @@ onBeforeUnmount(() => {
             @keydown.down.prevent="resultsTable?.focusSelection()">
           <button v-if="text" type="button" class="clear-search" title="清空搜索" aria-label="清空搜索" @click="clearQuery">×</button>
         </div>
-        <select v-model="matchPath" class="scope-select" aria-label="匹配范围" title="匹配范围">
-          <option value="path">完整路径</option>
-          <option value="name">仅名称</option>
-        </select>
+        <button id="result-type-toggle" type="button" class="outlined-button type-toggle"
+          :class="{ 'type-selected': resultTypesLabel !== '全部' }" :aria-label="'结果类型 ' + resultTypesLabel"
+          popovertarget="result-type-menu" @click="positionMenu">
+          <span>{{ resultTypesLabel }}</span><i class="menu-caret" aria-hidden="true"></i>
+        </button>
+        <div id="result-type-menu" ref="typeMenu" class="file-menu anchored-menu type-menu" popover role="group" aria-label="结果类型">
+          <label><input v-model="includeDirectories" name="include-directories" type="checkbox" autofocus>文件夹</label>
+          <label><input v-model="includeFiles" name="include-files" type="checkbox">文件</label>
+        </div>
         <button type="button" class="outlined-button toolbar-button" aria-label="空间分析"
           :disabled="!canViewSpace" :title="indexFileSize ? undefined : spaceUnavailable"
           :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="openSpace">空间分析</button>
-        <button type="button" class="outlined-button toolbar-button" @click="openSettings()">设置</button>
       </header>
 
       <SearchResults v-show="!showingSpace" ref="resultsTable" :rows="fatal ? [] : result?.rows ?? []"
@@ -483,6 +598,7 @@ onBeforeUnmount(() => {
       <footer v-show="!showingSpace" class="status-bar">
         <div class="result-summary" aria-live="polite" aria-atomic="true">
           <span class="result-count">{{ resultLabel }}</span>
+          <span v-if="advancedCount" class="query-time">高级筛选 {{ advancedCount }} 项</span>
           <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
             {{ result.userMilliseconds.toFixed(2) }} ms
           </span>
@@ -503,7 +619,8 @@ onBeforeUnmount(() => {
         <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending || settingsPending"
           @save-preference="updateSavePreference" @action="sendAction({ type: $event })" />
       </footer>
-      <SpaceAnalysis v-if="spaceStarted" v-show="showingSpace" :visible="showingSpace" :result="space" :root="spaceRoot"
+      <SpaceAnalysis v-if="spaceStarted" v-show="showingSpace" class="space-page"
+        :visible="showingSpace" :result="space" :root="spaceRoot"
         :pending="spacePending && !fatal"
         :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
         :capacities="spaceCapacities" :volume-settings="settingsStatus" @refresh-capacities="refreshSpaceCapacities"
@@ -512,6 +629,11 @@ onBeforeUnmount(() => {
         @details="requestSpaceDetails"
         @action="(type, key) => sendAction({ type, key })" @exclude="excludeSpaceItem" @restore="restoreSpaceItems" />
     </div>
+    <AdvancedSearch v-if="showingAdvanced" :criteria="advanced" :extensions="extensions"
+      :extensions-pending="extensionsPending" :extensions-error="extensionsError"
+      :index-ready="!!indexStatus?.volumesReady"
+      :index-creation-time="indexCreationTime" :index-modified-time="indexModifiedTime" :index-file-size="indexFileSize"
+      @apply="applyAdvancedSearch" @close="closeAdvancedSearch" @retry="loadExtensions" />
     <Settings v-if="showingSettings || keepSettingsDraft" v-show="showingSettings" ref="settingsPanel"
       v-model:tab="settingsTab" :inert="!!saving" :status="settingsStatus" :pending="settingsPending || preferencePending"
       :connected="connected" :error="fatal || settingsError" @close="closeSettings" @request="requestSettings" />
@@ -533,10 +655,72 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.workspace { position: relative; }
+.workspace { position: relative; grid-template-rows: auto auto minmax(0, 1fr) auto; }
 .workspace-content { display: contents; }
 .workspace-content.settings-open { visibility: hidden; }
+.workspace .space-page { grid-row: 2 / -1; }
 .toolbar-button { height: 39px; white-space: nowrap; }
+.top-menu {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 13px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+}
+.top-menu > button {
+  min-height: 27px;
+  padding: 3px 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+.top-menu > button:hover,
+.top-menu:has(#search-menu:popover-open) > [popovertarget="search-menu"],
+.top-menu:has(#tools-menu:popover-open) > [popovertarget="tools-menu"] { background: var(--accent-quiet); }
+.anchored-menu {
+  inset: auto;
+  top: var(--menu-top);
+  left: var(--menu-left);
+  top: anchor(bottom, var(--menu-top));
+  left: anchor(left, var(--menu-left));
+  width: 174px;
+  margin: 4px 0 0;
+  color: inherit;
+}
+.anchored-menu:not(:popover-open) { display: none; }
+.menu-separator { margin: 3px 5px; border-top: 1px solid var(--border); }
+.menu-check { color: var(--accent); font-weight: 600; }
+.type-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 88px;
+  height: 39px;
+  border-radius: 7px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+.type-toggle.type-selected { border-color: #b4c7f3; background: var(--accent-quiet); color: var(--accent); }
+.menu-caret {
+  width: 6px;
+  height: 6px;
+  margin: -3px 1px 0 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.type-menu {
+  right: var(--menu-right);
+  right: anchor(right, var(--menu-right));
+  left: auto;
+  width: 126px;
+}
+.type-menu label { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+.type-menu label:hover, .type-menu label:focus-within { background: var(--accent-quiet); }
+.type-menu input { margin: 0; accent-color: var(--accent); }
 
 .save-overlay {
   position: fixed;

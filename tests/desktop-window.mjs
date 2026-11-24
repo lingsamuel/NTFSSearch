@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -24,14 +24,15 @@ const exitSaveSkipTest = mode === '--exit-save-skip'
 const spaceFlashTest = mode === '--space-flash'
 const spaceInteractionTest = mode === '--space-interaction'
 const spaceCapacitySettingsTest = mode === '--space-capacity-settings'
+const advancedSearchTest = mode === '--advanced-search'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
-  : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
+  : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : advancedSearchTest ? 'AdvancedSearchData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
 const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
 if (mode !== '--cached-fixture') {
   await mkdir(testData, { recursive: true })
-  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest && !exitSaveSkipTest, ...(trayTest ? { IndexCreationTime: true } : {}) }))
+  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest && !exitSaveSkipTest, ...(trayTest || advancedSearchTest ? { IndexCreationTime: true } : {}) }))
   await writeFile(snapshotPath, previousSnapshot)
 }
 const portProbe = createServer().listen(0, '127.0.0.1')
@@ -46,7 +47,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -208,7 +209,7 @@ async function verifySearchResults() {
   assert.deepEqual(await bold('path'), ['目录009\\hello world 000901.txt'])
   assert.equal(await evaluate("[...document.querySelectorAll('tbody td.entry-name, tbody td.entry-path')].every(cell => cell.textContent === cell.title)"), true, '加粗保留原始名称和路径')
 
-  await evaluate("const scope = document.querySelector('.scope-select'); scope.value = 'name'; scope.dispatchEvent(new Event('change'))")
+  await windowMenu('搜索', '仅匹配名称')
   await query('文件 REPORT', 936)
   await evaluate("document.querySelector('button[aria-label=下一页]').click()")
   await until(() => evaluate("document.querySelector('.page-number').textContent.trim() === '2 / 5'"), '带加粗的第二页')
@@ -471,13 +472,107 @@ const visible = selector => evaluate(`(() => {
   const element = document.querySelector(${JSON.stringify(selector)});
   return !!element?.getClientRects().length && getComputedStyle(element).visibility === 'visible';
 })()`)
-const click = label => evaluate(`(() => {
+const clickButton = label => evaluate(`(() => {
   const button = [...document.querySelectorAll('button')].find(button => button.getClientRects().length
     && getComputedStyle(button).visibility === 'visible'
     && (button.getAttribute('aria-label') ?? button.textContent.trim()) === ${JSON.stringify(label)});
   if (!button || button.disabled) throw new Error('缺少可操作的按钮：' + ${JSON.stringify(label)});
   button.click();
 })()`)
+
+async function windowMenu(menu, item) {
+  await clickButton(menu)
+  await clickButton(item)
+}
+const click = label => label === '设置' ? windowMenu('工具', '设置…') : clickButton(label)
+
+async function verifyAdvancedSearch() {
+  const count = total => until(() => evaluate(`(${resultCount})() === ${JSON.stringify(expected(total))}`), expected(total))
+  const check = name => evaluate(`document.querySelector('input[name=${name}]').click()`)
+  const open = async () => {
+    await windowMenu('搜索', '高级搜索…')
+    await until(() => visible('dialog.advanced-search[open]'), '高级搜索对话框')
+  }
+
+  const typeLabel = () => evaluate("document.querySelector('#result-type-toggle span').textContent")
+  assert.equal(await typeLabel(), '全部')
+  assert.equal(await visible('#result-type-menu'), false)
+  await evaluate("document.querySelector('#result-type-toggle').click()")
+  await until(() => visible('#result-type-menu'), '打开类型下拉菜单')
+  assert.ok(await evaluate(`(() => {
+    const button = document.querySelector('#result-type-toggle').getBoundingClientRect();
+    const menu = document.querySelector('#result-type-menu').getBoundingClientRect();
+    return menu.top >= button.bottom && menu.top < button.bottom + 10 && Math.abs(menu.right - button.right) < 2;
+  })()`), '类型下拉菜单紧贴按钮右侧')
+  await screenshot('type-filter.png')
+  await check('include-files')
+  await count(5)
+  assert.equal(await typeLabel(), '文件夹')
+  assert.ok(await visible('#result-type-menu'), '多选时下拉菜单保持打开')
+  await check('include-directories')
+  await count(0)
+  await check('include-files')
+  await count(995)
+  assert.equal(await typeLabel(), '文件')
+  await check('include-directories')
+  await count(1000)
+  assert.equal(await typeLabel(), '全部')
+  await check('include-directories')
+  await count(995)
+  await evaluate("document.querySelector('#result-type-toggle').click()")
+  assert.equal(await visible('#result-type-menu'), false)
+  await query('目录009', 100)
+  await windowMenu('搜索', '仅匹配名称')
+  await count(0)
+  await windowMenu('搜索', '匹配完整路径')
+  await count(100)
+  await click('清空搜索')
+  await count(995)
+
+  await clickButton('搜索')
+  await screenshot('search-menu.png')
+  await clickButton('搜索')
+  await open()
+  const found = await until(() => evaluate("document.querySelector('input[name=file-extension][value=\".json\"]') !== null"),
+    '已从后端加载动态后缀')
+  assert.ok(found)
+  const localDay = instant => new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short' }).format(new Date(instant))
+  const entry = {
+    'created-from': localDay('2025-12-31T00:03:00Z'),
+    'created-through': localDay('2025-12-31T00:03:00Z'),
+    'modified-from': localDay('2026-01-01T00:03:00Z'),
+    'modified-through': localDay('2026-01-01T00:03:00Z'),
+    'min-size': '3072', 'max-size': '3072',
+  }
+  await evaluate(`(() => {
+    for (const [name, value] of Object.entries(${JSON.stringify(entry)})) {
+      const input = document.querySelector('input[name=' + name + ']');
+      input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    document.querySelector('input[name=file-extension][value=".json"]').click();
+  })()`)
+  await click('应用')
+  await count(1)
+  assert.match(await evaluate("document.querySelector('tbody tr').textContent"), /000003\.json/)
+  assert.match(await evaluate("document.querySelector('.result-summary').textContent"), /高级筛选 4 项/)
+  await click('空间分析')
+  await until(() => visible('button[aria-label="返回搜索"]'), '空间分析主界面入口')
+  await click('返回搜索')
+  await count(1)
+
+  await open()
+  await click('清除条件')
+  await click('取消')
+  await count(1)
+  await open()
+  await click('清除条件')
+  await click('应用')
+  await count(995)
+  await click('设置')
+  await until(() => visible('.settings-workspace'), '顶部菜单进入设置')
+  await click('返回')
+}
 
 async function verifySearchServiceSettings() {
   const enabled = '.settings-workspace input[name=search-service-enabled]'
@@ -860,7 +955,7 @@ async function verifySpaceCapacitySettings() {
   const field = name => `document.querySelector('[name=${name}]')`
   const ready = () => evaluate("document.querySelector('.settings-footer button')?.disabled === false")
   const openSettings = async () => {
-    await click('设置')
+    await clickButton('设置')
     await until(ready, '空间分析设置已加载')
     assert.equal(await selectedTab(), '空间分析')
   }
@@ -991,6 +1086,8 @@ try {
       }
     }
     await writeFile(join(output, 'benchmark.json'), JSON.stringify({ rows: total, processes: JSON.parse(memory.stdout), samples }, null, 2))
+  } else if (advancedSearchTest) {
+    await verifyAdvancedSearch()
   } else if (searchResultsTest) {
     await verifySearchResults()
   } else if (desktopInteractionTest) {
@@ -1371,6 +1468,7 @@ try {
     assert.deepEqual(await readFile(snapshotPath), previousSnapshot)
   }
   if (trayTest) console.log('Windows 关窗隐藏、HTTP/CLI 查询、重复启动复用及退出快照通过。')
+  else if (advancedSearchTest) console.log('Windows 顶部菜单、快捷类型筛选、高级搜索和空间分析切换通过。')
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
   else if (desktopInteractionTest) console.log('Windows 前台聚焦、结果多选与框选通过。')
   else if (nativeFileDragTest) console.log('Windows 向浏览器拖出跨目录多选文件通过。')

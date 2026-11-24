@@ -51,7 +51,9 @@ public sealed partial class SearchIndex
         var terms = SearchQuery.Parse(text);
         if (terms.Length > 64) throw new ArgumentException("查询最多 64 个条件。", nameof(text));
         if (filter?.IsEmpty == true) filter = null;
+        if (filter is { IncludeFiles: false, IncludeDirectories: false }) return new(this, null, 0);
         if (terms.Length == 0 && filter is null) return new(this, null, VisibleCount);
+        var extensions = filter?.CreateExtensionSet();
         var states = new byte[terms.Length][];
         var suffixes = new string[terms.Length];
         for (int t = 0; t < terms.Length; t++)
@@ -87,6 +89,7 @@ public sealed partial class SearchIndex
             void Scan(int from, int to)
             {
                 Span<char> scratch = stackalloc char[255];
+                var extensionLookup = extensions?.GetAlternateLookup<ReadOnlySpan<char>>();
                 long local = 0;
                 for (int w = from; w < to; w++)
                 {
@@ -112,7 +115,11 @@ public sealed partial class SearchIndex
                             if (t == 0 && memo is not null) memo[record.NameId] = found ? (byte)2 : (byte)1;
                             if (!found) { matches = false; break; }
                         }
-                        if (matches) mask |= 1UL << (id - first);
+                        if (!matches) continue;
+                        // 只对其余条件已经命中的文件读取后缀，直接查询字符片段以避免分配字符串。
+                        if (extensionLookup is { } lookup && !record.IsDirectory
+                            && !lookup.Contains(Path.GetExtension(Names.Get(record.NameId, scratch)))) continue;
+                        mask |= 1UL << (id - first);
                     }
                     bits[w] = mask;
                     local += BitOperations.PopCount(mask);

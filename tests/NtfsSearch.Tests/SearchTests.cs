@@ -151,6 +151,50 @@ public class SearchTests
     }
 
     [Fact]
+    public void FileTypesAndExtensionsComposeWithMetadataBeforePaging()
+    {
+        var first = new IndexBuilder();
+        first.Add(@"C:\", "report.txt", 20);
+        first.Add(@"C:\", "report.txt.bak", 20);
+        first.Add(@"C:\", "report-folder.txt", isDirectory: true);
+        var second = new IndexBuilder();
+        second.Add(@"D:\", "report.TXT", 40);
+        second.Add(@"D:\", "report-small.txt", 10);
+        second.Add(@"D:\", "report", 30);
+        var catalog = new SearchCatalog();
+        catalog.Publish("first", first.Build());
+        catalog.Publish("second", second.Build());
+
+        var filter = new SearchFilter(MinSizeBytes: 20, IncludeDirectories: false, FileExtensions: [".TXT", ""]);
+        var page = catalog.Search("report", SortField.Size, offset: 1, limit: 1, filter: filter);
+        Assert.Equal(3, page.TotalCount);
+        Assert.Equal(@"D:\report", Assert.Single(page.Rows).FullPath);
+
+        var folders = catalog.Search("", filter: new(IncludeFiles: false, FileExtensions: [".bak"]));
+        Assert.Equal("report-folder.txt", Assert.Single(folders.Rows).Name);
+        Assert.Equal(0, catalog.Search("", filter: new(IncludeFiles: false, IncludeDirectories: false)).TotalCount);
+    }
+
+    [Fact]
+    public void ExtensionChoicesAreCaseInsensitiveAndRefreshWithThePublishedIndex()
+    {
+        var first = new IndexBuilder();
+        first.Add(@"C:\", "report.TXT");
+        first.Add(@"C:\", "report.", isDirectory: false);
+        first.Add(@"C:\", "folder.pdf", isDirectory: true);
+        var second = new IndexBuilder();
+        second.Add(@"D:\", "copy.txt");
+        second.Add(@"D:\", "a.tar.gz");
+        var catalog = new SearchCatalog();
+        catalog.Publish("first", first.Build());
+        catalog.Publish("second", second.Build());
+
+        Assert.Equal(new[] { "", ".gz", ".txt" }, catalog.GetFileExtensions(default));
+        catalog.RemoveExcept(["first"]);
+        Assert.Equal(new[] { "", ".txt" }, catalog.GetFileExtensions(default));
+    }
+
+    [Fact]
     public void ZeroByteSizeMatchesAndMissingSizeDoesNot()
     {
         var builder = new IndexBuilder();
