@@ -194,6 +194,49 @@ public class SearchTests
         Assert.Equal(new[] { "", ".txt" }, catalog.GetFileExtensions(default));
     }
 
+    [Theory]
+    [InlineData("DotNetty.Common, Version=0.7.0.0, Culture=neutral, PublicKeyToken=bc13ca065fa06c29", "")]
+    [InlineData("Microsoft.Identity.Client.Desktop, Version=4.42.1.0, Culture=neutral, PublicKeyToken=0a613f4dd989e8ae", "")]
+    [InlineData("semver@v3.1.0+incompatible", ".0+incompatible")]
+    [InlineData("report.ab cd", "")]
+    [InlineData("report.ab cd.json", ".json")]
+    [InlineData("report copy.007", ".007")]
+    [InlineData("report.foo\u00a0bar", ".foo\u00a0bar")]
+    [InlineData(".gitignore", ".gitignore")]
+    public void ExtensionChoicesAndMatchingFollowWindowsShell(string name, string extension)
+    {
+        var builder = new IndexBuilder();
+        builder.Add(@"C:\", name);
+        var catalog = new SearchCatalog();
+        catalog.Publish("disk", builder.Build());
+
+        Assert.Equal(extension, Assert.Single(catalog.GetFileExtensions(default)));
+        var file = Assert.Single(catalog.Search("", filter: new(FileExtensions: [extension])).Rows);
+        Assert.Equal(name, file.Name);
+    }
+
+    [Fact]
+    public void GoChecksumLookupVersionsAreExtensionless()
+    {
+        const string defaultLookup = @"C:\go-codes\pkg\mod\cache\download\sumdb\sum.golang.org\lookup\github.com\blang\";
+        const string customLookup = @"D:\modules\cache\download\sumdb\mirror.example\go\lookup\example.org\";
+        const string ordinaryCache = @"D:\modules\cache\download\sumdb\mirror.example\tile\";
+        var builder = new IndexBuilder();
+        builder.Add(defaultLookup, "semver@v3.1.0+incompatible");
+        builder.Add(customLookup, "sample@v1.2.3-!r!c.1");
+        builder.Add(customLookup, "sample@v0.0.0-20210102030405-acde0123abcd");
+        builder.Add(customLookup, "sample@v1.2.3.zip");
+        builder.Add(ordinaryCache, "other@v1.0.0+incompatible");
+        var catalog = new SearchCatalog();
+        catalog.Publish("disk", builder.Build());
+
+        Assert.Equal(new[] { "", ".0+incompatible", ".zip" }, catalog.GetFileExtensions(default));
+        var result = catalog.Search("", filter: new(FileExtensions: [""]));
+        Assert.Equal(3, result.TotalCount);
+        Assert.Equal(new[] { "sample@v0.0.0-20210102030405-acde0123abcd", "sample@v1.2.3-!r!c.1",
+            "semver@v3.1.0+incompatible" }, result.Rows.Select(row => row.Name));
+    }
+
     [Fact]
     public void ZeroByteSizeMatchesAndMissingSizeDoesNot()
     {

@@ -46,7 +46,7 @@ public sealed class SearchCatalog
                 {
                     if ((id & 4095) == 0) token.ThrowIfCancellationRequested();
                     if (!index.IsVisible(id) || index.Records[id].IsDirectory) continue;
-                    lookup.Add(Path.GetExtension(index.Name(id, scratch)));
+                    lookup.Add(index.FileExtension(id, scratch));
                 }
 
         token.ThrowIfCancellationRequested();

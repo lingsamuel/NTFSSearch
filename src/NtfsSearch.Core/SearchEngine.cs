@@ -120,7 +120,7 @@ public sealed partial class SearchIndex
                         if (!matches) continue;
                         // 只对其余条件已经命中的文件读取后缀，直接查询字符片段以避免分配字符串。
                         if (extensionLookup is { } lookup && !record.IsDirectory
-                            && !lookup.Contains(Path.GetExtension(Names.Get(record.NameId, scratch)))) continue;
+                            && !lookup.Contains(FileExtension(id, scratch))) continue;
                         mask |= 1UL << (id - first);
                     }
                     bits[w] = mask;
