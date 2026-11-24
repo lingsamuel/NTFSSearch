@@ -91,6 +91,7 @@ if ($PackageAll) {
     New-Item -ItemType Directory -Path $archives -Force | Out-Null
     $packages = @(
         @{ Name = 'framework-dependent'; IncludeRuntime = $false; IncludeHttp = $true }
+        @{ Name = 'framework-dependent-no-http'; IncludeRuntime = $false; IncludeHttp = $false }
         @{ Name = 'self-contained'; IncludeRuntime = $true; IncludeHttp = $true }
         @{ Name = 'self-contained-no-http'; IncludeRuntime = $true; IncludeHttp = $false }
     )
@@ -109,7 +110,7 @@ if ($PackageAll) {
             if (Test-Path -LiteralPath $directory) { Remove-Item -LiteralPath $directory -Recurse -Force }
         }
     }
-    Write-Output "三种 Windows 便携 ZIP 已构建：$OutputDirectory"
+    Write-Output "已构建 $($names.Count) 个 Windows 便携 ZIP：$OutputDirectory"
     return
 }
 

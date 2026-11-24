@@ -1,6 +1,19 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.23.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
+Windows NTFS 文件搜索工具，版本 0.25.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
+
+## Windows x64 发布包
+
+四种便携 ZIP 均支持桌面实时搜索、空间分析和 CLI 静态诊断。桌面界面使用系统的 WebView2 Runtime。[GitHub Releases](https://github.com/lingsamuel/NTFSSearch/releases) · [WebView2 Runtime 下载](https://developer.microsoft.com/en-us/microsoft-edge/webview2/#download)
+
+| ZIP 文件名后缀 | HTTP API 和实时 CLI | 需安装的 .NET 运行时（Windows x64） | 随包提供的 .NET 运行时 |
+| --- | --- | --- | --- |
+| `framework-dependent` | 支持 | .NET Runtime 10 和 ASP.NET Core Runtime 10 | 无 |
+| `framework-dependent-no-http` | 无 | .NET Runtime 10 | 无 |
+| `self-contained` | 支持 | 无 | .NET Runtime 10 和 ASP.NET Core Runtime 10 |
+| `self-contained-no-http` | 无 | 无 | .NET Runtime 10 |
+
+需要安装 .NET 运行时时，请按表中的运行时名称选择 Windows x64 安装程序。[.NET 10 下载](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
 
 ## 使用
 
@@ -22,7 +35,7 @@ Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索�
 
 支持名称、路径、大小和修改时间排序。桌面大小列包含目录内已索引文件的逻辑大小合计，按卷后台汇总后自动显示，并与文件按大小一起排序。文件大小和时间从 NTFS 元数据读取，实时变化会更新结果。
 
-本机 HTTP 接口与 CLI 使用同一份实时索引，支持创建时间、修改时间和文件大小的组合筛选。默认地址为 `http://127.0.0.1:18791`。可从主窗口或托盘打开「设置」，启停服务、修改端口或重启服务。[接口及 CLI 用法](manual/README.md#通过-http-和-cli-查询)
+带 HTTP 服务的版本中，本机 HTTP 接口与 CLI 使用同一份实时索引，支持创建时间、修改时间和文件大小的组合筛选。默认地址为 `http://127.0.0.1:18791`。可从主窗口或托盘打开「设置」，启停服务、修改端口或重启服务。[接口及 CLI 用法](manual/README.md#通过-http-和-cli-查询)
 
 「设置 → 索引」可分别控制预计算排序、创建时间、修改时间和文件大小。预计算排序保存后立即生效，三个元数据设置在下次启动生效。只有创建时间默认关闭。关闭文件大小会停用大小列、大小排序和筛选、文件夹大小统计及空间分析。[索引设置说明](manual/README.md#调整索引内存占用)
 
@@ -65,9 +78,9 @@ dotnet run --project src/NtfsSearch.Cli -c Release -- bench 1000000 report.json 
 
 在 Windows 安装 Node.js、Rust MSVC、Microsoft C++ Build Tools 和 .NET 10 SDK，使用 PowerShell 执行 `scripts/build-windows.ps1` 构建便携版。交付目录为项目工作区的 `artifacts/windows`。从 Windows 构建镜像或临时 Git worktree 构建时，也将成品放到该交付目录。 [构建与交付约定](AGENTS.md)
 
-使用 `-SelfContained` 随包发布运行时，使用 `-WithoutHttp` 去掉 HTTP 服务与 ASP.NET Core 依赖。`-PackageAll` 一次生成普通版、自包含完整版和自包含无查询服务版，ZIP 默认放入 `artifacts/windows/packages`。各包均省略调试符号。每次分支推送生成 Nightly，在仓库的 Actions 产物有效期内最多保留最近四次。推送 tag 时，GitHub Actions 将三个包作为该 tag 的 Release 附件发布。
+使用 `-SelfContained` 随包发布运行时，使用 `-WithoutHttp` 去掉 HTTP 服务与 ASP.NET Core 依赖。`-PackageAll` 一次生成上表中的四种 ZIP，默认放入 `artifacts/windows/packages`。各包均省略调试符号。每次分支推送生成 Nightly，在仓库的 Actions 产物有效期内最多保留最近四次。推送 tag 时，GitHub Actions 将四种 ZIP 作为该 tag 的 Release 附件发布。
 
-Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
+核心测试也可在 Linux 运行。
 
 诊断参数可传给便携版顶层的 `NtfsSearch.App.exe` 或 `NtfsSearch.Backend.exe`。`--smoke-test report.txt` 执行后端自动流程自检；`--probe-volumes report.json` 每卷少量 MFT 采样并核对元数据与 USN 状态；`--automatic-test report.json` 运行正常自动采集链路，首卷真实结果可查询后停止；`--parallel-test report.json` 使用隔离缓存验证实际多盘重叠读取，首卷可查且观察到至少两个采集进程后停止；`--verify-live report.json` 在专用测试目录验证实际硬链接、目录移动、检查点与停机回放；`--full-audit report.json` 使用报告旁的隔离数据目录等待全部卷进入增量模式，并记录本次启动的扫描卷，供重启免重扫验收。
 
@@ -75,6 +88,6 @@ Windows 使用 WebView2 Runtime 渲染，核心测试也可在 Linux 运行。
 
 `--desktop-interaction` 验证窗口激活、设置草稿、多选、框选和文件拖放的原生调用，可在独立的非输入桌面运行。`--native-file-drag` 使用 Edge 测试跨目录文件上传，并在运行过程中移动真实鼠标，请在独立 Windows 虚拟机或专用测试会话运行。
 
-便携版顶层的 `NtfsSearch.Cli.exe` 可查询实时索引。EFU 导入、静态快照查询和显式扫描也可用于开发诊断。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
+带 HTTP 服务的便携版可用顶层的 `NtfsSearch.Cli.exe` 查询实时索引。所有版本均可用 EFU 导入、静态快照查询和显式扫描进行开发诊断。0.1.0 容量数据和当前验证记录见 `docs/benchmarks`。
 
 参考：[微软 MFT 枚举](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_enum_usn_data)、[按文件ID打开](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid)、[USN V2格式](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2)。此前阅读 everyfind 作为参考，本项目不依赖该程序运行。NTFS 数据流读取复用 DiscUtils，依赖与许可见 `docs/native-dependencies.md`。

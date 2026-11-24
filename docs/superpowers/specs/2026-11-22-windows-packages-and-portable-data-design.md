@@ -4,23 +4,24 @@
 
 ## 构建与下载
 
-使用现有 Windows 构建入口生成三种 Windows x64 便携 ZIP。
+使用现有 Windows 构建入口生成四种 Windows x64 便携 ZIP。
 
 | 包 | HTTP 搜索服务 | .NET 运行时 |
 | --- | --- | --- |
-| 普通版 | 有 | 使用系统安装的 .NET Runtime 10 和 ASP.NET Core Runtime 10，均为 x64 |
-| 自包含完整版 | 有 | 随包提供 .NET 和 ASP.NET Core |
-| 自包含无查询服务版 | 无 | 随包提供基础 .NET |
+| `framework-dependent` | 有 | 使用系统安装的 .NET Runtime 10 和 ASP.NET Core Runtime 10，均为 x64 |
+| `framework-dependent-no-http` | 无 | 使用系统安装的 x64 .NET Runtime 10 |
+| `self-contained` | 有 | 随包提供 .NET Runtime 10 和 ASP.NET Core Runtime 10 |
+| `self-contained-no-http` | 无 | 随包提供 .NET Runtime 10 |
 
 构建开关默认包含 HTTP 服务。关闭开关时，从后端编译和发布中移除 HTTP 服务实现与 ASP.NET Core 框架引用。桌面提供的索引、搜索、空间分析和托盘继续工作。设置页隐藏搜索服务设置，CLI 保留静态查询和诊断。调用 CLI 的实时 `search` 或 `status` 时提示使用带查询服务的版本。切换版本时保留现有 HTTP 设置，以便恢复使用完整版。
 
-三种包均使用系统 WebView2 Runtime，包含启动脚本、桌面程序、后端、CLI、许可和使用手册。发布构建关闭调试符号生成，归档前检查调试文件。归档只取本次生成的便携文件。
+四种包均使用系统 WebView2 Runtime，包含启动脚本、桌面程序、后端、CLI、许可和使用手册。发布构建关闭调试符号生成，归档前检查调试文件。归档只取本次生成的便携文件。
 
 ## GitHub Actions
 
-每次分支推送构建三种包，供用户从对应的 Actions 运行下载。在仓库的 Actions 产物有效期内，保留最近四次成功产物，每次包含同一提交的三种包。
+每次分支推送构建四种包，供用户从对应的 Actions 运行下载。在仓库的 Actions 产物有效期内，保留最近四次成功产物，每次包含同一提交的四种包。
 
-推送 tag 时，从 tag 指向的提交重新构建，并将三种 ZIP 发布为该 tag 对应的 GitHub Release 附件。Nightly 和 Release 调用同一个 Windows 构建脚本。三种包使用明确且可区分的文件名。
+推送 tag 时，从 tag 指向的提交重新构建，并将四种 ZIP 发布为该 tag 对应的 GitHub Release 附件。Nightly 和 Release 调用同一个 Windows 构建脚本。
 
 ## 便携数据
 
@@ -32,7 +33,7 @@
 
 ## 验收
 
-- 在 Windows 构建并检查三种包，核对运行时、版本、启动文件和调试文件情况。
+- 在 Windows 构建并检查四种包，核对运行时、版本、启动文件和调试文件情况。
 - 验证完整版的 HTTP 与 CLI 查询。验证无查询服务版的桌面搜索、设置保存、端口不监听及 CLI 提示。
 - 验证新目录的索引保存与恢复、旧数据布局的升级行为，以及程序目录中普通文件的初始扫描和增量更新。
 - 检查 Actions 触发条件、Nightly 保留范围和 Release 附件。开发时只运行本次直接相关的测试。

@@ -26,7 +26,7 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Prepare Rust MSVC target
         run: rustup target add x86_64-pc-windows-msvc
-      - name: Build three portable ZIPs
+      - name: Build portable ZIPs
         run: ./scripts/build-windows.ps1 -PackageAll -OutputDirectory artifacts/packages
       - name: Upload packages
         uses: actions/upload-artifact@v7
@@ -76,7 +76,7 @@ jobs:
         with:
           name: ntfs-search-release-win-x64
           path: packages
-      - name: Publish three ZIPs
+      - name: Publish portable ZIPs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

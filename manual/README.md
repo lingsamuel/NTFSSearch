@@ -7,7 +7,8 @@
 | 包名后缀 | 查询服务 | .NET 运行时 |
 | --- | --- | --- |
 | `framework-dependent` | HTTP 和实时 CLI | 系统需安装 x64 的 .NET Runtime 10 和 ASP.NET Core Runtime 10 |
-| `self-contained` | HTTP 和实时 CLI | 随包提供 |
+| `framework-dependent-no-http` | 桌面搜索与 CLI 静态诊断 | 系统需安装 x64 的 .NET Runtime 10 |
+| `self-contained` | HTTP 和实时 CLI | 随包提供 .NET Runtime 10 和 ASP.NET Core Runtime 10 |
 | `self-contained-no-http` | 桌面搜索与 CLI 静态诊断 | 随包提供基础 .NET |
 
 程序会自动发现本机已就绪的 NTFS 磁盘。Windows 可能显示 UAC 授权提示，确认后才能采集磁盘和持续监控。一个卷建立或加载索引后即可搜索该卷。
@@ -52,7 +53,7 @@
 
 ## 通过 HTTP 和 CLI 查询
 
-本节适用于普通版和自包含完整版。
+本节适用于 `framework-dependent` 和 `self-contained`。
 
 桌面程序默认在 `http://127.0.0.1:18791` 提供本机 HTTP/JSON 接口。关窗进入托盘期间，接口继续使用实时索引。
 
