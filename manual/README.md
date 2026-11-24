@@ -2,7 +2,7 @@
 
 ## 启动
 
-把 Windows x64 便携包解压到 Windows 本地的可写目录，双击「启动搜索.cmd」，或打开顶层的 `NtfsSearch.App.exe`。各版本均使用系统的 WebView2 Runtime。
+把 Windows x64 便携包解压到 Windows 本地的可写目录，双击顶层的 `NtfsSearch.App.exe`。各版本均使用系统的 WebView2 Runtime。
 
 | 包名后缀 | 查询服务 | .NET 运行时 |
 | --- | --- | --- |

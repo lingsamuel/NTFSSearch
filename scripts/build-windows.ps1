@@ -36,7 +36,6 @@ function Publish-Portable([bool]$IncludeRuntime, [bool]$IncludeHttp) {
     }
     Copy-Item (Join-Path $rustBuild "$target/release/ntfs-search.exe") (Join-Path $staging 'NtfsSearch.App.exe') -Force
     Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.txt') $staging -Force
-    Copy-Item (Join-Path $PSScriptRoot '启动搜索.cmd') $staging -Force
     Copy-Item (Join-Path $root 'manual') $staging -Recurse -Force
     $debugFiles = @(Get-ChildItem -LiteralPath $staging -Recurse -Force | Where-Object {
         $_.Extension -in @('.pdb', '.dbg', '.dwarf', '.dSYM', '.map')
@@ -132,6 +131,8 @@ else {
         $legacyPath = Join-Path $OutputDirectory $legacyDirectory
         if (!(Test-Path -LiteralPath (Join-Path $legacyPath $legacyPrograms[$legacyDirectory]) -PathType Leaf)) { continue }
         $legacyPaths += $legacyPath
+        # 旧 app 布局的启动脚本在顶层，随旧程序一同参与替换和回滚。
+        if ($legacyDirectory -eq 'app') { $replaced += '启动搜索.cmd' }
         $replaced += @(Get-ChildItem -LiteralPath $legacyPath -Force -Name | Where-Object { $_ -ne 'Data' } |
             ForEach-Object { Join-Path $legacyDirectory $_ })
     }
