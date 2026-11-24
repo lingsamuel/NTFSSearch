@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-delete | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search | --localization]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-delete | --search-file-commands | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search | --localization]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -18,6 +18,7 @@ const searchResultsTest = mode === '--search-results'
 const desktopInteractionTest = mode === '--desktop-interaction'
 const nativeFileDragTest = mode === '--native-file-drag'
 const searchDeleteTest = mode === '--search-delete'
+const fileCommandsTest = mode === '--search-file-commands'
 const searchServiceSettingsTest = mode === '--search-service-settings'
 const withoutHttpTest = mode === '--without-http'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
@@ -50,7 +51,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchDeleteTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest || localizationTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchDeleteTest || fileCommandsTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest || localizationTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -366,6 +367,55 @@ async function showFileFixtures(files) {
     const ids = Object.getOwnPropertyNames(window.__internal_unstable_listeners_object_id__[event]).map(Number);
     window.__internal_unstable_listeners_function_id__({ event, payload: { ...result, rows, total: rows.length } }, ids);
   })()`)
+}
+
+async function verifySearchFileCommands() {
+  const folder = await mkdtemp(join(output, 'file-commands-'))
+  const filename = '重命名 中文.txt'
+  const file = join(folder, filename)
+  const result = { name: filename, path: file }
+  const renamed = join(folder, '改名 新文件.txt')
+  await writeFile(file, '结果重命名夹具')
+  await showFileFixtures([result, { name: '文件夹', path: folder, isDirectory: true }])
+  const row = "document.querySelector('tbody tr')"
+  const editor = "document.querySelector('.entry-name input')"
+  const select = () => evaluate(`${row}.click()`)
+  const key = (value, modifiers = 0) => evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {
+    key: ${JSON.stringify(value)}, ctrlKey: ${!!(modifiers & 2)}, shiftKey: ${!!(modifiers & 8)}, bubbles: true, cancelable: true
+  }))`)
+  const menu = () => evaluate(`${row}.dispatchEvent(new MouseEvent('contextmenu',
+    { bubbles: true, cancelable: true, clientX: 120, clientY: 100 }))`)
+  const actions = () => evaluate(`[...document.querySelectorAll('.file-menu[role=menu] button')]
+    .map(button => [button.firstChild.textContent.trim(), button.querySelector('kbd')?.textContent ?? ''])`)
+
+  await menu()
+  assert.deepEqual(await actions(), [
+    ['打开', 'Enter'], ['打开方式…', ''], ['打开所在目录', ''], ['复制完整路径', 'Ctrl+Shift+C'],
+    ['剪切', 'Ctrl+X'], ['复制', 'Ctrl+C'], ['重命名', 'F2'], ['删除', 'Delete'],
+  ])
+  await key('Escape')
+  await evaluate(`${row}.nextElementSibling.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))`)
+  await key('F2')
+  assert.equal(await evaluate(`${editor} === null`), true, '多选时保留选区')
+  await menu()
+  assert.deepEqual((await actions()).map(([name]) => name), ['打开', '打开所在目录', '复制完整路径', '剪切', '复制', '删除'])
+  await key('Escape')
+
+  await select()
+  await key('F2')
+  assert.equal(await evaluate(`${editor}?.value`), filename, 'F2 在结果名称单元格打开编辑')
+  assert.equal(await evaluate(`${editor}.value.slice(${editor}.selectionStart, ${editor}.selectionEnd)`), '重命名 中文')
+  await key('Escape')
+  assert.equal(await evaluate(`${editor} === null`), true, 'Esc 取消改名')
+  assert.equal(await readFile(file, 'utf8'), '结果重命名夹具')
+  await menu()
+  await evaluate(`[...document.querySelectorAll('.file-menu[role=menu] button')]
+    .find(button => button.firstChild.textContent.trim() === '重命名').click()`)
+  await evaluate(`${editor}.value = '改名 新文件.txt'; ${editor}.dispatchEvent(new Event('input', { bubbles: true }))`)
+  await key('Enter')
+  await until(() => access(renamed).then(() => true, () => false), '原生重命名落盘')
+  assert.equal(await readFile(renamed, 'utf8'), '结果重命名夹具')
+  await assert.rejects(access(file), { code: 'ENOENT' })
 }
 
 async function verifySearchDelete() {
@@ -960,8 +1010,11 @@ async function verifySpaceInteraction() {
     clientX: 150, clientY: 150, bubbles: true, cancelable: true
   }))`)
   await openMenu("document.querySelector('tbody tr')")
-  const searchActions = await labels(menu)
-  assert.deepEqual(searchActions, ['打开', '打开所在目录', '复制完整路径', '删除'])
+  const commonActions = ['打开', '打开所在目录', '复制完整路径']
+  const firstIsFolder = await evaluate("Boolean(document.querySelector('tbody tr')?.querySelector('.entry-icon.folder'))")
+  assert.deepEqual(await labels(menu), [
+    commonActions[0], ...(firstIsFolder ? [] : ['打开方式…']), ...commonActions.slice(1), '剪切', '复制', '重命名', '删除',
+  ])
   await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
 
   await click('空间分析')
@@ -989,7 +1042,7 @@ async function verifySpaceInteraction() {
   await go('C:\\演示\\目录009')
   await openMenu("document.querySelector('.space-tile:not(.others)')")
   await until(() => visible(tileMenu), '打开文件菜单')
-  assert.deepEqual(await labels(tileMenu), [...searchActions.slice(0, -1), '打开方式…', '临时排除'])
+  assert.deepEqual(await labels(tileMenu), [...commonActions, '打开方式…', '临时排除'])
   await click('临时排除')
   const exclusions = '[popovertarget=space-exclusions]'
   await until(() => visible(exclusions), '排除一个文件')
@@ -997,7 +1050,7 @@ async function verifySpaceInteraction() {
   await go('C:\\演示\\目录001')
   await openMenu(folder)
   await until(() => visible(tileMenu), '打开目录菜单')
-  assert.deepEqual(await labels(tileMenu), [...searchActions.slice(0, -1), '临时排除'])
+  assert.deepEqual(await labels(tileMenu), [...commonActions, '临时排除'])
   const expanded = () => evaluate(`${folder}?.getAttribute('aria-expanded') === 'true'`)
   await evaluate(`${folder}.click(); const level = document.querySelector('.space-level');
     level.value = '3'; level.dispatchEvent(new Event('change'))`)
@@ -1373,6 +1426,8 @@ try {
     await verifyDesktopInteraction()
   } else if (nativeFileDragTest) {
     await verifyNativeFileDrag()
+  } else if (fileCommandsTest) {
+    await verifySearchFileCommands()
   } else if (searchDeleteTest) {
     await verifySearchDelete()
   } else if (searchServiceSettingsTest) {
@@ -1630,7 +1685,7 @@ try {
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true }))")
     assert.equal(await evaluate("document.activeElement.getAttribute('aria-label')"), '搜索文件和文件夹')
     await evaluate("document.querySelector('tbody tr').dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 115, bubbles: true, cancelable: true }))")
-    await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 4"), '右键菜单')
+    await until(() => visible('.file-menu[role=menu]'), '右键菜单')
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
     assert.equal(await evaluate("document.querySelector('[role=menu]') === null"), true)
     await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))")
@@ -1638,7 +1693,7 @@ try {
     await evaluate("document.querySelector('button[aria-label=关闭提示]').click()")
     if (mode === '--desktop-test') {
       await evaluate("document.querySelector('tbody tr').dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 115, bubbles: true, cancelable: true }))")
-      await until(() => evaluate("document.querySelectorAll('[role=menuitem]').length === 4"), '重新打开结果菜单')
+      await until(() => visible('.file-menu[role=menu]'), '重新打开结果菜单')
       await evaluate("[...document.querySelectorAll('[role=menuitem]')].find(button => button.textContent.trim() === '打开所在目录').click()")
       await until(() => evaluate("document.querySelector('.operation-feedback.error')?.textContent.length > 1"), '定位不存在的文件反馈')
       await evaluate("document.querySelector('button[aria-label=关闭提示]').click()")
@@ -1756,6 +1811,7 @@ try {
   else if (searchResultsTest) console.log('Windows 搜索匹配加粗、列宽、横向和纵向滚动通过。')
   else if (desktopInteractionTest) console.log('Windows 前台聚焦、结果多选与框选通过。')
   else if (nativeFileDragTest) console.log('Windows 向浏览器拖出跨目录多选文件通过。')
+  else if (fileCommandsTest) console.log('Windows 搜索结果重命名、文件操作入口和快捷键通过。')
   else if (searchDeleteTest) console.log('Windows 搜索删除、回收站及永久删除确认和取消通过。')
   else if (searchServiceSettingsTest) console.log('Windows 搜索服务设置、监听控制及返回原视图通过。')
   else if (indexMemorySettingsTest) console.log('Windows 预计算排序即时切换、元数据列重启生效和文件夹大小偏好通过。')

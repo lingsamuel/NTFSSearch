@@ -12,12 +12,14 @@ const props = defineProps<{
   emptyMessage: string
   indexFileSize: boolean
   indexModifiedTime: boolean
+  renameFile: (key: string, name: string) => Promise<boolean>
 }>()
 const emit = defineEmits<{
   sort: [field: SortField]
   action: [type: FileAction, row: SearchRow]
   drag: [keys: string[]]
   delete: [keys: string[], permanent: boolean]
+  clipboard: [keys: string[], cut: boolean]
 }>()
 
 const columns = [
@@ -37,6 +39,10 @@ const columnDrag = shallowRef<{ index: number; pointer: number; startX: number; 
 const selected = shallowRef(new Set<string>())
 const activeKey = ref<string | null>(null)
 const activeIndex = computed(() => props.rows.findIndex(row => row.key === activeKey.value))
+const singleSelection = computed(() => selected.value.size === 1
+  ? props.rows.find(row => selected.value.has(row.key))
+  : undefined)
+const editingName = ref<{ row: SearchRow; name: string; submitting: boolean }>()
 const selectionBox = shallowRef<{ left: number; top: number; width: number; height: number }>()
 let selectionAnchor: string | null = null
 let resultDrag: {
@@ -319,6 +325,58 @@ function runDelete(permanent: boolean) {
   if (!props.pending && keys.length) emit('delete', keys, permanent)
 }
 
+function runClipboard(cut: boolean) {
+  const keys = selectedKeys()
+  finishMenuAction()
+  if (!props.pending && keys.length) emit('clipboard', keys, cut)
+}
+
+function renameEditor() {
+  return grid.value?.querySelector<HTMLInputElement>('.entry-rename-input')
+}
+
+async function startRename() {
+  const row = singleSelection.value
+  finishMenuAction()
+  if (!row || props.pending || editingName.value) return
+  editingName.value = { row, name: row.name, submitting: false }
+  await nextTick()
+  const extension = row.isDirectory ? -1 : row.name.lastIndexOf('.')
+  const input = renameEditor()
+  input?.focus({ preventScroll: true })
+  input?.setSelectionRange(0, extension > 0 ? extension : row.name.length)
+}
+
+function finishRename(focusGrid: boolean) {
+  editingName.value = undefined
+  if (focusGrid) grid.value?.focus({ preventScroll: true })
+}
+
+async function handleRenameKey(event: KeyboardEvent) {
+  const editing = editingName.value
+  if (!editing || editing.submitting || event.isComposing) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    finishRename(true)
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    if (editing.name === editing.row.name) {
+      finishRename(true)
+      return
+    }
+    if (!editing.name) return
+    editing.submitting = true
+    const renamed = await props.renameFile(editing.row.key, editing.name)
+    if (editingName.value !== editing) return
+    if (renamed) finishRename(true)
+    else {
+      editing.submitting = false
+      await nextTick()
+      renameEditor()?.focus({ preventScroll: true })
+    }
+  }
+}
+
 function finishMenuAction() {
   if (menu.value) {
     closeMenu()
@@ -376,6 +434,10 @@ function handleGridKey(event: KeyboardEvent) {
     case 'Home': choose(0, event.shiftKey); break
     case 'End': choose(count - 1, event.shiftKey); break
     case 'Enter': runAction('open', activeKey.value); break
+    case 'F2':
+      if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) return
+      if (!event.repeat) void startRename()
+      break
     case 'Delete':
       if (event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return
       if (!event.repeat) runDelete(event.shiftKey)
@@ -388,8 +450,16 @@ function handleGridKey(event: KeyboardEvent) {
       break
     case 'c':
     case 'C':
-      if (!event.ctrlKey) return
-      runAction('copy', activeKey.value)
+      if (!event.ctrlKey || event.altKey || event.metaKey) return
+      if (!event.repeat) {
+        if (event.shiftKey) runAction('copy', activeKey.value)
+        else runClipboard(false)
+      }
+      break
+    case 'x':
+    case 'X':
+      if (!event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+      if (!event.repeat) runClipboard(true)
       break
     case 'F10':
     case 'ContextMenu': {
@@ -416,6 +486,8 @@ watch(() => props.rows, rows => {
   selected.value = new Set([...selected.value].filter(key => keys.has(key)))
   if (activeKey.value !== null && !keys.has(activeKey.value)) activeKey.value = selected.value.values().next().value ?? null
   if (selectionAnchor !== null && !keys.has(selectionAnchor)) selectionAnchor = null
+  if (editingName.value && !keys.has(editingName.value.row.key))
+    finishRename(document.activeElement === renameEditor())
 })
 watch(rowExtensions, observeFileTypes, { flush: 'post' })
 onMounted(() => {
@@ -471,7 +543,11 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
             @click="clickRow($event, row)" @dblclick="runAction('open', row.key)"
             @contextmenu.prevent="openMenu(row, $event.clientX, $event.clientY)">
             <td class="entry-name" :title="row.name">
-              <span class="entry-drag-source">
+              <input v-if="editingName?.row.key === row.key" v-model="editingName.name"
+                class="entry-rename-input" :aria-label="t('file.rename')" :readonly="editingName.submitting"
+                spellcheck="false" @keydown.stop="handleRenameKey" @pointerdown.stop @click.stop @dblclick.stop
+                @contextmenu.stop.prevent @blur="editingName && !editingName.submitting && finishRename(false)">
+              <span v-else class="entry-drag-source">
                 <img v-if="fileTypeIcon(rowExtensions[index])" :src="fileTypeIcon(rowExtensions[index]) ?? undefined"
                   class="entry-file-type-icon" alt="" draggable="false">
                 <span v-else class="entry-icon" :class="{ folder: row.isDirectory }" aria-hidden="true"></span>
@@ -501,10 +577,17 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
     <div v-if="menu" ref="menuElement" class="file-menu" role="menu" :aria-label="t('file.actions')"
       :style="{ left: menu.left + 'px', top: menu.top + 'px' }" @pointerdown.stop @keydown="handleMenuKey"
       @focusout="(event) => { if (!menuElement?.contains(event.relatedTarget as Node)) closeMenu() }">
-      <button v-for="action in fileMenuActions" :key="action.type" type="button" role="menuitem" @click="runAction(action.type, menu.key)">
-        {{ t(action.label) }}
-        <kbd v-if="'shortcut' in action">{{ t(action.shortcut) }}</kbd>
-      </button>
+      <template v-for="action in fileMenuActions" :key="action.type">
+        <button type="button" role="menuitem" @click="runAction(action.type, menu.key)">
+          {{ t(action.label) }}
+          <kbd v-if="'shortcut' in action">{{ t(action.shortcut) }}</kbd>
+        </button>
+        <button v-if="action.type === 'open' && singleSelection && !singleSelection.isDirectory"
+          type="button" role="menuitem" @click="runAction('openWith', menu.key)">{{ t('file.openWith') }}</button>
+      </template>
+      <button type="button" role="menuitem" @click="runClipboard(true)">{{ t('file.cut') }} <kbd>Ctrl+X</kbd></button>
+      <button type="button" role="menuitem" @click="runClipboard(false)">{{ t('file.copy') }} <kbd>Ctrl+C</kbd></button>
+      <button v-if="singleSelection" type="button" role="menuitem" @click="startRename">{{ t('file.rename') }} <kbd>F2</kbd></button>
       <button type="button" role="menuitem" @click="runDelete(false)">
         {{ t('file.delete') }}
         <kbd>Delete</kbd>

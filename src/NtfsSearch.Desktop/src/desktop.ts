@@ -16,7 +16,7 @@ export type FileAction = 'open' | 'openWith' | 'reveal' | 'copy'
 export const fileMenuActions = [
   { type: 'open', label: 'file.open', shortcut: 'file.shortcutEnter' },
   { type: 'reveal', label: 'file.reveal' },
-  { type: 'copy', label: 'file.copyPath', shortcut: 'file.shortcutCopy' },
+  { type: 'copy', label: 'file.copyPath', shortcut: 'file.shortcutCopyPath' },
 ] as const
 
 export interface SearchRow {
@@ -205,6 +205,14 @@ export function dragFiles(keys: string[]) {
 
 export function deleteFiles(keys: string[], permanent: boolean) {
   return invoke<boolean>('delete_files', { keys, permanent })
+}
+
+export function copyFiles(keys: string[], cut: boolean) {
+  return invoke('copy_files', { keys, cut })
+}
+
+export function renameFile(key: string, name: string) {
+  return invoke<boolean>('rename_file', { key, name })
 }
 
 export function startBackend() {

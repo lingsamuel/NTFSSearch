@@ -6,6 +6,7 @@
 
 - `tests/desktop-window.mjs` 通过 WebView2 CDP 向测试窗口发送键鼠事件。已在这个桌面验证 `--desktop-interaction`、`--space-interaction` 和 `--search-delete`。需要确认系统对话框时，在同一测试桌面里查找测试进程拥有的窗口，再向对应的窗口句柄发消息。
 - `--native-file-drag` 会移动系统鼠标并与 Edge 交互。使用独立 Windows 虚拟机或专用测试会话的输入桌面运行该用例。
+- 同一窗口站的多个桌面共用剪贴板。真实剪切、复制和粘贴用例使用独立窗口站、专用 Windows 登录会话或虚拟机。 [Windows 窗口站](https://learn.microsoft.com/en-us/windows/win32/winstation/window-stations)
 - 桌面隔离仍使用当前 Windows 用户的文件系统、权限和回收站。测试指向演示索引和专属测试文件。回收站、`File.Replace` 等用例将报告和夹具放在 Windows 原生 NTFS 上，例如项目 Windows 镜像的 `artifacts`。WSL 映射盘可用于无需这些文件系统行为的用例。
 
 ## 启动
@@ -122,3 +123,9 @@ exit $result
 - Windows 永久删除确认在实测中为 `#32770` 窗口，「是」的控件 ID 为 6，「否」为 2。文件占用提示可出现同进程的 `OperationStatusWindow`，它可以没有主窗口作为所有者。优先复用 `--search-delete` 的查找和应答逻辑。
 - 投递关闭或按钮消息后，等待上一笔 Tauri IPC 响应再发起下一笔删除。仅收到 `PostMessage` 成功表示消息已排队。
 - 启动失败时排查当前 Windows 会话、目录和参数。超时时检查日志和记录的 PID，只清理该测试进程树。回到用户当前桌面运行会失去窗口和输入隔离。
+
+## 核对原生文件剪贴板
+
+在专用测试登录会话或虚拟机可通过资源管理器粘贴。在同一登录会话另建窗口站时，从新 PowerShell 进程调用 `CreateWindowStationW(NULL, 0, MAXIMUM_ALLOWED, NULL)`，取得当前登录会话的系统命名窗口站。非管理员使用系统分配的名称。用 `GetUserObjectInformationW(UOI_NAME)` 读回名称，确认它为测试使用的非 `WinSta0` 窗口站，再切换该启动器进程的窗口站、创建桌面并以 `<窗口站>\Default` 启动子进程。实际读写剪贴板前，在子进程内再核对一次窗口站。 [创建窗口站](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowstationw) · [设置进程窗口站](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setprocesswindowstation)
+
+用实际文件和非空目录检查 `FileDrop` 与 `Preferred DropEffect`。Shell 的复制数据可能同时允许创建链接，所以按复制与移动位判断。可用 `OleGetClipboard` 读取实际数据对象，再交给测试目标目录的 Shell `IDropTarget`。优化移动可能返回 `DROPEFFECT_NONE`，此时按源与目标的文件是否存在、内容是否完整判断结果。 [Shell 剪贴板格式](https://learn.microsoft.com/en-us/windows/win32/shell/clipboard) · [优化移动](https://learn.microsoft.com/en-us/windows/win32/shell/datascenarios)

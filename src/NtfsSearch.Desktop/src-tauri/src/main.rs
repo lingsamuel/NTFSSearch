@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod file_clipboard;
 mod file_delete;
 mod file_drag;
+mod file_rename;
 mod localization;
 mod shell_files;
 
@@ -92,6 +94,16 @@ async fn delete_files(
     permanent: bool,
 ) -> Result<bool, String> {
     file_delete::delete_files(window, keys, permanent).await
+}
+
+#[tauri::command]
+async fn copy_files(window: WebviewWindow, keys: Vec<String>, cut: bool) -> Result<(), String> {
+    file_clipboard::copy_files(window, keys, cut).await
+}
+
+#[tauri::command]
+async fn rename_file(window: WebviewWindow, key: String, name: String) -> Result<bool, String> {
+    file_rename::rename_file(window, &key, &name).await
 }
 
 #[tauri::command]
@@ -306,7 +318,9 @@ fn main() {
             start_backend,
             send_request,
             drag_files,
-            delete_files
+            delete_files,
+            copy_files,
+            rename_file
         ])
         .build(context)
         .expect(text("native.window.start"));

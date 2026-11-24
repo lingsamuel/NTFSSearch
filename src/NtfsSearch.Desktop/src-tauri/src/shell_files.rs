@@ -1,4 +1,4 @@
-use crate::localization::text;
+use crate::localization::{error as localized_error, text};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{
     ffi::OsString,
@@ -6,17 +6,19 @@ use std::{
     path::{Path, PathBuf},
     ptr,
 };
+use tauri::{async_runtime::channel, WebviewWindow};
 use windows::{
-    core::{Result, PCWSTR},
+    core::{Result, HRESULT, PCWSTR},
     Win32::{
-        Foundation::HWND,
+        Foundation::{ERROR_CANCELLED, HWND},
         System::{
             Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
             Ole::{OleInitialize, OleUninitialize},
         },
         UI::Shell::{
             Common::ITEMIDLIST, FileOperation, IFileOperation, ILFree,
-            SHCreateShellItemArrayFromIDLists, SHParseDisplayName, FILEOPERATION_FLAGS,
+            SHCreateShellItemArrayFromIDLists, SHParseDisplayName, COPYENGINE_E_USER_CANCELLED,
+            FILEOPERATION_FLAGS,
         },
     },
 };
@@ -39,7 +41,7 @@ impl Drop for OleApartment {
 pub(crate) struct ItemIdList(*mut ITEMIDLIST);
 
 impl ItemIdList {
-    fn from_path(path: &Path) -> Result<Self> {
+    pub(crate) fn from_path(path: &Path) -> Result<Self> {
         let wide: Vec<_> = path.as_os_str().encode_wide().chain([0]).collect();
         let mut id = ptr::null_mut();
         unsafe { SHParseDisplayName(PCWSTR(wide.as_ptr()), None, &mut id, 0, None)? };
@@ -83,22 +85,73 @@ pub(crate) fn decode_path(key: &str) -> std::result::Result<PathBuf, String> {
     Ok(path)
 }
 
+/// 先退出 WebView 的 IPC 回调，再在窗口 STA 上调用 Shell 并等待操作结果。
+pub(crate) async fn on_window_thread<T: Send + 'static>(
+    window: WebviewWindow,
+    error_key: &'static str,
+    action: impl FnOnce(HWND) -> Result<T> + Send + 'static,
+) -> std::result::Result<T, String> {
+    let (completion, mut result) = channel(1);
+    let owner = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let response = owner
+                .hwnd()
+                .map_err(|error| localized_error(error_key, error))
+                .and_then(|hwnd| {
+                    OleApartment::enter()
+                        .and_then(|_ole| action(hwnd))
+                        .map_err(|error| localized_error(error_key, error))
+                });
+            let _ = completion.try_send(response);
+        })
+        .map_err(|error| localized_error(error_key, error))?;
+    result
+        .recv()
+        .await
+        .ok_or_else(|| localized_error(error_key, text("native.fileOperation.unavailable")))?
+}
+
 /// 在已初始化的 STA 上删除一批绝对 Shell 条目，返回 Shell 是否中止了任意一项。
 pub(crate) fn delete_items(
     hwnd: HWND,
     ids: &[*const ITEMIDLIST],
     flags: FILEOPERATION_FLAGS,
 ) -> Result<bool> {
+    let items = unsafe { SHCreateShellItemArrayFromIDLists(ids)? };
+    perform_file_operation(hwnd, flags, |operation| unsafe {
+        operation.DeleteItems(&items)
+    })
+}
+
+/// 为文件操作设置对话框所有者，在 Shell 执行完后读取实际中止状态。
+pub(crate) fn perform_file_operation(
+    hwnd: HWND,
+    flags: FILEOPERATION_FLAGS,
+    enqueue: impl FnOnce(&IFileOperation) -> Result<()>,
+) -> Result<bool> {
     unsafe {
-        let items = SHCreateShellItemArrayFromIDLists(ids)?;
         let operation: IFileOperation =
             CoCreateInstance(&FileOperation, None, CLSCTX_INPROC_SERVER)?;
         operation.SetOwnerWindow(hwnd)?;
         operation.SetOperationFlags(flags)?;
-        operation.DeleteItems(&items)?;
+        enqueue(&operation)?;
         let performed = operation.PerformOperations();
         let aborted = operation.GetAnyOperationsAborted();
         performed?;
         Ok(aborted?.as_bool())
+    }
+}
+
+pub(crate) fn operation_completed(result: Result<bool>) -> Result<bool> {
+    match result {
+        Ok(aborted) => Ok(!aborted),
+        Err(error)
+            if error.code() == COPYENGINE_E_USER_CANCELLED
+                || error.code() == HRESULT::from_win32(ERROR_CANCELLED.0) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error),
     }
 }

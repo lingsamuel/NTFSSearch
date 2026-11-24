@@ -1,6 +1,6 @@
 [package]
 name = "ntfs-search"
-version = "0.24.1"
+version = "0.25.0"
 description = "NTFS 文件搜索"
 edition = "2021"
 
@@ -21,6 +21,7 @@ windows = { version = "0.62.2", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_Registry",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
