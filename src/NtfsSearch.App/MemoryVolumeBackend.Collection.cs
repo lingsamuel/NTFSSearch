@@ -25,7 +25,7 @@ internal sealed partial class MemoryVolumeBackend
         try
         {
             var connection = Volatile.Read(ref collector) ?? throw new IOException("采集进程的控制连接已关闭。");
-            Report(volume, generation, "开始全卷采集，正在准备读取 NTFS…");
+            Report(volume, generation, new("backend.index.preparingScan"));
             string journalName = MemoryCollectorPipe.NewName(), scanName = MemoryCollectorPipe.NewName();
             using var journal = MemoryCollectorPipe.CreateServer(journalName, acrossElevation: true);
             using var scan = MemoryCollectorPipe.CreateServer(scanName, acrossElevation: true);
@@ -48,7 +48,7 @@ internal sealed partial class MemoryVolumeBackend
                     throw new JournalInvalidatedException("扫描期间USN日志已更换。");
 
                 var live = new LiveVolumeIndex(index, start, scanToken);
-                Report(volume, generation, "回放扫描期间的变化…");
+                Report(volume, generation, new("backend.index.replayingChanges"));
                 await journal.WriteAsync(new byte[] { 1 }, scanToken);
                 JournalPosition? fence = null;
                 while (fence is null || live.Position!.NextUsn < fence.NextUsn)
@@ -65,10 +65,11 @@ internal sealed partial class MemoryVolumeBackend
                 }
                 if (intake.IsFaulted) await intake;
                 live.CompactIfNeeded(scanToken);
-                string details = skipped > 0 ? $"；{skipped:N0} 条记录路径不可达，未纳入搜索" : "";
                 scanToken.ThrowIfCancellationRequested();
+                long count = live.Layers.Sum(layer => (long)layer.VisibleCount);
                 Publish(volume, generation, live, changed: true, scanned: true,
-                    status: $"全卷采集完成，已读取 {live.Layers.Sum(layer => (long)layer.VisibleCount):N0} 个对象，准备接续 USN" + details);
+                    status: skipped > 0 ? new("backend.index.scanFinishedWithSkipped", ("count", count), ("skipped", skipped))
+                        : new("backend.index.scanFinished", ("count", count)));
             }
             finally
             {
@@ -80,11 +81,11 @@ internal sealed partial class MemoryVolumeBackend
         catch (OperationCanceledException) when (scanToken.IsCancellationRequested)
         {
             if (!token.IsCancellationRequested)
-                ScanFailed(volume, generation, "本卷扫描超过30分钟，已停止并等待重试。");
+                ScanFailed(volume, generation, new("backend.index.scanTimeout"));
         }
         catch (Exception error) when (MemoryCollector.IsCollectionError(error))
         {
-            ScanFailed(volume, generation, "本卷采集暂时失败，将重试：" + error.Message);
+            ScanFailed(volume, generation, new("backend.index.scanFailed", ("detail", error.Message)));
         }
         finally
         {
@@ -110,7 +111,7 @@ internal sealed partial class MemoryVolumeBackend
                 case CollectorFrameKind.Error:
                     throw CollectorWire.ReadError(frame);
                 case CollectorFrameKind.Progress:
-                    using (var body = frame.Open()) Report(volume, generation, body.ReadString());
+                    using (var body = frame.Open()) Report(volume, generation, ScanStageText((NtfsScanStage)body.ReadByte(), body.ReadInt64()));
                     break;
                 case CollectorFrameKind.WorkerStarted:
                     using (var body = frame.Open()) ScanStarted(volume, generation, body.ReadInt32());
@@ -126,8 +127,7 @@ internal sealed partial class MemoryVolumeBackend
                     {
                         var target = CollectorWire.ReadPosition(body);
                         var skipped = body.ReadInt64();
-                        var progress = new ScanProgress(message => Report(volume, generation, message));
-                        return (records.Build(token, progress), target, skipped);
+                        return (records.Build(token), target, skipped);
                     }
                 default:
                     throw new InvalidDataException("扫描消息顺序无效。");
@@ -135,13 +135,23 @@ internal sealed partial class MemoryVolumeBackend
         }
     }
 
+    private static DesktopText ScanStageText(NtfsScanStage stage, long count) => stage switch
+    {
+        NtfsScanStage.ReadingDirectories => new("backend.index.readingDirectories"),
+        NtfsScanStage.RecordsRead => new("backend.index.recordsRead", ("count", count)),
+        NtfsScanStage.IndexingNames => new("backend.index.indexingNames"),
+        NtfsScanStage.ReadingMetadata => new("backend.index.readingMetadata"),
+        NtfsScanStage.RecordsIndexed => new("backend.index.recordsIndexed", ("count", count)),
+        _ => throw new InvalidDataException("扫描进度阶段无效。")
+    };
+
     private async Task WatchAsync(MemoryCollectorConnection connection, VolumeState volume, int generation,
         ExitSnapshotVolume initial, DirectoryGraph? graph, CancellationTokenSource lifetime)
     {
         CancellationToken token = lifetime.Token;
         try
         {
-            Report(volume, generation, "索引可用，正在检查 USN 水位…");
+            Report(volume, generation, new("backend.index.checkingJournal"));
             string name = MemoryCollectorPipe.NewName();
             using var pipe = MemoryCollectorPipe.CreateServer(name, acrossElevation: true);
             await connection.RequestAsync(new(volume.Volume, dataDirectory, name, null, initial.Position, 0, metadata), token);
@@ -153,7 +163,7 @@ internal sealed partial class MemoryVolumeBackend
                 : new LiveVolumeIndex(initial.Layers.Single(), start, token);
             bool ready = start == target;
             if (ready) Publish(volume, generation, live, changed: false, monitoring: true, status: LiveStatus(volume, live));
-            else Report(volume, generation, "索引可用，正在补读 USN 变化…");
+            else Report(volume, generation, new("backend.index.catchingUpJournal"));
             bool changed = false;
             HashSet<ulong>? fileParents = null;
             SpaceActivityObservation? batchObservation = null;
@@ -172,7 +182,7 @@ internal sealed partial class MemoryVolumeBackend
                 if (!final) continue;
                 changed |= live.CompactIfNeeded(token);
                 bool caughtUp = live.Position!.NextUsn >= target.NextUsn;
-                string? status = caughtUp && !ready ? LiveStatus(volume, live) : null;
+                DesktopText? status = caughtUp && !ready ? LiveStatus(volume, live) : null;
                 // 一个原始USN批次可拆成多帧。跨帧补采完整后才同时发布视图和水位。
                 Publish(volume, generation, live, changed, monitoring: caughtUp, status: status,
                     observation: batchObservation, fileParents: fileParents);
@@ -196,8 +206,8 @@ internal sealed partial class MemoryVolumeBackend
                     volume.Confirmed = false;
                     volume.Revision = ++revision;
                 }
-                volume.Status = new(volume.Volume.Root, (gap ? "USN日志失效，保留已有结果并重建本卷："
-                    : "实时监控暂时不可用，保留已有结果并重试：") + error.Message) { HasError = true };
+                volume.Status = new(volume.Volume.Root, new(gap ? "backend.index.journalLost" : "backend.index.monitorFailed",
+                    ("detail", error.Message))) { HasError = true };
             }
             StatusChanged?.Invoke();
         }
@@ -262,7 +272,7 @@ internal sealed partial class MemoryVolumeBackend
     }
 
     private void Publish(VolumeState volume, int generation, LiveVolumeIndex live, bool changed,
-        bool scanned = false, bool monitoring = false, string? status = null,
+        bool scanned = false, bool monitoring = false, DesktopText? status = null,
         SpaceActivityObservation? observation = null, HashSet<ulong>? fileParents = null)
     {
         lock (gate)
@@ -281,17 +291,18 @@ internal sealed partial class MemoryVolumeBackend
         if (status is not null) StatusChanged?.Invoke();
     }
 
-    private static string LiveStatus(VolumeState volume, LiveVolumeIndex live)
-        => $"{(volume.RestoredFromSnapshot ? "已从退出快照恢复" : "已完成全卷采集")} · USN 已追平，实时监控中 · {live.Layers.Sum(layer => (long)layer.VisibleCount):N0} 项";
+    private static DesktopText LiveStatus(VolumeState volume, LiveVolumeIndex live)
+        => new(volume.RestoredFromSnapshot ? "backend.index.monitoringRestored" : "backend.index.monitoringScanned",
+            ("count", live.Layers.Sum(layer => (long)layer.VisibleCount)));
 
-    private void Report(VolumeState volume, int generation, string message)
+    private void Report(VolumeState volume, int generation, DesktopText message)
     {
         lock (gate)
         {
             if (!IsCurrent(volume, generation)) return;
             volume.Status = new(volume.Volume.Root, message);
         }
-        Progress?.Invoke(volume.Volume.Root + " " + message, false);
+        Progress?.Invoke(VolumeProgress(volume, message), false);
         StatusChanged?.Invoke();
     }
 
@@ -307,7 +318,7 @@ internal sealed partial class MemoryVolumeBackend
         StatusChanged?.Invoke();
     }
 
-    private void ScanFailed(VolumeState volume, int generation, string message)
+    private void ScanFailed(VolumeState volume, int generation, DesktopText message)
     {
         lock (gate)
         {
@@ -316,12 +327,10 @@ internal sealed partial class MemoryVolumeBackend
             volume.Revision = ++revision;
             volume.RetryAt = DateTime.UtcNow.AddSeconds(2);
         }
-        Progress?.Invoke(volume.Volume.Root + " " + message, true);
+        Progress?.Invoke(VolumeProgress(volume, message), true);
         StatusChanged?.Invoke();
     }
 
-    private sealed class ScanProgress(Action<string> report) : IProgress<string>
-    {
-        public void Report(string value) => report(value);
-    }
+    private static DesktopText VolumeProgress(VolumeState volume, DesktopText message)
+        => new("backend.index.volumeProgress", ("root", volume.Volume.Root), ("message", message));
 }

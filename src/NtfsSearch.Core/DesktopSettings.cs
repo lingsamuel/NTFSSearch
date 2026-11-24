@@ -6,9 +6,11 @@ namespace NtfsSearch.Core;
 internal sealed record DesktopSettings(bool SkipExitIndexSave = false, bool? SearchServiceEnabled = null,
     int SearchServicePort = LocalSearchEndpoint.DefaultPort, bool SearchDirectorySizes = true,
     bool PrecomputeSort = true, bool IndexCreationTime = false, bool IndexModifiedTime = true, bool IndexFileSize = true,
-    bool ShowSpaceVolumeCapacity = true, bool SpaceVolumeShowFree = false, bool SpaceVolumeCapacityBar = true)
+    bool ShowSpaceVolumeCapacity = true, bool SpaceVolumeShowFree = false, bool SpaceVolumeCapacityBar = true,
+    string Language = DesktopSettings.AutomaticLanguage)
 {
     internal const string FileName = "settings.json";
+    internal const string AutomaticLanguage = "auto";
 
     internal IndexMetadata Metadata =>
         (IndexCreationTime ? IndexMetadata.CreationTime : IndexMetadata.None)

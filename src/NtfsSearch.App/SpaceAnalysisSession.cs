@@ -8,7 +8,7 @@ namespace NtfsSearch.App;
 internal sealed record SpaceActivityObservation(string VolumeKey);
 
 // 与桌面消息循环同步安排工作；同一时间只有一个任务能读取或更新汇总。
-internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publish, Action<Action> post)
+internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publish, Action<Action> post, Func<DesktopLocale> locale)
 {
     private const int VisibleItems = 200;
     private const int DetailDirectoryLimit = 32;
@@ -26,6 +26,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private long detailId, lastDetailId;
     private (long RequestId, string Root, ulong Directory, string? Path, string? VolumeKey)? selection;
     private (string Root, ulong[] BreadcrumbIds, string? VolumeKey) pathOrigin;
+    private (long RequestId, DesktopText Text)? pathError;
     private long latestRequestId;
     private SpaceUsageIndex? usage;
     private ulong[] trail = [];
@@ -51,13 +52,14 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
             return;
         }
         latestRequestId = requestId;
-        ReportPathError(requestId, "请输入本地磁盘的绝对目录路径，例如 D:\\Games。");
+        ReportPathError(requestId, new("backend.space.absoluteLocalPath", ("example", @"D:\Games")));
     }
 
     private void Navigate(long requestId, string root, ulong directory, string? path)
     {
         if (requestId < latestRequestId) return;
         latestRequestId = requestId;
+        pathError = null;
         Observe(null);
         detailDirectories = [];
         detailBranch = [];
@@ -151,6 +153,12 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         TryStart(views);
     }
 
+    internal void RefreshLocale()
+    {
+        if (pathError is { } current && current.RequestId == latestRequestId)
+            PublishPathError(current.RequestId, current.Text);
+    }
+
     // 返回搜索时释放卷统计。保留导航请求和排除项，切回后按最新的索引恢复。
     internal void SetVisible(bool visible)
     {
@@ -173,6 +181,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     {
         if (requestId < latestRequestId) return;
         latestRequestId = requestId;
+        pathError = null;
         suspended = false;
         selection = null;
         exclusions.Clear();
@@ -212,10 +221,11 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         if (selected.Volume is null && target.Path is not null)
         {
             work.Complete(request, null);
-            var status = host.Statuses.FirstOrDefault(volume => SameRoot(volume.Root, target.Root));
-            ReportPathError(target.RequestId, status is null
-                ? $"没有可用的 {target.Root} 本地 NTFS 索引。"
-                : $"{target.Root} 索引尚不可用。{status.Message}");
+            var status = host.ReadDesktopVolumeStatus(target.Root);
+            object? detail = (object?)status.Text ?? status.Diagnostic;
+            ReportPathError(target.RequestId, detail is null
+                ? new("backend.space.noIndex", ("root", target.Root))
+                : new("backend.space.waitingForIndex", ("root", target.Root), ("detail", detail)));
             return;
         }
         if (selected.Volume is null && ordered.Length > 0) selected = ordered[0];
@@ -262,12 +272,12 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     {
         SpaceUsageIndex? updated = null;
         SpaceFolder? result = null;
-        string? error = null;
+        DesktopText? error = null;
         Dictionary<ulong, SpaceItem[]?> details = [];
         List<ulong[]> activityPaths = [];
         try
         {
-            (updated, result, error) = await Task.Run<(SpaceUsageIndex, SpaceFolder?, string?)>(() =>
+            (updated, result, error) = await Task.Run<(SpaceUsageIndex, SpaceFolder?, DesktopText?)>(() =>
             {
                 var token = source.Token;
                 // Update 可原地更新目录树。先保留变更前的目录链，移动或删除后仍可定位原分支。
@@ -279,13 +289,9 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 {
                     var (found, ambiguous) = index.FindDirectory(path, token);
                     if (!found.HasValue)
-                    {
-                        string reason = ambiguous ? "该路径有多个匹配，请使用目录名称的原大小写。"
-                            : "索引中找不到此目录，请确认路径指向已索引的文件夹。";
-                        return (index, null, reason);
-                    }
+                        return (index, null, new(ambiguous ? "backend.space.ambiguousPath" : "backend.space.pathNotIndexed"));
                     if (index.IsExcluded(found.Value, filter))
-                        return (index, null, "该目录已临时排除，请先恢复。");
+                        return (index, null, new("backend.space.excludedPath"));
                     directory = found.Value;
                 }
                 else if (!IsVisible(directory))
@@ -296,13 +302,13 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                 foreach (ulong id in detailsRequested)
                     if (id != directory) details.Add(id, IsVisible(id) ? index.Read(id, VisibleItems, token, filter).Children : null);
                 if (index.FindBrokenBranch(directory, branch) is { } broken) details[broken] = null;
-                return (index, folder, (string?)null);
+                return (index, folder, null);
 
                 bool IsVisible(ulong id) => index.Contains(id) && !index.IsExcluded(id, filter);
             }, source.Token);
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested) { }
-        catch (Exception failure) { error = failure.Message; }
+        catch (Exception failure) { error = new("backend.space.analysisFailed", ("detail", failure.Message)); }
         post(() =>
         {
             bool cancelled = source.IsCancellationRequested;
@@ -333,24 +339,28 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
                         selection = (requestId, root, directory, null, volumeKey);
                         Observe(volumeKey);
                     }
-                    Publish(requestId, roots, root, result, error, detailsRevision, details, sameScene ? activityPaths : []);
+                    Publish(requestId, roots, root, result, locale().Text(error), detailsRevision, details, sameScene ? activityPaths : []);
                 }
             }
             TryStart();
         });
     }
 
-    private void ReportPathError(long requestId, string message)
+    private void ReportPathError(long requestId, DesktopText message)
     {
         // 桌面可能已忽略后端发出的旧结果，失败时从提交地址时实际显示的目录恢复。
         displayedVolumeKey = pathOrigin.VolumeKey;
         trail = pathOrigin.BreadcrumbIds;
         selection = (requestId, pathOrigin.Root, trail.LastOrDefault(), null, pathOrigin.VolumeKey);
-        publish(new { Type = "spacePathError", RequestId = requestId, Message = message });
+        pathError = (requestId, message);
+        PublishPathError(requestId, message);
         // 路径查找可能已读到最新索引，但当前树图尚未使用这个版本。
         work.RequestUser();
         TryStart();
     }
+
+    private void PublishPathError(long requestId, DesktopText message)
+        => publish(new { Type = "spacePathError", RequestId = requestId, Message = locale().Text(message) });
 
     private void Publish(long requestId, string[] roots, string? root, SpaceFolder? folder, string? error,
         long detailsRevision, Dictionary<ulong, SpaceItem[]?> details, List<ulong[]> activityPaths)

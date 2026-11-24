@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction | --space-capacity-settings | --advanced-search | --localization]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -25,6 +25,7 @@ const spaceFlashTest = mode === '--space-flash'
 const spaceInteractionTest = mode === '--space-interaction'
 const spaceCapacitySettingsTest = mode === '--space-capacity-settings'
 const advancedSearchTest = mode === '--advanced-search'
+const localizationTest = mode === '--localization'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
   : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : advancedSearchTest ? 'AdvancedSearchData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
@@ -32,7 +33,8 @@ const snapshotPath = join(testData, 'index.ntsnap')
 const previousSnapshot = Buffer.from('isolated exit-save fixture')
 if (mode !== '--cached-fixture') {
   await mkdir(testData, { recursive: true })
-  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest && !exitSaveSkipTest, ...(trayTest || advancedSearchTest ? { IndexCreationTime: true } : {}) }))
+  await writeFile(settingsPath, JSON.stringify({ SkipExitIndexSave: !trayTest && !exitSaveSkipTest,
+    ...(trayTest || advancedSearchTest ? { IndexCreationTime: true } : {}), ...(localizationTest ? {} : { Language: 'zh-CN' }) }))
   await writeFile(snapshotPath, previousSnapshot)
 }
 const portProbe = createServer().listen(0, '127.0.0.1')
@@ -47,7 +49,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest || spaceCapacitySettingsTest || advancedSearchTest || localizationTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -688,9 +690,12 @@ async function waitForDesktop(total) {
   await until(async () => {
     const error = await evaluate("document.querySelector('.startup-error span')?.textContent")
     if (error) throw new Error(error)
+    if (localizationTest)
+      return await evaluate(`document.querySelector('.result-count') && (${resultCount})().includes(${JSON.stringify(total.toLocaleString('en'))})`)
     return await evaluate(`document.querySelector('.result-count') && (${resultCount})() === ${JSON.stringify(expected(total))}`)
   }, '初始精确计数', 90_000)
-  assert.equal(await evaluate("document.activeElement.getAttribute('aria-label')"), '搜索文件和文件夹')
+  assert.equal(await evaluate(localizationTest ? "document.activeElement === document.querySelector('.search-field input')"
+    : "document.activeElement.getAttribute('aria-label') === '搜索文件和文件夹'"), true)
   assert.equal(await evaluate("document.querySelectorAll('tbody tr').length"), 200)
 }
 
@@ -1022,6 +1027,79 @@ async function verifySpaceCapacitySettings() {
   assert.equal(JSON.parse(await readFile(settingsPath, 'utf8')).SpaceVolumeShowFree, true)
 }
 
+async function verifyLocalization(total) {
+  const language = "document.querySelector('select[name=language]')"
+  const currentLanguage = () => evaluate('document.documentElement.lang')
+  const nativeLanguage = () => evaluate("window.__TAURI_INTERNALS__.invoke('desktop_language')")
+  const auto = await currentLanguage()
+  const title = () => evaluate("document.querySelector('#settings-title').textContent.trim()")
+
+  async function openSettings() {
+    await evaluate("document.querySelector('#tools-menu button').click()")
+    await until(() => evaluate(`${language}?.matches(':enabled')`), '通用语言设置可用')
+    assert.equal(await visible('#settings-panel-general'), true)
+  }
+
+  async function changeLanguage(choice, actual = choice) {
+    const previous = await currentLanguage()
+    await evaluate(`${language}.value = ${JSON.stringify(choice)}; ${language}.dispatchEvent(new Event('change'));`)
+    assert.equal(await currentLanguage(), previous, '草稿阶段保持当前语言')
+    await evaluate("document.querySelector('.settings-footer button[type=submit]').click()")
+    await until(async () => (await currentLanguage()) === actual
+      && JSON.parse(await readFile(settingsPath, 'utf8')).Language === choice, '保存语言并切换界面')
+    assert.equal(await nativeLanguage(), actual, '原生托盘使用的语言与窗口一致')
+  }
+
+  await openSettings()
+  assert.equal(await evaluate(`${language}.value`), 'auto', '旧配置跟随系统')
+  await changeLanguage('zh-CN')
+  assert.equal(await title(), '设置')
+  await click('返回')
+  await query('HELLO 000901', 1)
+  await openSettings()
+  await changeLanguage('en')
+  assert.equal(await title(), 'Settings')
+  assert.equal(await evaluate("document.querySelector('#general-settings-title').textContent.trim()"), 'General')
+  await evaluate("document.querySelector('.settings-toolbar button').click()")
+  assert.equal(await evaluate("document.querySelector('.search-field input').value"), 'HELLO 000901')
+  await until(() => evaluate("document.querySelectorAll('tbody tr').length === 1"), '保留切换前的搜索结果')
+  assert.equal(await evaluate("document.querySelector('.index-toggle').textContent.trim()"), 'Index status')
+
+  await evaluate(`(() => { const input = document.querySelector('.search-field input');
+    input.value = 'x'.repeat(4097);
+    input.dispatchEvent(new InputEvent('input', { bubbles: true })); })()`)
+  const queryError = "document.querySelector('.empty-results')?.textContent"
+  await until(() => evaluate(`${queryError}?.includes('up to 4096 characters')`), '查询长度错误使用英文')
+  await openSettings()
+  await changeLanguage('zh-CN')
+  await click('返回')
+  await until(() => evaluate(`${queryError}?.includes('查询最多 4096 个字符')`), '已显示的查询错误切换为中文')
+
+  await click('空间分析')
+  await until(() => visible('.space-total'), '空间分析载入演示卷')
+  await evaluate(`(() => { const input = document.querySelector('.space-address input');
+    input.value = 'relative';
+    input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    input.form.requestSubmit(); })()`)
+  const pathError = "document.querySelector('.space-path-feedback')?.textContent"
+  await until(() => evaluate(`${pathError}?.includes('绝对目录路径')`), '地址提示使用中文')
+  await openSettings()
+  await changeLanguage('en')
+  await evaluate("document.querySelector('.settings-toolbar button').click()")
+  await until(() => evaluate(`${pathError}?.includes('absolute folder path')`), '已显示的地址提示切换为英文')
+  assert.equal(await visible('.space-total'), true, '切换语言保留空间分析视图')
+
+  await quitApplication()
+  socket.close()
+  launchApplication()
+  await waitForDesktop(total)
+  assert.equal(await currentLanguage(), 'en', '重启后使用显式语言')
+  assert.equal(await nativeLanguage(), 'en', '重启后托盘使用显式语言')
+  await openSettings()
+  assert.equal(await evaluate(`${language}.value`), 'en')
+  await changeLanguage('auto', auto)
+}
+
 async function verifyExitSaveSkip() {
   // 先用正常退出保存一份较小的快照，再用现有的大型演示索引留出写入时的操作窗口。
   await quitApplication()
@@ -1109,12 +1187,15 @@ try {
     await verifySpaceInteraction()
   } else if (spaceCapacitySettingsTest) {
     await verifySpaceCapacitySettings()
+  } else if (localizationTest) {
+    await verifyLocalization(total)
   } else if (withoutHttpTest) {
     await click('设置')
     const settingsReady = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
     await until(settingsReady, '无查询服务版设置加载完成')
     assert.equal(await evaluate("Boolean(document.querySelector('.settings-service'))"), false)
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('[role=tab]')].map(tab => tab.textContent)"), ['搜索', '索引', '空间分析'])
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('[role=tab]')].map(tab => tab.textContent)"), ['通用', '搜索', '索引', '空间分析'])
+    await click('搜索')
     await evaluate("document.querySelector('input[name=search-directory-sizes]').click()")
     await click('保存并应用')
     await until(async () => await settingsReady() && JSON.parse(await readFile(settingsPath, 'utf8')).SearchDirectorySizes === false,
@@ -1485,6 +1566,7 @@ try {
   else if (spaceFlashTest) console.log('Windows 空间分析自动及手动展开、同批多处闪烁、收起回退通过。')
   else if (spaceInteractionTest) console.log('Windows 空间分析右键、返回搜索后恢复会话以及前台激活通过。')
   else if (spaceCapacitySettingsTest) console.log('Windows 磁盘容量、背景比例、键盘选盘和跨标签保存通过。')
+  else if (localizationTest) console.log('Windows 系统语言、界面即时切换、搜索状态和重启偏好通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

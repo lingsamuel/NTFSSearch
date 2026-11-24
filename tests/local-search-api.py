@@ -42,6 +42,7 @@ def send(process, message):
 
 def desktop(command, env, check):
     events = queue.Queue()
+    env = env | {"NTFS_SEARCH_UI_LANGUAGE": "zh-CN"}
     with subprocess.Popen(command + ["--desktop-test"], stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, encoding="utf-8", env=env) as process:
         def read_events():
@@ -229,11 +230,12 @@ def check_settings(backend, cli, sandbox):
                                   searchDirectorySizes=sizes, skipExitIndexSave=skip)
 
         def assert_status(status, port, enabled, running, error=False, override=None, sizes=True, skip=True):
-            assert status == dict(type="settingsStatus", searchServiceAvailable=True, enabled=enabled, port=port,
-                                  address=f"http://127.0.0.1:{override or port}", portOverridden=override is not None,
-                                  searchDirectorySizes=sizes, skipExitIndexSave=skip,
-                                  running=running, busy=False, error=status["error"] if error else None,
-                                  indexRestartRequired=False, **INDEX_DEFAULTS), status
+            expected = dict(type="settingsStatus", searchServiceAvailable=True, enabled=enabled, port=port,
+                            address=f"http://127.0.0.1:{override or port}", portOverridden=override is not None,
+                            searchDirectorySizes=sizes, skipExitIndexSave=skip,
+                            running=running, busy=False, error=status["error"] if error else None,
+                            indexRestartRequired=False, **INDEX_DEFAULTS)
+            assert {key: status.get(key) for key in expected} == expected, status
             assert bool(status["error"]) == error, status
 
         def configure(process, receive):
@@ -306,10 +308,11 @@ def check_settings(backend, cli, sandbox):
             initial = service_status(receive)
             assert initial["address"] is None and "NTFS_SEARCH_PORT" in initial["error"], initial
             disabled = apply(process, receive, first_port, enabled=False)
-            assert disabled == dict(type="settingsStatus", searchServiceAvailable=True, enabled=False, port=first_port, address=None,
-                                    portOverridden=True, running=False, busy=False, error=None,
-                                    searchDirectorySizes=True, skipExitIndexSave=True,
-                                    indexRestartRequired=False, **INDEX_DEFAULTS), disabled
+            expected = dict(type="settingsStatus", searchServiceAvailable=True, enabled=False, port=first_port, address=None,
+                            portOverridden=True, running=False, busy=False, error=None,
+                            searchDirectorySizes=True, skipExitIndexSave=True,
+                            indexRestartRequired=False, **INDEX_DEFAULTS)
+            assert {key: disabled.get(key) for key in expected} == expected, disabled
             assert json.loads(settings.read_bytes())["SearchServicePort"] == first_port
 
         def queue_exit_settings(process, receive):

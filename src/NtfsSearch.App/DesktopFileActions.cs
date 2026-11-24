@@ -11,7 +11,7 @@ internal static class DesktopFileActions
 
     internal static string DecodePath(string key) => new(MemoryMarshal.Cast<byte, char>(Convert.FromBase64String(key)));
 
-    internal static Task RunShellActionAsync(string action, string key)
+    internal static Task RunShellActionAsync(string action, string key, DesktopLocale locale)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         // 在 STA 线程调用资源管理器，Shell 处理程序响应期间桌面仍能继续处理消息。
@@ -22,8 +22,8 @@ internal static class DesktopFileActions
                 string path = DecodePath(key);
                 switch (action)
                 {
-                    case "open": Open(path); break;
-                    case "openWith": OpenWith(path); break;
+                    case "open": Open(path, locale); break;
+                    case "openWith": OpenWith(path, locale); break;
                     case "reveal": Reveal(path); break;
                 }
                 completion.SetResult();
@@ -37,11 +37,11 @@ internal static class DesktopFileActions
 
     internal static void Copy(string key, long windowHandle) => CopyPath(DecodePath(key), (nint)windowHandle);
 
-    private static void Open(string path)
+    private static void Open(string path, DesktopLocale locale)
     {
         const int noAssociation = 1155;
         try { using var process = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); }
-        catch (Win32Exception error) when (error.NativeErrorCode == noAssociation) { OpenWith(path); }
+        catch (Win32Exception error) when (error.NativeErrorCode == noAssociation) { OpenWith(path, locale); }
     }
 
     private static void Reveal(string path)
@@ -52,14 +52,14 @@ internal static class DesktopFileActions
         finally { Marshal.FreeCoTaskMem(item); }
     }
 
-    private static void OpenWith(string path)
+    private static void OpenWith(string path, DesktopLocale locale)
     {
         // 由资源管理器解释条目的打开方式命令，使用系统为该路径提供的应用选择器。
         var shellType = Type.GetTypeFromProgID("Shell.Application", throwOnError: true)!;
         dynamic shell = Activator.CreateInstance(shellType)!;
         dynamic? folder = shell.NameSpace(Path.GetDirectoryName(path));
         dynamic? item = folder?.ParseName(Path.GetFileName(path));
-        if (item is null) throw new FileNotFoundException("资源管理器找不到此文件。", path);
+        if (item is null) throw new FileNotFoundException(locale.Text("backend.action.fileNotFound"), path);
         item.InvokeVerb("openas");
     }
 

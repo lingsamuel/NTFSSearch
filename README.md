@@ -1,12 +1,14 @@
 # NTFS Search
 
-Windows NTFS 文件搜索工具，版本 0.19.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
+Windows NTFS 文件搜索工具，版本 0.23.0。桌面界面使用 Tauri 和 Vue，.NET 负责索引和搜索。
 
 ## 使用
 
 Windows 便携版解压后双击「启动搜索.cmd」。启动、搜索、索引状态和升级步骤见[使用说明](manual/README.md)。
 
 关闭搜索窗口后，程序留在托盘继续更新索引。左键点击托盘图标恢复窗口，右键选择「退出」结束程序。
+
+在「设置 → 通用」切换桌面语言，默认跟随 Windows 显示语言。简体中文和英文随程序提供。[翻译贡献指南](docs/localization.md)
 
 ## 搜索
 

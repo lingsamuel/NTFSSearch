@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import type { AdvancedSearchCriteria } from './desktop'
+import { formatCount, t } from './localization'
 
 const props = defineProps<{
   criteria: AdvancedSearchCriteria
@@ -26,8 +27,9 @@ const extensionLimit = ref(extensionPageSize)
 const error = ref('')
 const choices = computed(() => {
   const text = extensionText.value.trim().toLowerCase()
+  const noExtension = t('advanced.noExtension')
   return [...new Set([...props.extensions, ...(draft.value.extensions ?? [])])]
-    .filter(extension => (extension || '无后缀').toLowerCase().includes(text))
+    .filter(extension => (extension || noExtension).toLowerCase().includes(text))
 })
 watch(extensionText, () => { extensionLimit.value = extensionPageSize })
 
@@ -35,13 +37,13 @@ function apply() {
   const { createdFrom, createdThrough, modifiedFrom, modifiedThrough, minSizeBytes, maxSizeBytes, extensions } = draft.value
   if (createdFrom && createdThrough && createdFrom > createdThrough
       || modifiedFrom && modifiedThrough && modifiedFrom > modifiedThrough) {
-    error.value = '起始日期须早于或等于结束日期。'
+    error.value = 'advanced.dateRangeError'
     return
   }
   const min = minSizeBytes ? BigInt(minSizeBytes) : 0n
   const max = maxSizeBytes ? BigInt(maxSizeBytes) : 9223372036854775807n
   if (min > max || max > 9223372036854775807n) {
-    error.value = '请输入有效的文件大小范围。'
+    error.value = 'advanced.sizeRangeError'
     return
   }
   emit('apply', {
@@ -64,58 +66,59 @@ onMounted(() => dialog.value?.showModal())
 <template>
   <dialog ref="dialog" class="advanced-search" aria-labelledby="advanced-title" @cancel.prevent="emit('close')">
     <form @submit.prevent="apply">
-      <h2 id="advanced-title">高级搜索</h2>
+      <h2 id="advanced-title">{{ t('advanced.title') }}</h2>
       <fieldset :disabled="!indexCreationTime">
-        <legend>创建日期</legend>
-        <div v-if="!indexCreationTime" class="advanced-hint">在「设置 → 索引」开启创建时间并重启后可用。</div>
+        <legend>{{ t('advanced.createdDate') }}</legend>
+        <div v-if="!indexCreationTime" class="advanced-hint">{{ t('advanced.creationIndexRequired') }}</div>
         <div v-else class="advanced-range">
-          <label>起始日 <input v-model="draft.createdFrom" name="created-from" type="date" max="9999-12-31"></label>
-          <label>结束日 <input v-model="draft.createdThrough" name="created-through" type="date" max="9999-12-31"></label>
+          <label>{{ t('advanced.startDate') }} <input v-model="draft.createdFrom" name="created-from" type="date" max="9999-12-31"></label>
+          <label>{{ t('advanced.endDate') }} <input v-model="draft.createdThrough" name="created-through" type="date" max="9999-12-31"></label>
         </div>
       </fieldset>
       <fieldset :disabled="!indexModifiedTime">
-        <legend>修改日期</legend>
-        <div v-if="!indexModifiedTime" class="advanced-hint">在「设置 → 索引」开启修改时间并重启后可用。</div>
+        <legend>{{ t('advanced.modifiedDate') }}</legend>
+        <div v-if="!indexModifiedTime" class="advanced-hint">{{ t('advanced.modifiedIndexRequired') }}</div>
         <div v-else class="advanced-range">
-          <label>起始日 <input v-model="draft.modifiedFrom" name="modified-from" type="date" max="9999-12-31"></label>
-          <label>结束日 <input v-model="draft.modifiedThrough" name="modified-through" type="date" max="9999-12-31"></label>
+          <label>{{ t('advanced.startDate') }} <input v-model="draft.modifiedFrom" name="modified-from" type="date" max="9999-12-31"></label>
+          <label>{{ t('advanced.endDate') }} <input v-model="draft.modifiedThrough" name="modified-through" type="date" max="9999-12-31"></label>
         </div>
       </fieldset>
       <fieldset :disabled="!indexFileSize">
-        <legend>文件大小（字节）</legend>
-        <div v-if="!indexFileSize" class="advanced-hint">在「设置 → 索引」开启文件大小并重启后可用。</div>
+        <legend>{{ t('advanced.fileSize') }}</legend>
+        <div v-if="!indexFileSize" class="advanced-hint">{{ t('advanced.sizeIndexRequired') }}</div>
         <div v-else class="advanced-range">
-          <label>最小值 <input v-model="draft.minSizeBytes" name="min-size" inputmode="numeric" pattern="[0-9]+"></label>
-          <label>最大值 <input v-model="draft.maxSizeBytes" name="max-size" inputmode="numeric" pattern="[0-9]+"></label>
+          <label>{{ t('advanced.minSize') }} <input v-model="draft.minSizeBytes" name="min-size" inputmode="numeric" pattern="[0-9]+"></label>
+          <label>{{ t('advanced.maxSize') }} <input v-model="draft.maxSizeBytes" name="max-size" inputmode="numeric" pattern="[0-9]+"></label>
         </div>
       </fieldset>
       <fieldset>
-        <legend>文件后缀</legend>
+        <legend>{{ t('advanced.extensions') }}</legend>
         <div class="advanced-extensions-header">
-          <input v-model="extensionText" type="search" aria-label="查找后缀" placeholder="查找后缀" @keydown.enter.prevent>
-          <span class="advanced-hint">{{ draft.extensions?.length ? `已选 ${draft.extensions.length} 项` : '所有后缀' }}</span>
+          <input v-model="extensionText" type="search" :aria-label="t('advanced.findExtensions')" :placeholder="t('advanced.findExtensions')" @keydown.enter.prevent>
+          <span class="advanced-hint">{{ draft.extensions?.length
+            ? t('advanced.selectedExtensions', { count: formatCount(draft.extensions.length) }) : t('advanced.allExtensions') }}</span>
         </div>
-        <div v-if="!indexReady" class="advanced-hint" role="status">等待索引就绪…</div>
-        <div v-else-if="extensionsPending" class="advanced-hint" role="status">正在读取索引中的后缀…</div>
+        <div v-if="!indexReady" class="advanced-hint" role="status">{{ t('advanced.waitingForIndex') }}</div>
+        <div v-else-if="extensionsPending" class="advanced-hint" role="status">{{ t('advanced.loadingExtensions') }}</div>
         <div v-else-if="extensionsError" class="extension-error">
           <span role="alert">{{ extensionsError }}</span>
-          <button class="outlined-button" type="button" @click="emit('retry')">重试</button>
+          <button class="outlined-button" type="button" @click="emit('retry')">{{ t('common.retry') }}</button>
         </div>
-        <div v-else-if="!choices.length" class="advanced-hint">没有可选后缀</div>
+        <div v-else-if="!choices.length" class="advanced-hint">{{ t('advanced.noExtensions') }}</div>
         <div v-if="choices.length" class="advanced-extensions">
           <label v-for="extension in choices.slice(0, extensionLimit)" :key="extension">
             <input v-model="draft.extensions" type="checkbox" name="file-extension" :value="extension">
-            <span :title="extension">{{ extension || '无后缀' }}</span>
+            <span :title="extension">{{ extension || t('advanced.noExtension') }}</span>
           </label>
         </div>
         <button v-if="choices.length > extensionLimit" class="outlined-button more-extensions" type="button"
-          @click="extensionLimit += extensionPageSize">显示更多后缀</button>
+          @click="extensionLimit += extensionPageSize">{{ t('advanced.moreExtensions') }}</button>
       </fieldset>
-      <p v-if="error" class="advanced-error" role="alert">{{ error }}</p>
+      <p v-if="error" class="advanced-error" role="alert">{{ t(error) }}</p>
       <footer class="advanced-actions">
-        <button class="outlined-button" type="button" @click="clear">清除条件</button>
-        <button class="outlined-button" type="button" @click="emit('close')">取消</button>
-        <button class="outlined-button" type="submit">应用</button>
+        <button class="outlined-button" type="button" @click="clear">{{ t('advanced.clear') }}</button>
+        <button class="outlined-button" type="button" @click="emit('close')">{{ t('common.cancel') }}</button>
+        <button class="outlined-button" type="submit">{{ t('common.apply') }}</button>
       </footer>
     </form>
   </dialog>

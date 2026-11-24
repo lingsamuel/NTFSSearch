@@ -1,3 +1,4 @@
+use crate::localization::{error as localized_error, system_language, text};
 use serde_json::{json, Value};
 use std::{
     env,
@@ -96,18 +97,14 @@ impl Backend {
         }
 
         let mut command = backend_command().map_err(|error| error.to_string())?;
-        let mode = match env::args().nth(1).as_deref() {
-            Some("--desktop-test") => "--desktop-test",
-            Some("--desktop-benchmark") => "--desktop-benchmark",
-            _ => "--desktop",
-        };
+        command.env("NTFS_SEARCH_UI_LANGUAGE", system_language());
         let mut child = command
-            .arg(mode)
+            .arg(crate::desktop_mode())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| format!("无法启动搜索后端（NtfsSearch.Backend.exe）：{error}"))?;
+            .map_err(|error| error.to_string())?;
         let input = child.stdin.take().expect("stdin configured as pipe");
         let output = child.stdout.take().expect("stdout configured as pipe");
         let error_output = child.stderr.take().expect("stderr configured as pipe");
@@ -133,6 +130,11 @@ impl Backend {
                     serde_json::from_str::<Value>(&line).map_err(|error| error.to_string())
                 }) {
                     Ok(message) => {
+                        if message["type"] == "settingsStatus" {
+                            if let Some(language) = message["effectiveLanguage"].as_str() {
+                                crate::update_tray_language(&window, language);
+                            }
+                        }
                         if message["type"] == "quit-complete" {
                             reader_failed.store(true, Ordering::Release);
                             if let Some(error) = message["error"].as_str() {
@@ -146,7 +148,9 @@ impl Backend {
                         if message["scope"] == "fatal" {
                             reader_failed.store(true, Ordering::Release);
                             if reader_quitting.load(Ordering::Acquire) {
-                                let error = message["message"].as_str().unwrap_or("搜索服务异常");
+                                let error = message["message"]
+                                    .as_str()
+                                    .unwrap_or_else(|| text("native.backend.failed"));
                                 show_quit_error(&window, error.to_owned());
                                 return;
                             }
@@ -164,7 +168,7 @@ impl Backend {
                         report_failure(
                             &window,
                             reader_quitting.load(Ordering::Acquire),
-                            format!("无法读取搜索后端响应：{error}"),
+                            localized_error("native.backend.read", error),
                         );
                         return;
                     }
@@ -178,11 +182,11 @@ impl Backend {
                 reader_failed.store(true, Ordering::Release);
                 let quitting = reader_quitting.load(Ordering::Acquire);
                 let message = if quitting {
-                    "搜索后端在完成退出保存前已停止".to_owned()
+                    text("native.backend.stoppedBeforeSave").to_owned()
                 } else if reason.is_empty() {
-                    "搜索后端已退出。".to_owned()
+                    text("native.backend.stopped").to_owned()
                 } else {
-                    format!("无法运行搜索后端。\n{reason}")
+                    localized_error("native.backend.run", reason)
                 };
                 report_failure(&window, quitting, message);
             }
@@ -198,14 +202,20 @@ impl Backend {
     }
 
     pub fn send(&self, request: Value) -> Result<(), String> {
-        let mut process = self.0.lock().map_err(|error| error.to_string())?;
-        let process = process.as_mut().ok_or("搜索后端尚未启动。")?;
-        let mut message = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+        let mut process = self
+            .0
+            .lock()
+            .map_err(|error| localized_error("native.backend.send", error))?;
+        let process = process
+            .as_mut()
+            .ok_or_else(|| text("native.backend.notStarted"))?;
+        let mut message = serde_json::to_vec(&request)
+            .map_err(|error| localized_error("native.backend.send", error))?;
         message.push(b'\n');
         process
             .input
             .write_all(&message)
-            .map_err(|error| error.to_string())
+            .map_err(|error| localized_error("native.backend.send", error))
     }
 
     /// 向仍在运行的后端请求正常关闭。收到确认前保持窗口与通信管道打开。

@@ -42,8 +42,12 @@ internal sealed class MemoryScanWriter(Stream stream, CancellationToken token, I
         CollectorWire.WriteName(rowWriter, name);
     }
 
-    internal void Progress(string message)
-        => frames.WriteAsync(CollectorFrameKind.Progress, writer => writer.Write(message), token).GetAwaiter().GetResult();
+    internal void Progress(NtfsScanStage stage, long count)
+        => frames.WriteAsync(CollectorFrameKind.Progress, writer =>
+        {
+            writer.Write((byte)stage);
+            writer.Write(count);
+        }, token).GetAwaiter().GetResult();
 
     internal void Finish()
     {
@@ -59,10 +63,10 @@ internal sealed class MemoryScanReader(int capacity, IndexMetadata metadata = In
     private readonly IndexBuilder builder = new(capacity, fixedSize: false, metadata, precomputeSort);
     private Dictionary<(string Path, ulong Reference), int> directories = [];
 
-    internal SearchIndex Build(CancellationToken token, IProgress<string>? progress = null)
+    internal SearchIndex Build(CancellationToken token)
     {
         directories = [];
-        return builder.Build(token, progress);
+        return builder.Build(token);
     }
 
     internal void ReadRows(CollectorFrame frame, CancellationToken token)

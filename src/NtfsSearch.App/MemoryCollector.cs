@@ -177,7 +177,7 @@ internal static class MemoryCollector
             var output = new MemoryScanWriter(pipe, lifetime.Token, metadata);
             var progress = new ThrottledProgress(output.Progress);
             long skipped = 0;
-            NtfsEnumerator.ReadRows(volume.Root[0], output.Start, output.Add, lifetime.Token, progress, value => skipped = value,
+            NtfsEnumerator.ReadRows(volume.Root[0], output.Start, output.Add, lifetime.Token, progress.Report, value => skipped = value,
                 NativeJournal.CanonicalPathForMissingPath(data), portableDataOnly: true);
             output.Finish();
             EnsureCurrentVolume(volume);
@@ -233,15 +233,15 @@ internal static class MemoryCollector
     internal static bool IsCollectionError(Exception error)
         => error is IOException or InvalidDataException or UnauthorizedAccessException or Win32Exception or TimeoutException or ArgumentException;
 
-    private sealed class ThrottledProgress(Action<string> report) : IProgress<string>
+    private sealed class ThrottledProgress(Action<NtfsScanStage, long> report)
     {
         private long last;
-        public void Report(string value)
+        internal void Report(NtfsScanStage stage, long count)
         {
             long now = Stopwatch.GetTimestamp();
             if (now - last < Stopwatch.Frequency / 2) return;
             last = now;
-            report(value);
+            report(stage, count);
         }
     }
 }

@@ -16,6 +16,7 @@ public interface IAutomaticVolumeBackend
 public sealed record VolumeStatus(string Root, string Message)
 {
     public bool HasError { get; init; }
+    internal long? LoadedCount { get; init; }
 }
 
 public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, SearchCatalog catalog, int maxConcurrentLoads = 2)
@@ -58,12 +59,12 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
             }
             Volatile.Write(ref statuses, next.ToArray()); StatusChanged?.Invoke();
             var statusGate = new object();
-            void UpdateStatus(int position, string message, bool loaded = false, bool hasError = false)
+            void UpdateStatus(int position, string message, long? loadedCount = null, bool hasError = false)
             {
                 lock (statusGate)
                 {
-                    visible[position] |= loaded;
-                    next[position] = new(volumes[position].Root, message) { HasError = hasError };
+                    visible[position] |= loadedCount.HasValue;
+                    next[position] = new(volumes[position].Root, message) { HasError = hasError, LoadedCount = loadedCount };
                     Volatile.Write(ref statuses, next.ToArray());
                 }
                 StatusChanged?.Invoke();
@@ -98,11 +99,13 @@ public sealed class AutomaticVolumeLoader(IAutomaticVolumeBackend backend, Searc
                     try
                     {
                         if (await backend.LoadAsync(work.Volume, cancellation) is not { } loaded) return;
-                        catalog.PublishLayers(VolumeCache.Key(work.Volume), loaded.Layers ?? [loaded.Index], loaded.Manifest?.SnapshotFile);
+                        var layers = loaded.Layers ?? [loaded.Index];
+                        catalog.PublishLayers(VolumeCache.Key(work.Volume), layers, loaded.Manifest?.SnapshotFile);
                         backend.OnPublished(work.Volume, loaded.Manifest?.SnapshotFile);
                         string repairError = loaded.UsedBackup ? RequestRebuild(work.Volume) : "";
+                        long count = layers.Sum(i => (long)i.VisibleCount);
                         UpdateStatus(work.Position, loaded.UsedBackup ? "缓存损坏，已自动回退上一代，等待重建" + repairError
-                            : $"已加载 {(loaded.Layers ?? [loaded.Index]).Sum(i => (long)i.VisibleCount):N0} 个对象", loaded: true, hasError: loaded.UsedBackup);
+                            : $"已加载 {count:N0} 个对象", loadedCount: count, hasError: loaded.UsedBackup);
                     }
                     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
                     {

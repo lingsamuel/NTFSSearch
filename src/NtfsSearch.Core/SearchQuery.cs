@@ -2,6 +2,14 @@ using System.Text;
 
 namespace NtfsSearch.Core;
 
+// 保留参数异常语义，并让桌面能够按当前语言显示查询限制。
+internal sealed class SearchQueryLimitException(int limit, bool countsCharacters) : ArgumentException(
+    countsCharacters ? $"查询最多 {limit} 个字符。" : $"查询最多 {limit} 个条件。", "text")
+{
+    internal int Limit { get; } = limit;
+    internal bool CountsCharacters { get; } = countsCharacters;
+}
+
 internal static class SearchQuery
 {
     public static string[] Parse(string text)

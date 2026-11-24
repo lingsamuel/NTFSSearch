@@ -1,3 +1,4 @@
+use crate::localization::{error as localized_error, format as localized_format, text};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{
     cell::Cell,
@@ -64,8 +65,15 @@ pub(crate) async fn drag_files(window: WebviewWindow, keys: Vec<String>) -> Resu
         .map(|path| {
             let identity = file_identity(path);
             if identity.is_none() {
-                fs::symlink_metadata(path)
-                    .map_err(|error| format!("无法拖出 {}：{error}", path.display()))?;
+                fs::symlink_metadata(path).map_err(|error| {
+                    localized_format(
+                        "native.drag.path",
+                        &[
+                            ("path", &path.to_string_lossy()),
+                            ("error", &error.to_string()),
+                        ],
+                    )
+                })?;
             }
             Ok(identity)
         })
@@ -85,11 +93,11 @@ pub(crate) async fn drag_files(window: WebviewWindow, keys: Vec<String>) -> Resu
             });
             let _ = completion.try_send(response);
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| localized_error("native.drag.startError", error))?;
     result
         .recv()
         .await
-        .ok_or_else(|| "无法启动文件拖放".to_string())?
+        .ok_or_else(|| text("native.drag.start").to_owned())?
 }
 
 type FileIdentity = (u64, [u8; 16]);
@@ -118,8 +126,11 @@ fn start_drag(
     paths: &[PathBuf],
     identities: &[Option<FileIdentity>],
 ) -> Result<(), String> {
-    let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-    let _ole = OleApartment::enter().map_err(|error| error.to_string())?;
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| localized_error("native.drag.startError", error))?;
+    let _ole =
+        OleApartment::enter().map_err(|error| localized_error("native.drag.startError", error))?;
     // Explorer 可通过桌面下的绝对 PIDL 识别不同父目录中的 Shell 条目。
     // 无法解析为 Shell 条目的路径仍可通过 CF_HDROP 供接收方读取。
     let item_ids = paths
@@ -130,8 +141,10 @@ fn start_drag(
         .as_ref()
         .ok()
         .map(|items| items.iter().map(|id| id.0.cast_const()).collect::<Vec<_>>());
-    let data = file_data_object(paths, id_ptrs.as_deref()).map_err(|error| error.to_string())?;
-    let performed = performed_effect_format().map_err(|error| error.to_string())?;
+    let data = file_data_object(paths, id_ptrs.as_deref())
+        .map_err(|error| localized_error("native.drag.startError", error))?;
+    let performed = performed_effect_format()
+        .map_err(|error| localized_error("native.drag.startError", error))?;
 
     // IPC 调度期间用户可能已松开鼠标。GetAsyncKeyState 读取的是物理按键。
     let primary = if unsafe { GetSystemMetrics(SM_SWAPBUTTON) } == 0 {
@@ -146,7 +159,7 @@ fn start_drag(
     // Shell 负责拖动图像、修饰键与默认效果。取消后绑定返回初始的 DROPEFFECT_NONE。
     let effect =
         unsafe { SHDoDragDrop(Some(hwnd), &data, None, DROPEFFECT_COPY | DROPEFFECT_MOVE) }
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| localized_error("native.drag.startError", error))?;
     if needs_source_cleanup(&data, performed, effect) {
         // 删除前核对源条目仍是起拖时的文件，目标也不能通过修改数据对象替换删除列表。
         if paths
@@ -154,11 +167,11 @@ fn start_drag(
             .zip(identities)
             .any(|(path, &identity)| identity.is_none() || file_identity(path) != identity)
         {
-            return Err("文件已复制，源文件发生变化或无法确认身份，未清理源端".into());
+            return Err(text("native.drag.sourceChanged").into());
         }
         let ids = id_ptrs
             .as_deref()
-            .ok_or("文件已复制，无法识别需要清理的 Shell 条目")?;
+            .ok_or_else(|| text("native.drag.sourceItemsUnknown"))?;
         complete_move(hwnd, ids)?;
     }
     Ok(())
@@ -229,21 +242,21 @@ fn file_data_object(
 fn decode_path(key: &str) -> Result<PathBuf, String> {
     let bytes = STANDARD
         .decode(key)
-        .map_err(|_| "拖放路径标识无效".to_string())?;
+        .map_err(|_| text("native.drag.invalidKey").to_owned())?;
     if bytes.len() % 2 != 0 {
-        return Err("拖放路径标识无效".into());
+        return Err(text("native.drag.invalidKey").into());
     }
     let units: Vec<_> = bytes
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     if units.contains(&0) {
-        return Err("拖放路径包含 NUL".into());
+        return Err(text("native.drag.nullInPath").into());
     }
     // 与后端的路径标识约定一致，保留单独的 UTF-16 代理项和原路径写法。
     let path = PathBuf::from(OsString::from_wide(&units));
     if !path.is_absolute() {
-        return Err("拖放需要文件的绝对路径".into());
+        return Err(text("native.drag.absolutePathRequired").into());
     }
     Ok(path)
 }
@@ -329,8 +342,8 @@ fn complete_move(hwnd: HWND, id_ptrs: &[*const ITEMIDLIST]) -> Result<(), String
     };
     match operation() {
         Ok(aborted) if !aborted.as_bool() => Ok(()),
-        Ok(_) => Err("文件已复制，源端清理未完成".into()),
-        Err(error) => Err(format!("文件已复制，无法清理源端：{error}")),
+        Ok(_) => Err(text("native.drag.sourceCleanupIncomplete").into()),
+        Err(error) => Err(localized_error("native.drag.sourceCleanupError", error)),
     }
 }
 

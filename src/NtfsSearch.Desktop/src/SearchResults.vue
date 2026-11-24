@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { fileMenuActions, type FileAction, type SearchRow, type SortField } from './desktop'
 import { fileExtension, fileTypeIcon, setVisibleFileTypes } from './file-type-icons'
+import { t } from './localization'
 
 const props = defineProps<{
   rows: SearchRow[]
@@ -19,10 +20,10 @@ const emit = defineEmits<{
 }>()
 
 const columns = [
-  { field: 0, name: '名称', css: 'name' },
-  { field: 1, name: '完整路径', css: 'path' },
-  { field: 2, name: '大小', css: 'size' },
-  { field: 3, name: '修改时间', css: 'modified' },
+  { field: 0, label: 'search.nameColumn', css: 'name' },
+  { field: 1, label: 'search.pathColumn', css: 'path' },
+  { field: 2, label: 'search.sizeColumn', css: 'size' },
+  { field: 3, label: 'search.modifiedColumn', css: 'modified' },
 ] as const
 const visibleColumns = computed(() => columns.filter(({ field }) =>
   (field !== 2 || props.indexFileSize) && (field !== 3 || props.indexModifiedTime)))
@@ -419,13 +420,13 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
 </script>
 
 <template>
-  <section class="results-panel" aria-label="搜索结果">
+  <section class="results-panel" :aria-label="t('search.results')">
     <div ref="scroller" class="results-scroll" @scroll="closeMenu" @wheel="scrollHorizontally"
       @pointerdown="startResultDrag" @lostpointercapture="endResultPointer"
       @dragstart.prevent @click.capture="blockDragClick" @dblclick.capture="blockDragClick">
       <table ref="grid" class="results-table" :class="{ resizing: !!columnDrag }"
         :style="columnWidths ? { width: columnWidths.reduce((total, width) => total + width, 0) + 'px' } : undefined"
-        role="grid" aria-label="搜索结果" :aria-busy="pending" aria-multiselectable="true" tabindex="0"
+        role="grid" :aria-label="t('search.results')" :aria-busy="pending" aria-multiselectable="true" tabindex="0"
         :aria-activedescendant="activeIndex >= 0 ? 'result-' + activeIndex : undefined"
         @keydown="handleGridKey" @blur="handleGridBlur">
         <colgroup>
@@ -437,7 +438,7 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
             <th v-for="(column, index) in visibleColumns" :key="column.field" scope="col" :class="{ sorted: sort === column.field }"
               :aria-sort="sort === column.field ? (descending ? 'descending' : 'ascending') : undefined">
               <button type="button" @click="emit('sort', column.field)">
-                <span class="column-label">{{ column.name }}</span>
+                <span class="column-label">{{ t(column.label) }}</span>
                 <span v-if="sort === column.field" class="sort-caret" :class="{ descending }" aria-hidden="true"></span>
               </button>
               <span class="column-resizer" aria-hidden="true" @pointerdown.prevent="startColumnResize($event, index)"
@@ -478,12 +479,12 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
       <slot />
       <p v-if="emptyMessage" role="status">{{ emptyMessage }}</p>
     </div>
-    <div v-if="menu" ref="menuElement" class="file-menu" role="menu" aria-label="文件操作"
+    <div v-if="menu" ref="menuElement" class="file-menu" role="menu" :aria-label="t('file.actions')"
       :style="{ left: menu.left + 'px', top: menu.top + 'px' }" @pointerdown.stop @keydown="handleMenuKey"
       @focusout="(event) => { if (!menuElement?.contains(event.relatedTarget as Node)) closeMenu() }">
       <button v-for="action in fileMenuActions" :key="action.type" type="button" role="menuitem" @click="runAction(action.type, menu.key)">
-        {{ action.label }}
-        <kbd v-if="'shortcut' in action">{{ action.shortcut }}</kbd>
+        {{ t(action.label) }}
+        <kbd v-if="'shortcut' in action">{{ t(action.shortcut) }}</kbd>
       </button>
     </div>
   </section>

@@ -14,6 +14,7 @@ from pathlib import Path
 
 def check_backend(command, env=None, verify_quit=None):
     events = queue.Queue()
+    env = {"NTFS_SEARCH_UI_LANGUAGE": "zh-CN"} | (os.environ if env is None else env)
     with subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           encoding="utf-8", env=env) as backend:
         def read_events():
@@ -30,7 +31,7 @@ def check_backend(command, env=None, verify_quit=None):
             while True:
                 event = events.get(timeout=max(0, deadline - time.monotonic()))
                 assert event is not None, "后端退出前未发送桌面查询结果"
-                assert event["type"] != "error", event
+                assert event["type"] != "error" or "error" in event_types, event
                 if event["type"] in event_types and predicate(event):
                     return event
 
@@ -192,7 +193,53 @@ def check_space_capacity_settings(command):
         print("磁盘容量、兼容旧设置和偏好持久化通过。")
 
 
-if __name__ == "__main__" and sys.argv[1:2] == ["--space-capacity-settings"]:
+def check_localization(command):
+    artifacts = Path(__file__).resolve().parents[1] / "artifacts"
+    artifacts.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=artifacts) as directory:
+        env = os.environ | {"NTFS_SEARCH_TEST_DATA": directory}
+        env.pop("NTFS_SEARCH_PORT", None)
+        settings = Path(directory) / "settings.json"
+        def verify(backend, send, receive):
+            send(dict(type="getSettings"))
+            status = receive("settingsStatus")
+            assert status.get("language") == "auto", status
+            assert status["effectiveLanguage"] == expected_language, status
+            current_language = expected_language
+            for language in ("zh-CN", "en", "auto"):
+                send(dict(type="applySettings", enabled=status["enabled"], port=status["port"],
+                          searchDirectorySizes=True, skipExitIndexSave=True, language=language))
+                saved = receive("settingsStatus", lambda event: not event["busy"] and event.get("language") == language)
+                next_language = expected_language if language == "auto" else language
+                assert saved["effectiveLanguage"] == next_language
+                assert json.loads(settings.read_text(encoding="utf-8"))["Language"] == language
+                if next_language != current_language:
+                    volumes = receive("status", lambda event: event["volumesReady"] == 2)["volumes"]
+                    expected_message = "已加载 1,000 个对象" if next_language == "zh-CN" else "Loaded 1,000 items"
+                    assert next(volume["message"] for volume in volumes if volume["root"] == "C:\\") == expected_message
+                current_language = next_language
+                if language == "en":
+                    for request_id, query, expected in (
+                        (11, "x" * 4097, "Search queries can contain up to 4096 characters."),
+                        (12, " ".join(["x"] * 65), "Search queries can contain up to 64 terms."),
+                    ):
+                        send(dict(type="query", requestId=request_id, text=query))
+                        error = receive("error", lambda event: event["requestId"] == request_id)
+                        assert error["scope"] == "query" and error["message"] == expected, error
+                    send(dict(type="query", requestId=13, text=""))
+                    receive("result", lambda event: event["requestId"] == 13)
+            send(dict(type="quit"))
+            assert receive("quit-complete").get("error") is None
+
+        for system_language, expected_language in (("zh-HK", "zh-CN"), ("en-GB", "en"), ("de-DE", "en")):
+            settings.write_text('{"SkipExitIndexSave":true}', encoding="utf-8")
+            check_backend(command, env | {"NTFS_SEARCH_UI_LANGUAGE": system_language}, verify_quit=verify)
+        print("跟随系统、双语切换和语言偏好持久化通过。")
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["--localization"]:
+    check_localization(sys.argv[2:])
+elif __name__ == "__main__" and sys.argv[1:2] == ["--space-capacity-settings"]:
     check_space_capacity_settings(sys.argv[2:])
 elif __name__ == "__main__":
     command = sys.argv[1:]

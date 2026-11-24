@@ -28,9 +28,10 @@ internal sealed class DesktopSession
     private long refreshGeneration;
     private bool refreshPending;
     private SearchOptions options = new(0, "", SortField.Name, false, true, 0);
-    private string? progress = "正在发现本机 NTFS 磁盘…";
-    private string? indexError;
+    private DesktopText? progress = new("backend.index.discoveringVolumes");
+    private DesktopText? indexError;
     private volatile DesktopSettings settings = new();
+    private volatile DesktopLocale locale = DesktopLocale.Resolve(DesktopSettings.AutomaticLanguage);
     private SettingsStatus settingsStatus = null!;
     private Task<string?>? settingsChange;
     private bool refreshing, discoveryComplete, collectionCancelled, quitRequested;
@@ -40,6 +41,7 @@ internal sealed class DesktopSession
     private SearchResult? displayedResult;
     private SearchOptions? displayedPage;
     private DirectorySizeText[] displayedDirectorySizes = [];
+    private DesktopText? queryLimitError;
 
     internal DesktopSession(SearchHost host, Action<object> publish, string? settingsDirectory,
         bool isDemo)
@@ -51,9 +53,9 @@ internal sealed class DesktopSession
         string? portOverride = Environment.GetEnvironmentVariable(LocalSearchEndpoint.PortVariable);
         // 演示模式仅使用显式启用的服务，避免绑定正式桌面的默认端口。
         enableServiceByDefault = !isDemo || LocalSearchEndpoint.IsPortOverridden(portOverride);
-        searchService = new(host, portOverride);
+        searchService = new(host, portOverride, () => locale);
 #endif
-        spaceAnalysis = new(host, publish, Post);
+        spaceAnalysis = new(host, publish, Post, () => locale);
         directorySizes = new(host.Catalog, host.CaptureAnalysisVolumes, QueueDirectoryRefresh);
     }
 
@@ -87,9 +89,14 @@ internal sealed class DesktopSession
         });
 
         if (settingsDirectory is not null)
-            try { settings = DesktopSettings.Load(settingsDirectory); }
+            try
+            {
+                var loaded = DesktopSettings.Load(settingsDirectory);
+                settings = loaded with { Language = DesktopLocale.NormalizePreference(loaded.Language) };
+                locale = DesktopLocale.Resolve(settings.Language);
+            }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
-            { PublishError("action", "无法读取应用设置：" + error.Message); }
+            { PublishError("action", locale.Text("backend.settings.readFailed", ("detail", error.Message))); }
         // 元数据布局在本进程首次发布前固定，排序缓存可随保存的设置切换。
         host.ConfigureIndex(settings.Metadata, settings.PrecomputeSort);
         directorySizes.SetEnabled(SearchDirectorySizesEnabled);
@@ -97,7 +104,7 @@ internal sealed class DesktopSession
 #if HTTP_SEARCH_SERVICE
         try { await searchService.InitializeAsync(SearchServiceEnabled, settings.SearchServicePort); }
         catch (ArgumentException error)
-        { serviceError = "本机 HTTP 接口启动失败：" + error.Message; }
+        { serviceError = locale.Text("backend.service.startFailed", ("detail", error.Message)); }
         catch (InvalidOperationException error)
         { serviceError = error.Message; }
         if (serviceError is not null) PublishError("action", serviceError);
@@ -137,7 +144,7 @@ internal sealed class DesktopSession
                 try { host.SaveExitSnapshot(exitSave.ReportWritten, exitSave.Token, exitSave.BeginCommit); }
                 catch (OperationCanceledException) when (exitSave.Token.IsCancellationRequested) { }
                 catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException)
-                { exitError = "无法保存退出快照：" + failure.Message; }
+                { exitError = locale.Text("backend.index.exitSnapshotFailed", ("detail", failure.Message)); }
         }
         finally
         {
@@ -162,7 +169,7 @@ internal sealed class DesktopSession
                 try
                 {
                     var request = JsonSerializer.Deserialize<DesktopRequest>(line, JsonSerializerOptions.Web)
-                        ?? throw new JsonException("缺少桌面请求。");
+                        ?? throw new JsonException(locale.Text("backend.request.missing"));
                     // quit 之后只直接处理保存控制，普通工作队列随退出关闭。
                     if (request.Type == "skipExitSave")
                     {
@@ -190,7 +197,7 @@ internal sealed class DesktopSession
         {
             Post(() =>
             {
-                PublishError("fatal", error.Message);
+                PublishError("fatal", locale.Text("backend.index.startFailed", ("detail", error.Message)));
                 messages.Writer.TryComplete();
             });
         }
@@ -201,7 +208,7 @@ internal sealed class DesktopSession
         try
         {
             if (!IndexesFileSize && request.Type is ("spaceAnalysis" or "spacePath" or "spaceDetails" or "spaceExclude" or "spaceRestore"))
-                throw new InvalidOperationException("请在设置中开启「索引文件大小」并重启应用以使用空间分析。");
+                throw new InvalidOperationException(locale.Text("backend.space.enableIndexSize"));
             switch (request.Type)
             {
                 case "query":
@@ -280,7 +287,7 @@ internal sealed class DesktopSession
                 case "rescan":
                     if (refreshing) break;
                     indexError = null;
-                    progress = "正在请求重新扫描…";
+                    progress = new("backend.index.requestingRescan");
                     refreshing = true;
                     collectionCancelled = false;
                     PublishStatus();
@@ -289,7 +296,7 @@ internal sealed class DesktopSession
                 case "cancel":
                     host.CancelCollection();
                     collectionCancelled = true;
-                    progress = "已取消采集。";
+                    progress = new("backend.index.collectionCancelled");
                     PublishStatus();
                     break;
                 case "open":
@@ -299,10 +306,10 @@ internal sealed class DesktopSession
                     break;
                 case "copy":
                     DesktopFileActions.Copy(request.Key, request.WindowHandle);
-                    publish(new { Type = "notice", Message = "已复制完整路径" });
+                    publish(new { Type = "notice", Message = locale.Text("backend.action.copiedPath") });
                     break;
                 default:
-                    throw new ArgumentException("未知的桌面操作。");
+                    throw new ArgumentException(locale.Text("backend.request.unknown"));
             }
         }
         catch (Exception error) { PublishError("action", error.Message); }
@@ -310,7 +317,7 @@ internal sealed class DesktopSession
 
     private async Task RunShellActionAsync(DesktopRequest request)
     {
-        try { await DesktopFileActions.RunShellActionAsync(request.Type, request.Key); }
+        try { await DesktopFileActions.RunShellActionAsync(request.Type, request.Key, locale); }
         catch (Exception error) { Post(() => PublishError("action", error.Message)); }
     }
 
@@ -354,7 +361,7 @@ internal sealed class DesktopSession
         Post(() =>
         {
             refreshing = false;
-            if (error is not null) indexError = error;
+            if (error is not null) indexError = new("backend.index.rescanFailed", ("detail", error));
             progress = null;
             PublishStatus();
         });
@@ -362,6 +369,7 @@ internal sealed class DesktopSession
 
     private void RunQuery()
     {
+        queryLimitError = null;
         queryState.RequestUser();
         refreshPending = false;
         refreshGeneration++;
@@ -437,7 +445,7 @@ internal sealed class DesktopSession
         bool includeDirectorySizes)
     {
         SearchResult? result = null;
-        string? failure = null;
+        Exception? failure = null;
         int offset = snapshot.Offset;
         try
         {
@@ -452,7 +460,7 @@ internal sealed class DesktopSession
             }
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested) { }
-        catch (Exception error) { failure = error.Message; }
+        catch (Exception error) { failure = error; }
         finally
         {
             if (request.UserInitiated)
@@ -468,7 +476,14 @@ internal sealed class DesktopSession
             source.Dispose();
             if (queryState.Complete(request, !cancelled && failure is null ? result?.Elapsed : null) && !cancelled)
             {
-                if (failure is not null) PublishError(request.UserInitiated ? "query" : "refresh", failure, snapshot.RequestId);
+                if (failure is not null)
+                {
+                    DesktopText? limitError = failure is SearchQueryLimitException limit
+                        ? new(limit.CountsCharacters ? "backend.search.maxCharacters" : "backend.search.maxTerms", ("limit", limit.Limit))
+                        : null;
+                    if (request.UserInitiated) queryLimitError = limitError;
+                    PublishError(request.UserInitiated ? "query" : "refresh", locale.Text(limitError) ?? failure.Message, snapshot.RequestId);
+                }
                 else if (result is not null)
                 {
                     options = snapshot with { Offset = offset };
@@ -520,7 +535,7 @@ internal sealed class DesktopSession
         {
             var source = folders[index];
             if (host.Catalog.FindVolume(source.Volume.Id) != source.Volume) continue;
-            var size = ReadDirectorySize(source, source.Volume.DirectorySizes);
+            var size = ReadDirectorySize(source, page.Sort == SortField.Size ? source.SortSizes : source.Volume.DirectorySizes);
             if (displayedDirectorySizes[index] == size) continue;
             displayedDirectorySizes[index] = size;
             var row = displayedResult.Rows[source.PageIndex];
@@ -532,15 +547,15 @@ internal sealed class DesktopSession
         if (changes.Count != 0) publish(new { Type = "directorySizes", page.RequestId, Rows = changes });
     }
 
-    private static DirectorySizeText ReadDirectorySize(DirectorySearchRow source, DirectorySizeOrder[]? orders)
+    private DirectorySizeText ReadDirectorySize(DirectorySearchRow source, DirectorySizeOrder[]? orders)
     {
         return orders switch
         {
             { Length: > 0 } sizes when sizes[source.Layer].GetSize(source.Row) is Int128 bytes =>
                 new(FileSizeDisplay.Format(bytes), $"{bytes:N0} B", null),
-            { Length: > 0 } => new("—", null, "部分后代文件大小未知"),
-            { Length: 0 } => new("—", null, "目录大小统计失败"),
-            _ when source.Volume.SupportsDirectorySizes => new("—", null, "正在计算目录大小"),
+            { Length: > 0 } => new("—", null, locale.Text("backend.directorySize.unknownChildren")),
+            { Length: 0 } => new("—", null, locale.Text("backend.directorySize.failed")),
+            _ when source.Volume.SupportsDirectorySizes => new("—", null, locale.Text("backend.directorySize.calculating")),
             _ => new("—", null, null)
         };
     }
@@ -552,14 +567,14 @@ internal sealed class DesktopSession
         var metrics = host.Metrics;
         publish(new
         {
-            Type = "status", Volumes = host.Statuses,
+            Type = "status", Volumes = host.ReadDesktopStatuses(locale),
             Indexed = host.Catalog.Count, VolumesReady = host.Catalog.VolumeCount,
             Active = metrics?.ActiveRoots.Length ?? 0,
             ScanLimit = metrics?.ScanLimit,
             Refreshing = refreshing, DiscoveryComplete = discoveryComplete, CollectionCancelled = collectionCancelled,
             settings.SkipExitIndexSave, IndexFileSize = IndexesFileSize, IndexModifiedTime = IndexesModifiedTime,
             IndexCreationTime = IndexesCreationTime,
-            Progress = progress, Error = indexError
+            Progress = locale.Text(progress), Error = locale.Text(indexError)
         });
     }
 
@@ -591,8 +606,17 @@ internal sealed class DesktopSession
                 }
                 else
                 {
+                    var previousLocale = locale;
+                    locale = DesktopLocale.Resolve(settings.Language);
                     RefreshDirectorySizePreference();
                     PublishSettingsStatus(error);
+                    if (locale != previousLocale)
+                    {
+                        PublishStatus();
+                        if (displayedPage == options) PublishDirectorySizes(options);
+                        if (queryLimitError is { } limitError) PublishError("query", locale.Text(limitError), options.RequestId);
+                        spaceAnalysis.RefreshLocale();
+                    }
                 }
                 RunNextSettingsChange();
             });
@@ -609,7 +633,7 @@ internal sealed class DesktopSession
     private Task ApplySettingsAsync(DesktopRequest request)
     {
         if (request.SearchDirectorySizes is not bool includeDirectories)
-            throw new ArgumentException("设置项不完整。");
+            throw new ArgumentException(locale.Text("backend.settings.incomplete"));
         var next = settings with
         {
             SearchDirectorySizes = includeDirectories,
@@ -620,10 +644,11 @@ internal sealed class DesktopSession
             IndexFileSize = request.IndexFileSize ?? settings.IndexFileSize,
             ShowSpaceVolumeCapacity = request.ShowSpaceVolumeCapacity ?? settings.ShowSpaceVolumeCapacity,
             SpaceVolumeShowFree = request.SpaceVolumeShowFree ?? settings.SpaceVolumeShowFree,
-            SpaceVolumeCapacityBar = request.SpaceVolumeCapacityBar ?? settings.SpaceVolumeCapacityBar
+            SpaceVolumeCapacityBar = request.SpaceVolumeCapacityBar ?? settings.SpaceVolumeCapacityBar,
+            Language = request.Language is null ? settings.Language : DesktopLocale.NormalizePreference(request.Language)
         };
 #if HTTP_SEARCH_SERVICE
-        if (request.Enabled is not bool enable) throw new ArgumentException("设置项不完整。");
+        if (request.Enabled is not bool enable) throw new ArgumentException(locale.Text("backend.settings.incomplete"));
         if (enable != SearchServiceEnabled || request.Port != settings.SearchServicePort)
             return searchService.ApplyAsync(enable, request.Port,
                 () => SaveSettings(next with { SearchServiceEnabled = enable, SearchServicePort = request.Port }));
@@ -657,7 +682,7 @@ internal sealed class DesktopSession
             Busy: false, error, settings.SearchDirectorySizes, settings.SkipExitIndexSave,
             settings.PrecomputeSort, settings.IndexCreationTime, settings.IndexModifiedTime, settings.IndexFileSize,
             settings.Metadata != host.Metadata, settings.ShowSpaceVolumeCapacity, settings.SpaceVolumeShowFree,
-            settings.SpaceVolumeCapacityBar);
+            settings.SpaceVolumeCapacityBar, settings.Language, locale.Tag);
         publish(settingsStatus);
     }
 
@@ -771,7 +796,7 @@ internal sealed class DesktopSession
             host.SortPrecompute.SetEnabled(next.PrecomputeSort);
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
-        { throw new IOException("无法保存应用设置：" + failure.Message, failure); }
+        { throw new IOException(locale.Text("backend.settings.saveFailed", ("detail", failure.Message)), failure); }
     }
 
     private void PublishError(string scope, string message, long? requestId = null) =>
@@ -783,7 +808,7 @@ internal sealed class DesktopSession
     private sealed record SettingsStatus(bool SearchServiceAvailable, bool Enabled, int Port, string? Address, bool PortOverridden,
         bool Running, bool Busy, string? Error, bool SearchDirectorySizes, bool SkipExitIndexSave,
         bool PrecomputeSort, bool IndexCreationTime, bool IndexModifiedTime, bool IndexFileSize, bool IndexRestartRequired,
-        bool ShowSpaceVolumeCapacity, bool SpaceVolumeShowFree, bool SpaceVolumeCapacityBar)
+        bool ShowSpaceVolumeCapacity, bool SpaceVolumeShowFree, bool SpaceVolumeCapacityBar, string Language, string EffectiveLanguage)
     {
         public string Type => "settingsStatus";
     }
@@ -797,5 +822,5 @@ internal sealed class DesktopSession
         bool? IndexModifiedTime = null, bool? IndexFileSize = null, bool? ShowSpaceVolumeCapacity = null,
         bool? SpaceVolumeShowFree = null, bool? SpaceVolumeCapacityBar = null, bool IncludeFiles = true, bool IncludeDirectories = true,
         long? MinSizeBytes = null, long? MaxSizeBytes = null, DateOnly? CreatedFrom = null, DateOnly? CreatedThrough = null,
-        DateOnly? ModifiedFrom = null, DateOnly? ModifiedThrough = null);
+        DateOnly? ModifiedFrom = null, DateOnly? ModifiedThrough = null, string? Language = null);
 }

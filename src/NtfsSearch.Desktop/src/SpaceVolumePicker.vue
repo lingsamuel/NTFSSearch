@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { defaultSpaceVolumeSettings, formatPercent, type SpaceVolumeCapacity, type SpaceVolumeSettings } from './desktop'
+import { defaultSpaceVolumeSettings, type SpaceVolumeCapacity, type SpaceVolumeSettings } from './desktop'
+import { formatPercent, t } from './localization'
 
 const props = defineProps<{
   roots: string[]
@@ -23,7 +24,7 @@ const options = computed(() => props.roots.map(root => {
   const size = showFree ? capacity.freeText : capacity.usedText
   return {
     root,
-    text: `${size} / ${capacity.totalText} (${formatPercent(fraction)})`,
+    text: t('space.volumeCapacity', { size, total: capacity.totalText, percent: formatPercent(fraction) }),
     fill: settings.value.spaceVolumeCapacityBar ? { '--volume-fill': `${fraction * 100}%` } : undefined,
   }
 }))
@@ -91,17 +92,17 @@ function dismissOnBlur(event: FocusEvent) {
 
 <template>
   <div ref="picker" class="space-volume-picker" @focusout="dismissOnBlur">
-    <button ref="trigger" type="button" class="scope-select volume-trigger" aria-label="分析磁盘"
+    <button ref="trigger" type="button" class="scope-select volume-trigger" :aria-label="t('space.volume')"
       aria-haspopup="listbox" aria-controls="space-volume-options" aria-describedby="space-volume-selection"
       :aria-expanded="open" :disabled="!options.length" :style="selected?.fill" @click="toggleMenu"
       @keydown.down.prevent="openMenu" @keydown.up.prevent="openMenu">
       <span id="space-volume-selection" class="volume-label">
-        <span>{{ selected?.root ?? (options.length ? '选择磁盘' : '等待索引') }}</span>
+        <span>{{ selected?.root ?? t(options.length ? 'space.selectVolume' : 'index.waiting') }}</span>
         <span v-if="selected?.text" class="volume-capacity">{{ selected.text }}</span>
       </span>
       <span class="chevron up flipped" aria-hidden="true"></span>
     </button>
-    <div id="space-volume-options" ref="menu" class="volume-options" popover role="listbox" aria-label="分析磁盘"
+    <div id="space-volume-options" ref="menu" class="volume-options" popover role="listbox" :aria-label="t('space.volume')"
       @toggle="open = $event.newState === 'open'" @keydown="navigate">
       <button v-for="option in options" :key="option.root" type="button" role="option" tabindex="-1"
         class="volume-label" :aria-selected="option.root === root" :style="option.fill" @click="select(option.root)"

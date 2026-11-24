@@ -6,8 +6,9 @@ import SearchResults from './SearchResults.vue'
 import Settings from './Settings.vue'
 import SpaceAnalysis from './SpaceAnalysis.vue'
 import { applyFileTypeIcons, resetFileTypeIconRequest } from './file-type-icons'
+import { formatCount, formatMilliseconds, setLanguage, t } from './localization'
 import {
-  dragFiles, formatCount, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
+  dragFiles, listenToBackend, listenToOpenSettings, listenToSearchActivation, sendRequest, startBackend,
   type AdvancedSearchCriteria,
   type DesktopMessage, type DesktopRequest, type FileAction, type IndexStatus, type SearchResult, type SearchRow, type SortField,
   type SettingsRequest, type SettingsStatus, type SettingsTab, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion,
@@ -55,7 +56,7 @@ const showingSettings = ref(false)
 const keepSettingsDraft = ref(false)
 const settingsPanel = ref<InstanceType<typeof Settings>>()
 const settingsStatus = shallowRef<SettingsStatus>()
-const settingsTab = ref<SettingsTab>('search')
+const settingsTab = ref<SettingsTab>('general')
 const settingsPending = ref(false)
 const settingsError = ref('')
 let requestId = Date.now()
@@ -85,17 +86,17 @@ const savePhase = computed(() => {
   return phase === 'writing' && skipSavePending.value ? 'skipping' : phase
 })
 const saveLabels = {
-  writing: '正在保存退出快照',
-  skipping: '正在跳过本次保存…',
-  committing: '正在完成保存…',
+  writing: 'app.exitSaveWriting',
+  skipping: 'app.exitSaveSkipping',
+  committing: 'app.exitSaveCommitting',
 }
-const spaceUnavailable = '空间分析需要启用「索引文件大小」。'
+const spaceUnavailable = computed(() => t('space.indexSizeRequired'))
 const page = computed(() => result.value ? Math.floor(result.value.offset / result.value.pageSize) + 1 : 1)
 const pages = computed(() => result.value ? Math.max(1, Math.ceil(result.value.total / result.value.pageSize)) : 1)
 const canPage = computed(() => connected.value && !pending.value && !queryError.value)
 const resultTypesLabel = computed(() => {
-  if (includeDirectories.value) return includeFiles.value ? '全部' : '文件夹'
-  return includeFiles.value ? '文件' : '无'
+  if (includeDirectories.value) return t(includeFiles.value ? 'search.typeAll' : 'search.typeFolders')
+  return t(includeFiles.value ? 'search.typeFiles' : 'search.typeNone')
 })
 const advancedCount = computed(() => {
   const criteria = advanced.value
@@ -109,19 +110,21 @@ const advancedCount = computed(() => {
 const emptyMessage = computed(() => {
   if (fatal.value) return ''
   if (queryError.value) return queryError.value
-  if (pending.value || !result.value) return '正在搜索…'
-  if (hasAvailableIndex.value) return '没有匹配的文件或文件夹'
+  if (pending.value || !result.value) return t('search.searching')
+  if (hasAvailableIndex.value) return t('search.noResults')
   if (indexStatus.value?.error || indexStatus.value?.volumes.some(volume => volume.hasError))
-    return '暂无可搜索的索引，请查看底栏的索引状态'
-  if (indexStatus.value?.collectionCancelled) return '采集已取消，可从索引状态重新扫描'
-  if (indexStatus.value?.discoveryComplete && !indexStatus.value.volumes.length) return '未发现可用的 NTFS 磁盘'
-  return '正在加载磁盘索引，完成后会自动显示结果'
+    return t('search.indexUnavailable')
+  if (indexStatus.value?.collectionCancelled) return t('search.collectionCancelled')
+  if (indexStatus.value?.discoveryComplete && !indexStatus.value.volumes.length) return t('index.noVolumes')
+  return t('search.loadingIndex')
 })
 const resultLabel = computed(() => {
-  if (pending.value) return '正在搜索…'
-  if (hasAvailableIndex.value && result.value) return `${formatCount(result.value.total)} 项结果`
-  return '等待索引'
+  if (pending.value) return t('search.searching')
+  if (hasAvailableIndex.value && result.value) return t('search.resultCount', { count: formatCount(result.value.total) })
+  return t('index.waiting')
 })
+const directorySortStatus = computed(() => t(result.value?.directorySortPending
+  ? 'search.directorySortPending' : 'search.directorySortFailed'))
 
 function showFeedback(message: string, error = false) {
   clearTimeout(noticeTimer)
@@ -161,6 +164,7 @@ function receive(message: DesktopMessage) {
     }
     case 'settingsStatus':
       settingsStatus.value = message
+      setLanguage(message.effectiveLanguage)
       settingsPending.value = message.busy
       if (indexStatus.value) indexStatus.value = { ...indexStatus.value, skipExitIndexSave: message.skipExitIndexSave }
       break
@@ -230,7 +234,7 @@ function receive(message: DesktopMessage) {
       if (message.error) {
         saving.value = undefined
         connected.value = false
-        showFeedback(message.error + '。可从托盘菜单再次选择「退出」。', true)
+        showFeedback(t('app.exitFailed', { error: message.error }), true)
       }
       break
   }
@@ -364,7 +368,7 @@ function applyAdvancedSearch(criteria: AdvancedSearchCriteria) {
   closeAdvancedSearch()
 }
 
-function openSettings(tab: SettingsTab = 'search') {
+function openSettings(tab: SettingsTab = 'general') {
   if (showingSettings.value || showingAdvanced.value || saving.value) return
   searchMenu.value?.hidePopover()
   toolsMenu.value?.hidePopover()
@@ -544,44 +548,44 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="workspace" @keydown="handleShortcut" @contextmenu.prevent>
-    <nav v-show="!showingSettings" class="top-menu" aria-label="应用菜单" :inert="showingAdvanced || !!saving">
-      <button type="button" popovertarget="search-menu" @click="positionMenu">搜索</button>
-      <div id="search-menu" ref="searchMenu" class="file-menu anchored-menu" popover role="group" aria-label="搜索命令">
-        <button type="button" autofocus @click="openAdvancedSearch">高级搜索…</button>
+    <nav v-show="!showingSettings" class="top-menu" :aria-label="t('menu.app')" :inert="showingAdvanced || !!saving">
+      <button type="button" popovertarget="search-menu" @click="positionMenu">{{ t('common.search') }}</button>
+      <div id="search-menu" ref="searchMenu" class="file-menu anchored-menu" popover role="group" :aria-label="t('menu.searchCommands')">
+        <button type="button" autofocus @click="openAdvancedSearch">{{ t('menu.advancedSearch') }}</button>
         <div class="menu-separator" role="separator"></div>
-        <button type="button" aria-label="匹配完整路径" :aria-pressed="matchPath" @click="setMatchPath(true)">
-          匹配完整路径 <span v-if="matchPath" class="menu-check" aria-hidden="true">✓</span>
+        <button type="button" :aria-label="t('search.matchPath')" :aria-pressed="matchPath" @click="setMatchPath(true)">
+          {{ t('search.matchPath') }} <span v-if="matchPath" class="menu-check" aria-hidden="true">✓</span>
         </button>
-        <button type="button" aria-label="仅匹配名称" :aria-pressed="!matchPath" @click="setMatchPath(false)">
-          仅匹配名称 <span v-if="!matchPath" class="menu-check" aria-hidden="true">✓</span>
+        <button type="button" :aria-label="t('search.matchName')" :aria-pressed="!matchPath" @click="setMatchPath(false)">
+          {{ t('search.matchName') }} <span v-if="!matchPath" class="menu-check" aria-hidden="true">✓</span>
         </button>
       </div>
-      <button type="button" popovertarget="tools-menu" @click="positionMenu">工具</button>
-      <div id="tools-menu" ref="toolsMenu" class="file-menu anchored-menu" popover role="group" aria-label="工具命令">
-        <button type="button" autofocus @click="openSettings()">设置…</button>
+      <button type="button" popovertarget="tools-menu" @click="positionMenu">{{ t('menu.tools') }}</button>
+      <div id="tools-menu" ref="toolsMenu" class="file-menu anchored-menu" popover role="group" :aria-label="t('menu.toolCommands')">
+        <button type="button" autofocus @click="openSettings()">{{ t('menu.settings') }}</button>
       </div>
     </nav>
     <div class="workspace-content" :class="{ 'settings-open': showingSettings }" :inert="showingSettings || !!saving">
       <header v-show="!showingSpace" class="search-toolbar">
         <div class="search-field">
           <span class="search-glyph" aria-hidden="true"></span>
-          <input ref="queryInput" v-model="text" type="text" aria-label="搜索文件和文件夹" placeholder="搜索文件和文件夹"
-            autocomplete="off" spellcheck="false" title="空格分隔搜索条件，双引号匹配含空格的连续文字"
+          <input ref="queryInput" v-model="text" type="text" :aria-label="t('search.input')" :placeholder="t('search.input')"
+            autocomplete="off" spellcheck="false" :title="t('search.inputHint')"
             @keydown.down.prevent="resultsTable?.focusSelection()">
-          <button v-if="text" type="button" class="clear-search" title="清空搜索" aria-label="清空搜索" @click="clearQuery">×</button>
+          <button v-if="text" type="button" class="clear-search" :title="t('search.clear')" :aria-label="t('search.clear')" @click="clearQuery">×</button>
         </div>
         <button id="result-type-toggle" type="button" class="outlined-button type-toggle"
-          :class="{ 'type-selected': resultTypesLabel !== '全部' }" :aria-label="'结果类型 ' + resultTypesLabel"
+          :class="{ 'type-selected': !includeFiles || !includeDirectories }" :aria-label="t('search.resultTypeSelection', { selection: resultTypesLabel })"
           popovertarget="result-type-menu" @click="positionMenu">
           <span>{{ resultTypesLabel }}</span><i class="menu-caret" aria-hidden="true"></i>
         </button>
-        <div id="result-type-menu" ref="typeMenu" class="file-menu anchored-menu type-menu" popover role="group" aria-label="结果类型">
-          <label><input v-model="includeDirectories" name="include-directories" type="checkbox" autofocus>文件夹</label>
-          <label><input v-model="includeFiles" name="include-files" type="checkbox">文件</label>
+        <div id="result-type-menu" ref="typeMenu" class="file-menu anchored-menu type-menu" popover role="group" :aria-label="t('search.resultType')">
+          <label><input v-model="includeDirectories" name="include-directories" type="checkbox" autofocus>{{ t('search.typeFolders') }}</label>
+          <label><input v-model="includeFiles" name="include-files" type="checkbox">{{ t('search.typeFiles') }}</label>
         </div>
-        <button type="button" class="outlined-button toolbar-button" aria-label="空间分析"
+        <button type="button" class="outlined-button toolbar-button" :aria-label="t('common.spaceAnalysis')"
           :disabled="!canViewSpace" :title="indexFileSize ? undefined : spaceUnavailable"
-          :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="openSpace">空间分析</button>
+          :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="openSpace">{{ t('common.spaceAnalysis') }}</button>
       </header>
 
       <SearchResults v-show="!showingSpace" ref="resultsTable" :rows="fatal ? [] : result?.rows ?? []"
@@ -589,30 +593,30 @@ onBeforeUnmount(() => {
         :index-file-size="indexFileSize" :index-modified-time="indexModifiedTime"
         @sort="sortBy" @action="fileAction" @drag="startFileDrag">
         <div v-if="fatal" class="startup-error" role="alert">
-          <strong>搜索服务异常</strong>
+          <strong>{{ t('search.serviceError') }}</strong>
           <span>{{ fatal }}</span>
-          <button type="button" class="outlined-button" @click="connect">重试</button>
+          <button type="button" class="outlined-button" @click="connect">{{ t('common.retry') }}</button>
         </div>
       </SearchResults>
 
       <footer v-show="!showingSpace" class="status-bar">
         <div class="result-summary" aria-live="polite" aria-atomic="true">
           <span class="result-count">{{ resultLabel }}</span>
-          <span v-if="advancedCount" class="query-time">高级筛选 {{ advancedCount }} 项</span>
-          <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" title="用户查询耗时">
-            {{ result.userMilliseconds.toFixed(2) }} ms
+          <span v-if="advancedCount" class="query-time">{{ t('search.filterCount', { count: formatCount(advancedCount) }) }}</span>
+          <span v-if="hasAvailableIndex && result?.userMilliseconds != null" class="query-time" :title="t('search.queryTime')">
+            {{ t('search.queryMilliseconds', { time: formatMilliseconds(result.userMilliseconds) }) }}
           </span>
           <span v-if="indexFileSize && !pending && (result?.directorySortPending || result?.directorySortFailed)" class="directory-sort-status"
-            :title="result.directorySortPending ? '正在计算目录大小，排序待更新' : '部分目录大小统计失败'">
-            {{ result.directorySortPending ? '正在计算目录大小，排序待更新' : '部分目录大小统计失败' }}
+            :title="directorySortStatus">
+            {{ directorySortStatus }}
           </span>
         </div>
-        <div class="page-controls" aria-label="分页">
-          <button type="button" title="上一页" aria-label="上一页" :disabled="!canPage || page <= 1" @click="turnPage(-1)">
+        <div class="page-controls" :aria-label="t('search.pagination')">
+          <button type="button" :title="t('search.previousPage')" :aria-label="t('search.previousPage')" :disabled="!canPage || page <= 1" @click="turnPage(-1)">
             <span class="chevron left" aria-hidden="true"></span>
           </button>
-          <span class="page-number" aria-label="当前页和总页数">{{ formatCount(page) }} / {{ formatCount(pages) }}</span>
-          <button type="button" title="下一页" aria-label="下一页" :disabled="!canPage || page >= pages" @click="turnPage(1)">
+          <span class="page-number" :aria-label="t('search.pageNumber')">{{ t('search.pageFraction', { page: formatCount(page), total: formatCount(pages) }) }}</span>
+          <button type="button" :title="t('search.nextPage')" :aria-label="t('search.nextPage')" :disabled="!canPage || page >= pages" @click="turnPage(1)">
             <span class="chevron right" aria-hidden="true"></span>
           </button>
         </div>
@@ -639,16 +643,16 @@ onBeforeUnmount(() => {
       :connected="connected" :error="fatal || settingsError" @close="closeSettings" @request="requestSettings" />
     <div v-if="!saving && (notice || actionError)" class="operation-feedback" :class="{ error: actionError }" :role="actionError ? 'alert' : 'status'">
       <span>{{ actionError || notice }}</span>
-      <button v-if="actionError" type="button" aria-label="关闭提示" @click="actionError = ''">×</button>
+      <button v-if="actionError" type="button" :aria-label="t('app.dismissNotice')" @click="actionError = ''">×</button>
     </div>
     <div v-if="saving" class="save-overlay">
       <div>
-        <strong role="status">{{ saveLabels[savePhase] }}</strong>
+        <strong role="status">{{ t(saveLabels[savePhase]) }}</strong>
         <progress v-if="saving.total" :value="saving.written" :max="saving.total"
-          :aria-label="'已保存 ' + saving.written + ' 个卷，共 ' + saving.total + ' 个卷'"></progress>
+          :aria-label="t('app.exitSaveProgress', { written: formatCount(saving.written), total: formatCount(saving.total) })"></progress>
         <span v-if="actionError" class="save-error" role="alert">{{ actionError }}</span>
         <button ref="skipSaveButton" type="button" class="outlined-button" :disabled="savePhase !== 'writing'"
-          @click="skipExitSave">此次不保存</button>
+          @click="skipExitSave">{{ t('app.skipExitSave') }}</button>
       </div>
     </div>
   </main>

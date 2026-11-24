@@ -14,9 +14,9 @@ export interface AdvancedSearchCriteria {
 
 export type FileAction = 'open' | 'openWith' | 'reveal' | 'copy'
 export const fileMenuActions = [
-  { type: 'open', label: '打开', shortcut: 'Enter' },
-  { type: 'reveal', label: '打开所在目录' },
-  { type: 'copy', label: '复制完整路径', shortcut: 'Ctrl+C' },
+  { type: 'open', label: 'file.open', shortcut: 'file.shortcutEnter' },
+  { type: 'reveal', label: 'file.reveal' },
+  { type: 'copy', label: 'file.copyPath', shortcut: 'file.shortcutCopy' },
 ] as const
 
 export interface SearchRow {
@@ -122,7 +122,7 @@ export const defaultSpaceVolumeSettings: SpaceVolumeSettings = {
   showSpaceVolumeCapacity: true, spaceVolumeShowFree: false, spaceVolumeCapacityBar: true,
 }
 
-export type SettingsTab = 'search' | 'index' | 'space' | 'service'
+export type SettingsTab = 'general' | 'search' | 'index' | 'space' | 'service'
 
 interface IndexSettings {
   precomputeSort?: boolean
@@ -133,6 +133,8 @@ interface IndexSettings {
 
 export interface SettingsStatus extends IndexSettings, SpaceVolumeSettings {
   type: 'settingsStatus'
+  language: string
+  effectiveLanguage: string
   searchDirectorySizes: boolean
   skipExitIndexSave: boolean
   indexRestartRequired: boolean
@@ -148,7 +150,7 @@ export interface SettingsStatus extends IndexSettings, SpaceVolumeSettings {
 
 export type SettingsRequest =
   | { type: 'getSettings' | 'restartSearchService' }
-  | ({ type: 'applySettings'; enabled?: boolean; port?: number; searchDirectorySizes: boolean; skipExitIndexSave: boolean }
+  | ({ type: 'applySettings'; enabled?: boolean; port?: number; language?: string; searchDirectorySizes: boolean; skipExitIndexSave: boolean }
     & IndexSettings & SpaceVolumeSettings)
 
 export type DesktopMessage =
@@ -208,6 +210,3 @@ export function startBackend() {
 export function sendRequest(request: DesktopRequest) {
   return invoke('send_request', { request })
 }
-
-export const formatCount = new Intl.NumberFormat('zh-CN').format
-export const formatPercent = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 2 }).format

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SpaceVolumePicker from './SpaceVolumePicker.vue'
-import { fileMenuActions, formatCount, formatPercent, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry,
+import { fileMenuActions, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry,
   type SpaceExclusion, type SpaceVolumeCapacity, type SpaceVolumeSettings } from './desktop'
+import { formatCount, formatPercent, t } from './localization'
 import { layoutSpaceItems } from './space-treemap'
 
 const props = defineProps<{
@@ -192,16 +193,16 @@ function clearFlashes() {
 }
 
 const message = computed(() => {
-  if (props.error) return '无法分析空间：' + props.error
-  if (props.pending) return '正在汇总目录大小…'
-  if (folder.value?.isEmpty) return '当前目录为空'
-  if (folder.value?.bytes === '0') return '当前目录的已知逻辑大小为 0 B'
+  if (props.error) return props.error
+  if (props.pending) return t('space.loading')
+  if (folder.value?.isEmpty) return t('space.emptyFolder')
+  if (folder.value?.bytes === '0') return t('space.zeroBytes')
   if (folder.value) return ''
   if (props.indexStatus?.error || props.indexStatus?.volumes.some(volume => volume.hasError))
-    return '暂无可用索引，可返回搜索查看索引状态'
-  if (props.indexStatus?.collectionCancelled) return '采集已取消，暂无可用索引'
-  if (props.indexStatus?.discoveryComplete && !props.indexStatus.volumes.length) return '未发现可用的 NTFS 磁盘'
-  return '正在等待磁盘索引'
+    return t('space.indexUnavailable')
+  if (props.indexStatus?.collectionCancelled) return t('space.collectionCancelled')
+  if (props.indexStatus?.discoveryComplete && !props.indexStatus.volumes.length) return t('index.noVolumes')
+  return t('space.waitingForIndex')
 })
 
 function itemKey(item: SpaceEntry) {
@@ -209,13 +210,13 @@ function itemKey(item: SpaceEntry) {
 }
 
 function sizeAndShare(tile: Tile) {
-  return tile.item.sizeText + ' (' + formatPercent(tile.fraction) + ')'
+  return t('space.sizeAndShare', { size: tile.item.sizeText, percent: formatPercent(tile.fraction) })
 }
 
 function tileTitle(tile: Tile, includeShare = false) {
   const { item } = tile
-  const name = item.key ? item.name : '其他 ' + formatCount(item.count) + ' 项'
-  return name + ' · ' + (includeShare ? sizeAndShare(tile) : item.sizeText)
+  const name = item.key ? item.name : t('space.otherItems', { count: formatCount(item.count) })
+  return t('space.tileDetails', { name, size: includeShare ? sizeAndShare(tile) : item.sizeText })
 }
 
 function showPopover(element: HTMLElement | undefined, left: number, top: number) {
@@ -321,36 +322,36 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="space-workspace" aria-label="空间分析" @keydown="detailShortcut">
+  <section class="space-workspace" :aria-label="t('common.spaceAnalysis')" @keydown="detailShortcut">
     <header class="space-toolbar">
-      <button ref="back" type="button" class="outlined-button" aria-label="返回搜索" @click="emit('close')">返回搜索</button>
+      <button ref="back" type="button" class="outlined-button" :aria-label="t('space.backToSearch')" @click="emit('close')">{{ t('space.backToSearch') }}</button>
       <SpaceVolumePicker :roots="result?.roots ?? []" :root="root" :visible="visible" :capacities="capacities"
         :settings="volumeSettings" @select="emit('view', $event)" @open="emit('refreshCapacities')" />
       <div class="space-level-control">
-        <select v-model.number="detailLevel" class="scope-select space-level" aria-label="细节层级">
-          <option v-for="level in 3" :key="level" :value="level">细节 {{ level }} 层</option>
+        <select v-model.number="detailLevel" class="scope-select space-level" :aria-label="t('space.detailLevel')">
+          <option v-for="level in 3" :key="level" :value="level">{{ t('space.detailLevelOption', { level: formatCount(level) }) }}</option>
         </select>
         <span class="chevron up flipped" aria-hidden="true"></span>
       </div>
       <button v-if="result?.exclusions.length" type="button" class="outlined-button"
         :disabled="pending || pathPending" popovertarget="space-exclusions" @click.prevent="toggleExclusions">
-        已排除 {{ formatCount(result.exclusions.length) }} 项
+        {{ t('space.excludedCount', { count: formatCount(result.exclusions.length) }) }}
       </button>
-      <span v-if="folder && !pending" class="space-total">逻辑大小 <strong>{{ folder.sizeText }}</strong></span>
-      <button type="button" class="outlined-button" @click="emit('settings')">设置</button>
+      <span v-if="folder && !pending" class="space-total">{{ t('space.logicalSize') }} <strong>{{ folder.sizeText }}</strong></span>
+      <button type="button" class="outlined-button" @click="emit('settings')">{{ t('common.settings') }}</button>
     </header>
     <form class="space-address" @submit.prevent="openAddress">
       <div class="space-address-field">
-        <input v-model="address" type="text" aria-label="目录路径" placeholder="输入本地目录路径"
+        <input v-model="address" type="text" :aria-label="t('space.folderPath')" :placeholder="t('space.folderPathPlaceholder')"
           autocomplete="off" spellcheck="false" :aria-invalid="!!pathError"
           :aria-describedby="pathError || pathPending ? 'space-path-feedback' : undefined" @input="addressEdited = true">
-        <button type="submit" class="outlined-button" :disabled="!address.trim()">打开</button>
+        <button type="submit" class="outlined-button" :disabled="!address.trim()">{{ t('file.open') }}</button>
       </div>
       <div v-if="pathError || pathPending" id="space-path-feedback" class="space-path-feedback" :role="pathError ? 'alert' : 'status'">
-        {{ pathError || '正在定位目录…' }}
+        {{ pathError || t('space.locatingFolder') }}
       </div>
     </form>
-    <nav class="space-breadcrumb" aria-label="当前目录">
+    <nav class="space-breadcrumb" :aria-label="t('space.currentDirectory')">
       <template v-for="(crumb, position) in pending ? [] : folder?.breadcrumbs" :key="crumb.id">
         <span v-if="position > 0" aria-hidden="true">›</span>
         <span v-if="position === (folder?.breadcrumbs.length ?? 0) - 1" aria-current="location">{{ crumb.name }}</span>
@@ -361,7 +362,7 @@ onBeforeUnmount(() => {
       <div v-if="message" class="space-message" :role="error ? 'alert' : 'status'">
         <span>{{ message }}</span>
         <button v-if="error && root" type="button" class="outlined-button"
-          @click="emit('view', root, folder?.breadcrumbs.at(-1)?.id)">重试</button>
+          @click="emit('view', root, folder?.breadcrumbs.at(-1)?.id)">{{ t('common.retry') }}</button>
       </div>
       <template v-else>
         <button v-for="tile in drawing.tiles" :key="tile.key" type="button" class="space-tile"
@@ -378,7 +379,7 @@ onBeforeUnmount(() => {
           @keydown.enter="tile.item.directoryId && ($event.preventDefault(), enterFolder(tile.item))">
           <template v-if="tile.width >= 32 && tile.height >= 23">
             <span class="space-tile-name">
-              <span>{{ tile.item.name }}</span>
+              <span>{{ tile.item.key ? tile.item.name : t('space.other') }}</span>
               <small v-if="tile.detailed && tile.width >= 128">{{ sizeAndShare(tile) }}</small>
             </span>
             <small v-if="tile.height >= 42 && tile.width >= 47 && !tile.detailed">{{ sizeAndShare(tile) }}</small>
@@ -394,27 +395,27 @@ onBeforeUnmount(() => {
     <footer class="space-details">
       <span v-if="active && !pending && !error" :title="tileTitle(active)">{{ tileTitle(active, true) }}</span>
       <span v-if="folder?.unknownFiles && !pending" class="space-unknown">
-        {{ formatCount(folder.unknownFiles) }} 个文件的大小未知
+        {{ t('space.unknownFiles', { count: formatCount(folder.unknownFiles) }) }}
       </span>
     </footer>
-    <div ref="tileMenu" class="file-menu space-popover" popover role="group" aria-label="文件操作">
+    <div ref="tileMenu" class="file-menu space-popover" popover role="group" :aria-label="t('file.actions')">
       <template v-if="menuItem">
         <button v-for="action in fileMenuActions" :key="action.type" type="button" @click="chooseTileAction(action.type)">
-          {{ action.label }}
+          {{ t(action.label) }}
         </button>
-        <button v-if="!menuItem.directoryId" type="button" @click="chooseTileAction('openWith')">打开方式…</button>
-        <button type="button" @click="chooseTileAction('exclude')">临时排除</button>
+        <button v-if="!menuItem.directoryId" type="button" @click="chooseTileAction('openWith')">{{ t('file.openWith') }}</button>
+        <button type="button" @click="chooseTileAction('exclude')">{{ t('space.exclude') }}</button>
       </template>
     </div>
     <div v-if="result?.exclusions.length" id="space-exclusions" ref="exclusionPanel"
-      class="file-menu space-popover space-exclusions" popover role="group" aria-label="临时排除项">
+      class="file-menu space-popover space-exclusions" popover role="group" :aria-label="t('space.exclusions')">
       <ul>
         <li v-for="item in result.exclusions" :key="item.volumeKey + '/' + item.key">
           <span :title="item.path">{{ item.path }}</span>
-          <button type="button" :aria-label="'恢复 ' + item.path" @click="emit('restore', item)">恢复</button>
+          <button type="button" :aria-label="t('space.restoreItem', { path: item.path })" @click="emit('restore', item)">{{ t('space.restore') }}</button>
         </li>
       </ul>
-      <button type="button" @click="emit('restore')">全部恢复</button>
+      <button type="button" @click="emit('restore')">{{ t('space.restoreAll') }}</button>
     </div>
   </section>
 </template>

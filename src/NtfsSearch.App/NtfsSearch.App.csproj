@@ -10,5 +10,6 @@
     <Compile Remove="LocalSearchApi.cs;LocalSearchService.cs" Condition="'$(IncludeHttpSearchService)' != 'true'" />
     <ProjectReference Include="../NtfsSearch.Core/NtfsSearch.Core.csproj" />
     <PackageReference Include="System.Drawing.Common" Version="10.0.15" />
+    <EmbeddedResource Include="../../locales/*.json" LogicalName="Locales.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

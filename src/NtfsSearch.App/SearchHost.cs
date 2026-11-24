@@ -15,11 +15,40 @@ internal sealed class SearchHost
 
     internal SearchCatalog Catalog => catalog;
     internal IndexMetadata Metadata { get; private set; } = IndexMetadata.All;
-    internal IReadOnlyList<VolumeStatus> Statuses => windowsBackend?.Statuses ?? demo?.Statuses ?? [];
     internal CollectorMetrics? Metrics => windowsBackend?.Metrics;
     internal event Action? StatusChanged;
-    internal event Action<string, bool>? Progress;
+    internal event Action<DesktopText, bool>? Progress;
     internal event Action<SpaceActivityObservation, IReadOnlyCollection<ulong>>? FileActivity;
+
+    internal IReadOnlyList<VolumeStatus> ReadDesktopStatuses(DesktopLocale locale)
+    {
+        if (windowsBackend is { } backend) return backend.ReadStatuses().Select(status => status.Render(locale)).ToArray();
+        return demo?.Statuses.Select(status => status.HasError ? status : status with
+        {
+            Message = locale.Text(DemoStatusText(status))
+        }).ToArray() ?? [];
+    }
+
+    internal (DesktopText? Text, string? Diagnostic) ReadDesktopVolumeStatus(string root)
+    {
+        if (windowsBackend is { } backend)
+            return (backend.ReadStatuses().FirstOrDefault(status => SameRoot(status.Root))?.Text, null);
+        var demoStatus = demo?.Statuses.FirstOrDefault(status => SameRoot(status.Root));
+        return demoStatus switch
+        {
+            null => default,
+            { HasError: true } => (null, demoStatus.Message),
+            _ => (DemoStatusText(demoStatus), null)
+        };
+
+        bool SameRoot(string candidate) => string.Equals(root, candidate, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static DesktopText DemoStatusText(VolumeStatus status) => status.LoadedCount is long count
+        ? new("backend.index.demoLoaded", ("count", count)) : new("backend.index.demoDiscovered");
+
+    private IEnumerable<string> ReadVolumeRoots() => windowsBackend?.ReadStatuses().Select(status => status.Root)
+        ?? demo?.Statuses.Select(status => status.Root) ?? [];
 
     /// <summary>读取已发布卷的覆盖范围及当前采集状态，供本机查询客户端使用。</summary>
     internal object ReadApiStatus()
@@ -102,7 +131,7 @@ internal sealed class SearchHost
         Action<NtfsVolume, IndexMetadata> missingMetadata)
     {
         if (!File.Exists(snapshotPath)) yield break;
-        Progress?.Invoke("正在加载上次退出保存的索引…", false);
+        Progress?.Invoke(new("backend.index.restoringFromExit"), false);
         int parallelism = IndexingConcurrencyPolicy.Create(Environment.ProcessorCount,
             VolumeResources.AvailableMemoryBytes()).CacheLoadLimit;
         using var entries = ExitSnapshotStore.LoadVolumes(snapshotPath, token, parallelism, progress,
@@ -117,7 +146,7 @@ internal sealed class SearchHost
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
             {
-                Progress?.Invoke("退出快照无法读取，将从磁盘恢复索引：" + error.Message, true);
+                Progress?.Invoke(new("backend.index.restoreFailed", ("detail", error.Message)), true);
                 yield break;
             }
             yield return current;
@@ -179,7 +208,7 @@ internal sealed class SearchHost
             var result = await Task.Run(() => catalog.Search("", limit: 1, cancellationToken: deadline.Token), deadline.Token);
             return new
             {
-                DiscoveredRoots = Statuses.Select(s => s.Root).ToArray(),
+                DiscoveredRoots = ReadVolumeRoots().ToArray(),
                 IndexedVolumes = catalog.VolumeCount,
                 IndexedObjects = result.TotalCount,
                 SearchHasResults = result.Rows.Count > 0,
@@ -209,10 +238,10 @@ internal sealed class SearchHost
                 await WaitForFullAuditReadinessAsync(running, deadline.Token);
                 var liveVerification = await AutomaticLiveVerification.RunAsync(catalog, diagnosticDirectory, deadline.Token);
                 var rows = new List<object>();
-                foreach (var status in Statuses)
+                foreach (string root in ReadVolumeRoots())
                 {
-                    var result = await Task.Run(() => catalog.Search(status.Root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
-                    rows.Add(new { status.Root, Count = result.TotalCount });
+                    var result = await Task.Run(() => catalog.Search(root, limit: 0, cancellationToken: deadline.Token), deadline.Token);
+                    rows.Add(new { Root = root, Count = result.TotalCount });
                 }
                 // CRUD或查询期间若日志失效触发修复，等新代提交且发布后重新审计，避免关闭时取消修复子进程。
                 if (!windowsBackend!.AuditCanFinish) continue;
@@ -249,13 +278,13 @@ internal sealed class SearchHost
     {
         while (true)
         {
-            while (Statuses.Count == 0 || !windowsBackend!.AuditCanFinish)
+            while (windowsBackend?.AuditCanFinish != true)
             {
                 if (running.IsCompleted) await running;
                 await Task.Delay(500, token);
             }
             await Task.Delay(2500, token);
-            if (windowsBackend.AuditCanFinish) return;
+            if (windowsBackend?.AuditCanFinish == true) return;
         }
     }
 

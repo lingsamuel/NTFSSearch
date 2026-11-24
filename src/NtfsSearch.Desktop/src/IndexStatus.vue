@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { formatCount, type IndexStatus } from './desktop'
+import type { IndexStatus } from './desktop'
+import { formatCount, t } from './localization'
 
 const props = defineProps<{ status?: IndexStatus; connected: boolean; preferencePending: boolean }>()
 const emit = defineEmits<{ action: [type: 'rescan' | 'cancel']; savePreference: [skip: boolean] }>()
@@ -44,18 +45,20 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', dismiss))
   <div ref="container" class="index-control" @keydown.esc.stop="escape">
     <button ref="trigger" class="index-toggle" type="button" :aria-expanded="open" aria-controls="index-panel" @click="toggle">
       <span class="status-dot" :class="{ warning, busy }" aria-hidden="true"></span>
-      <span>{{ warning ? '索引状态有异常' : '索引状态' }}</span>
+      <span>{{ t(warning ? 'index.statusWarning' : 'index.status') }}</span>
       <span class="chevron up" :class="{ flipped: open }" aria-hidden="true"></span>
     </button>
-    <section v-if="open" id="index-panel" ref="panel" class="index-panel" aria-label="索引状态" tabindex="-1">
+    <section v-if="open" id="index-panel" ref="panel" class="index-panel" :aria-label="t('index.status')" tabindex="-1">
       <header class="index-header">
-        <h2>索引状态</h2>
-        <button type="button" aria-label="关闭索引状态" class="close-panel" @click="escape">×</button>
+        <h2>{{ t('index.status') }}</h2>
+        <button type="button" :aria-label="t('index.closeStatus')" class="close-panel" @click="escape">×</button>
       </header>
       <p class="index-summary">
-        <template v-if="status?.volumes.length">{{ status.volumesReady }} / {{ status.volumes.length }} 个卷可搜索 · {{ formatCount(status.indexed) }} 项已索引</template>
-        <template v-else>{{ status?.discoveryComplete ? '未发现可用的 NTFS 磁盘' : '正在发现本机 NTFS 磁盘' }}</template>
-        <template v-if="status?.active"> · 正在采集 {{ status.active }} 个卷</template>
+        <template v-if="status?.volumes.length">{{ t('index.summary', {
+          ready: formatCount(status.volumesReady), total: formatCount(status.volumes.length), count: formatCount(status.indexed),
+        }) }}</template>
+        <template v-else>{{ t(status?.discoveryComplete ? 'index.noVolumes' : 'index.discovering') }}</template>
+        <template v-if="status?.active">{{ t('index.collecting', { count: formatCount(status.active) }) }}</template>
       </p>
       <p v-if="status?.error" class="index-error" role="alert">{{ status.error }}</p>
       <p v-if="status?.progress && (busy || !status.volumesReady || status.collectionCancelled)" class="index-progress">
@@ -69,11 +72,11 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', dismiss))
       <label class="index-exit-preference">
         <input type="checkbox" :checked="status?.skipExitIndexSave" :disabled="!connected || !status || preferencePending"
           @change="changeSavePreference">
-        退出时不保存索引
+        {{ t('index.skipExitSave') }}
       </label>
       <div class="index-actions">
-        <button type="button" class="outlined-button" :disabled="!connected || status?.refreshing" @click="emit('action', 'rescan')">重新扫描磁盘</button>
-        <button type="button" class="outlined-button" :disabled="!connected" @click="emit('action', 'cancel')">取消采集</button>
+        <button type="button" class="outlined-button" :disabled="!connected || status?.refreshing" @click="emit('action', 'rescan')">{{ t('index.rescan') }}</button>
+        <button type="button" class="outlined-button" :disabled="!connected" @click="emit('action', 'cancel')">{{ t('index.cancelCollection') }}</button>
       </div>
     </section>
   </div>

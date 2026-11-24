@@ -8,6 +8,8 @@ namespace NtfsSearch.Core;
 public sealed partial class SearchIndex
 {
     internal const int DirectMatchSortLimit = 16_384;
+    private const int MaxQueryTerms = 64;
+    private const int MaxQueryCharacters = 4096;
 
     public SearchResult Search(string text, SortField sort = SortField.Name, bool descending = false,
         bool matchPath = true, int offset = 0, int limit = 100, CancellationToken cancellationToken = default,
@@ -49,7 +51,7 @@ public sealed partial class SearchIndex
     {
         ValidateRequest(text, SortField.Name, 0, 0, cancellationToken);
         var terms = SearchQuery.Parse(text);
-        if (terms.Length > 64) throw new ArgumentException("查询最多 64 个条件。", nameof(text));
+        if (terms.Length > MaxQueryTerms) throw new SearchQueryLimitException(MaxQueryTerms, countsCharacters: false);
         if (filter?.IsEmpty == true) filter = null;
         if (filter is { IncludeFiles: false, IncludeDirectories: false }) return new(this, null, 0);
         if (terms.Length == 0 && filter is null) return new(this, null, VisibleCount);
@@ -216,7 +218,7 @@ public sealed partial class SearchIndex
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         ArgumentOutOfRangeException.ThrowIfNegative(limit);
         if (!Enum.IsDefined(sort)) throw new ArgumentOutOfRangeException(nameof(sort));
-        if (text.Length > 4096) throw new ArgumentException("查询最多 4096 个字符。", nameof(text));
+        if (text.Length > MaxQueryCharacters) throw new SearchQueryLimitException(MaxQueryCharacters, countsCharacters: true);
         token.ThrowIfCancellationRequested();
     }
 }

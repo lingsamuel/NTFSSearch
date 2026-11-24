@@ -2,8 +2,10 @@
 
 mod backend;
 mod file_drag;
+mod localization;
 
 use backend::Backend;
+use localization::{error as localized_error, text};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{env, fmt::Write, fs, io, os::windows::ffi::OsStrExt, sync::Mutex};
@@ -31,6 +33,28 @@ struct WindowNavigation {
     activate_settings: bool,
 }
 
+const TRAY_ITEMS: &[(&str, &str)] = &[
+    ("open", "native.tray.open"),
+    ("settings", "native.tray.settings"),
+    ("quit", "native.tray.quit"),
+];
+
+struct TrayMenu(Vec<MenuItem<tauri::Wry>>);
+
+fn desktop_mode() -> &'static str {
+    match env::args().nth(1).as_deref() {
+        Some("--desktop-test") => "--desktop-test",
+        Some("--desktop-benchmark") => "--desktop-benchmark",
+        _ => "--desktop",
+    }
+}
+
+/// 供 WebView 首次渲染和 Windows 窗口测试读取桌面壳当前生效的语言。
+#[tauri::command]
+fn desktop_language() -> &'static str {
+    localization::language()
+}
+
 #[tauri::command]
 fn start_backend(
     window: WebviewWindow,
@@ -38,7 +62,9 @@ fn start_backend(
     navigation: State<'_, Mutex<WindowNavigation>>,
 ) -> Result<(), String> {
     let pending = {
-        let mut state = navigation.lock().map_err(|error| error.to_string())?;
+        let mut state = navigation
+            .lock()
+            .map_err(|error| localized_error("native.backend.start", error))?;
         matches!(
             std::mem::replace(&mut state.settings, SettingsNavigation::Ready),
             SettingsNavigation::Pending
@@ -47,7 +73,9 @@ fn start_backend(
     if pending {
         let _ = window.emit("open-settings", ());
     }
-    backend.start(window)
+    backend
+        .start(window)
+        .map_err(|error| localized_error("native.backend.start", error))
 }
 
 #[tauri::command]
@@ -62,7 +90,9 @@ fn send_request(
     mut request: Value,
 ) -> Result<(), String> {
     if request["type"] == "copy" {
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = window
+            .hwnd()
+            .map_err(|error| localized_error("native.window.copy", error))?;
         request["windowHandle"] = Value::from(hwnd.0 as isize as i64);
     }
     backend.send(request)
@@ -71,7 +101,11 @@ fn send_request(
 // 同目录的重复启动复用原窗口，其他便携目录拥有各自的单实例标识。
 fn portable_instance_id(identifier: &str) -> io::Result<String> {
     let executable = env::current_exe()?;
-    let directory = fs::canonicalize(executable.parent().expect("应用程序路径缺少便携目录"))?;
+    let directory = fs::canonicalize(
+        executable
+            .parent()
+            .expect(text("native.portable.missingDirectory")),
+    )?;
     let bytes: Vec<_> = directory
         .as_os_str()
         .encode_wide()
@@ -155,12 +189,14 @@ unsafe extern "system" fn search_window_proc(
 }
 
 fn install_search_activation(app: &App) -> Result<(), Box<dyn std::error::Error>> {
-    let window = app.get_webview_window("main").expect("桌面程序缺少主窗口");
+    let window = app
+        .get_webview_window("main")
+        .expect(text("native.window.missing"));
     let hwnd = window.hwnd()?;
     let handle = Box::into_raw(Box::new(app.handle().clone()));
     if !unsafe { SetWindowSubclass(hwnd, Some(search_window_proc), 1, handle as usize) }.as_bool() {
         drop(unsafe { Box::from_raw(handle) });
-        return Err(io::Error::other("无法监听主窗口激活").into());
+        return Err(io::Error::other(text("native.window.activation")).into());
     }
     Ok(())
 }
@@ -171,17 +207,20 @@ fn quit_from_tray(app: &AppHandle) {
         Ok(false) => app.exit(0),
         Err(error) => {
             if let Some(window) = app.get_webview_window("main") {
-                backend::show_quit_error(&window, format!("无法请求退出保存：{error}"));
+                backend::show_quit_error(&window, localized_error("native.backend.quit", error));
             }
         }
     }
 }
 
 fn setup_tray(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
-    let open = MenuItem::with_id(app, "open", "打开", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &settings, &quit])?;
+    let menu = Menu::new(app)?;
+    let mut items = Vec::with_capacity(TRAY_ITEMS.len());
+    for &(id, key) in TRAY_ITEMS {
+        let item = MenuItem::with_id(app, id, text(key), true, None::<&str>)?;
+        menu.append(&item)?;
+        items.push(item);
+    }
     let tray = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("NTFS Search")
@@ -202,9 +241,27 @@ fn setup_tray(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 open_main_window(tray.app_handle(), false);
             }
         });
-    let icon = app.default_window_icon().expect("桌面程序缺少图标").clone();
+    let icon = app
+        .default_window_icon()
+        .expect(text("native.window.missingIcon"))
+        .clone();
     tray.icon(icon).build(app)?;
+    app.manage(TrayMenu(items));
     Ok(())
+}
+
+fn update_tray_language(window: &WebviewWindow, language: &str) {
+    if !localization::set_language(language) {
+        return;
+    }
+    let app = window.app_handle().clone();
+    // 复用现有菜单项并在主线程一起更新，后端读取线程可继续接收响应。
+    let _ = window.run_on_main_thread(move || {
+        let tray = app.state::<TrayMenu>();
+        for (item, &(_, key)) in tray.0.iter().zip(TRAY_ITEMS) {
+            let _ = item.set_text(text(key));
+        }
+    });
 }
 
 fn main() {
@@ -212,8 +269,8 @@ fn main() {
         std::process::exit(code);
     }
     let mut context = tauri::generate_context!();
-    context.config_mut().identifier =
-        portable_instance_id(&context.config().identifier).expect("无法确定便携版所在目录");
+    context.config_mut().identifier = portable_instance_id(&context.config().identifier)
+        .expect(text("native.portable.directory"));
     let application = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             open_main_window(app, false)
@@ -233,9 +290,14 @@ fn main() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_backend, send_request, drag_files])
+        .invoke_handler(tauri::generate_handler![
+            desktop_language,
+            start_backend,
+            send_request,
+            drag_files
+        ])
         .build(context)
-        .expect("无法启动 NTFS Search 桌面窗口");
+        .expect(text("native.window.start"));
 
     application.run(|app, event| {
         if let tauri::RunEvent::Exit = event {

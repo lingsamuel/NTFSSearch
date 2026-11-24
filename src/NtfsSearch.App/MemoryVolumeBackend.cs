@@ -20,28 +20,28 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
     private int revision;
     private int peakScans;
     private int launchReset;
-    private string? collectorError;
+    private DesktopText? collectorError;
     private MemoryCollectorConnection? collector;
 
     internal event Action? StatusChanged;
-    internal event Action<string, bool>? Progress;
+    internal event Action<DesktopText, bool>? Progress;
     internal event Action<SpaceActivityObservation, IReadOnlyCollection<ulong>>? FileActivity;
     internal volatile SpaceActivityObservation? AnalysisObservation;
 
-    internal IReadOnlyList<VolumeStatus> Statuses
+    internal DesktopVolumeStatus[] ReadStatuses()
     {
-        get { lock (gate) return volumes.Values.Select(ReadStatus).ToArray(); }
+        lock (gate) return volumes.Values.Select(ReadStatus).ToArray();
     }
 
     internal (VolumeStatus Status, long? Indexed)[] CaptureSearchStatus()
     {
         // 卷变更同时发布索引和状态，接口读取同一次发布所对应的两项数据。
         lock (gate) return volumes.Values.Select(v =>
-            (ReadStatus(v), v.View?.Layers.Sum(layer => (long)layer.VisibleCount))).ToArray();
+            (ReadStatus(v).Render(DesktopLocale.Chinese), v.View?.Layers.Sum(layer => (long)layer.VisibleCount))).ToArray();
     }
 
-    private VolumeStatus ReadStatus(VolumeState volume) => collectorError is { } error
-        ? volume.Status with { Message = $"{volume.Status.Message} {error}", HasError = true }
+    private DesktopVolumeStatus ReadStatus(VolumeState volume) => collectorError is { } error
+        ? volume.Status with { Text = new("backend.index.statusWithError", ("message", volume.Status.Text), ("detail", error)), HasError = true }
         : volume.Status;
 
     internal CollectorMetrics? Metrics
@@ -92,7 +92,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
             foreach (var volume in volumes.Values)
             {
                 volume.Refresh = true;
-                Revise(volume, "等待重新采集…");
+                Revise(volume, new("backend.index.waitingForRescan"));
             }
         }
         StatusChanged?.Invoke();
@@ -108,7 +108,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
             foreach (var volume in volumes.Values.Where(v => v.NeedsScan || v.Refresh))
             {
                 volume.Refresh = false;
-                Revise(volume, volume.View is null ? "采集已取消。" : "采集已取消，已有索引继续可用。");
+                Revise(volume, new(volume.View is null ? "backend.index.cancelled" : "backend.index.cancelledWithResults"));
             }
             if (collector is null)
                 foreach (var volume in volumes.Values.Where(v => v.RestoredFromSnapshot && !v.NeedsScan && v.WatchStop is null))
@@ -168,8 +168,8 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
                     catch (Exception error) when (MemoryCollector.IsCollectionError(error))
                     {
                         SetCollectorStatus(error is Win32Exception { NativeErrorCode: 1223 }
-                            ? "管理员授权已取消。"
-                            : "采集进程启动失败：" + error.Message);
+                            ? new("backend.index.elevationCancelled")
+                            : new("backend.index.collectorStartFailed", ("detail", error.Message)));
                         if (error is Win32Exception { NativeErrorCode: 1223 }) attempts = 3;
                         nextLaunch = now.AddSeconds(2);
                     }
@@ -276,12 +276,11 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         StatusChanged?.Invoke();
     }
 
-    private const string NoSnapshot = "无可用退出快照，等待全卷采集…";
+    private static readonly DesktopText NoSnapshot = new("backend.index.noSnapshot");
 
     private void SetSnapshotReadyStatus(VolumeState volume)
-        => volume.Status = new(volume.Volume.Root, suspended && collector is null
-            ? "已加载退出快照，采集已取消，尚未接续 USN。"
-            : "已加载退出快照，等待检查 USN…");
+        => volume.Status = new(volume.Volume.Root, new(suspended && collector is null
+            ? "backend.index.snapshotLoadedCancelled" : "backend.index.snapshotLoadedCheckingJournal"));
 
     private void ReportRestore(NtfsVolume source, bool sorting, int rows)
     {
@@ -289,8 +288,8 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         {
             if (suspended || !volumes.TryGetValue(VolumeCache.Key(source), out var volume)
                 || volume.Refresh || volume.View is not null) return;
-            string stage = sorting ? "正在重建快照排序" : "正在加载退出快照";
-            volume.Status = new(volume.Volume.Root, $"{stage}，共 {rows:N0} 项…");
+            volume.Status = new(volume.Volume.Root, new(sorting ? "backend.index.snapshotRebuildingSort" : "backend.index.snapshotLoading",
+                ("count", (long)rows)));
         }
         StatusChanged?.Invoke();
     }
@@ -301,17 +300,17 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         {
             if (suspended || !volumes.TryGetValue(VolumeCache.Key(source), out var volume)
                 || volume.Refresh || volume.View is not null) return;
-            var fields = new List<string>(3);
-            if ((missing & IndexMetadata.FileSize) != 0) fields.Add("文件大小");
-            if ((missing & IndexMetadata.ModifiedTime) != 0) fields.Add("修改时间");
-            if ((missing & IndexMetadata.CreationTime) != 0) fields.Add("创建时间");
+            var fields = new List<DesktopText>(3);
+            if ((missing & IndexMetadata.FileSize) != 0) fields.Add(new("backend.index.sizeField"));
+            if ((missing & IndexMetadata.ModifiedTime) != 0) fields.Add(new("backend.index.modifiedField"));
+            if ((missing & IndexMetadata.CreationTime) != 0) fields.Add(new("backend.index.createdField"));
             volume.SnapshotMissingMetadata = true;
-            volume.Status = new(volume.Volume.Root, $"退出快照缺少{string.Join("、", fields)}，等待全卷采集…");
+            volume.Status = new(volume.Volume.Root, new("backend.index.snapshotMissingMetadata", ("fields", fields.ToArray())));
         }
         StatusChanged?.Invoke();
     }
 
-    private void SetCollectorStatus(string? error)
+    private void SetCollectorStatus(DesktopText? error)
     {
         lock (gate)
         {
@@ -321,7 +320,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         StatusChanged?.Invoke();
     }
 
-    private void Revise(VolumeState volume, string message)
+    private void Revise(VolumeState volume, DesktopText message)
     {
         volume.Revision = ++revision;
         volume.Monitoring = false;
@@ -349,7 +348,7 @@ internal sealed partial class MemoryVolumeBackend(SearchCatalog catalog,
         internal bool SnapshotMissingMetadata;
         internal ExitSnapshotVolume? View;
         internal DirectoryGraph? Graph;
-        internal VolumeStatus Status = new(volume.Root, "正在检查退出快照…");
+        internal DesktopVolumeStatus Status = new(volume.Root, new("backend.index.checkingSnapshot"));
         internal int? ScanPid;
         internal CancellationTokenSource? ScanStop;
         internal CancellationTokenSource? WatchStop;

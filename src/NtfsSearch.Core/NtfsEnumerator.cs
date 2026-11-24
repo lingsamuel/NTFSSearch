@@ -12,6 +12,8 @@ public sealed record NtfsScanResult(SearchIndex Index, JournalPosition Position,
 internal delegate void NtfsRowVisitor(string parentPath, ReadOnlySpan<char> name,
     long? size, long? modifiedUtcTicks, bool directory, ulong reference, ulong parentReference, long? createdUtcTicks);
 
+internal enum NtfsScanStage : byte { ReadingDirectories, RecordsRead, IndexingNames, ReadingMetadata, RecordsIndexed }
+
 public static class NtfsEnumerator
 {
     public static SearchIndex Scan(char drive, CancellationToken cancellationToken = default,
@@ -45,9 +47,19 @@ public static class NtfsEnumerator
         ReadRows(drive, count => builder = new(count),
             (parent, name, size, modified, directory, file, directoryId, created) =>
                 builder.Add(parent, name, size, modified, directory, file, directoryId, created),
-            token, progress, unreachableRecords, excludeDirectory);
+            token, progress is null ? null : Report, unreachableRecords, excludeDirectory);
         progress?.Report("建立排序索引…");
         return builder.Build(token, progress);
+
+        void Report(NtfsScanStage stage, long count) => progress!.Report(stage switch
+        {
+            NtfsScanStage.ReadingDirectories => "枚举目录关系（第 1 遍）…",
+            NtfsScanStage.RecordsRead => $"已读取 {count:N0} 条记录…",
+            NtfsScanStage.IndexingNames => "建立名称索引（第 2 遍）…",
+            NtfsScanStage.ReadingMetadata => "读取MFT元数据并补全硬链接…",
+            NtfsScanStage.RecordsIndexed => $"已索引 {count:N0} 条记录…",
+            _ => throw new ArgumentOutOfRangeException(nameof(stage))
+        });
     }
 
     [SupportedOSPlatform("windows")]
@@ -71,7 +83,7 @@ public static class NtfsEnumerator
 
     [SupportedOSPlatform("windows")]
     internal static void ReadRows(char drive, Action<int> initialize, NtfsRowVisitor add, CancellationToken token,
-        IProgress<string>? progress, Action<long>? unreachableRecords, string? excludeDirectory, bool portableDataOnly = false)
+        Action<NtfsScanStage, long>? progress, Action<long>? unreachableRecords, string? excludeDirectory, bool portableDataOnly = false)
     {
         bool IsExcluded(string parent, ReadOnlySpan<char> name, bool directory) => portableDataOnly
             ? !directory && excludeDirectory is not null && NativePathExclusion.ContainsPortableData(excludeDirectory, parent, name)
@@ -79,19 +91,19 @@ public static class NtfsEnumerator
         using var handle = OpenVolume(drive);
         var directories = new Dictionary<ulong, (ulong Parent, string Name)>();
         long recordCount = 0;
-        progress?.Report("枚举目录关系（第 1 遍）…");
+        progress?.Invoke(NtfsScanStage.ReadingDirectories, 0);
         Enumerate(handle, token, (frn, parent, name, attributes) =>
         {
             if (!IsRoot(frn) && !name.IsEmpty) recordCount++;
             if ((attributes & 16) != 0 && !IsRoot(frn)) directories[frn] = (parent, name.ToString());
-            if ((recordCount & 262143) == 0) progress?.Report($"已读取 {recordCount:N0} 条记录…");
+            if ((recordCount & 262143) == 0) progress?.Invoke(NtfsScanStage.RecordsRead, recordCount);
         });
         if (recordCount > int.MaxValue) throw new NotSupportedException("原型单索引上限为 21 亿目录项。");
         var resolver = new DirectoryPathResolver(drive, directories, id => DirectoryById(handle, id, drive));
-        progress?.Report("建立名称索引（第 2 遍）…");
+        progress?.Invoke(NtfsScanStage.IndexingNames, 0);
         initialize((int)recordCount);
         long added = 0, skipped = 0;
-        progress?.Report("读取MFT元数据并补全硬链接…");
+        progress?.Invoke(NtfsScanStage.ReadingMetadata, 0);
         using var metadata = new MftMetadataReader(drive);
         Enumerate(handle, token, (frn, parent, name, attributes) =>
         {
@@ -116,7 +128,7 @@ public static class NtfsEnumerator
                 add(parentPath, name, directory ? null : information?.Size,
                 information?.ModifiedUtcTicks, directory, frn, parent, information?.CreatedUtcTicks);
             }
-            if ((++added & 262143) == 0) progress?.Report($"已索引 {added:N0} 条记录…");
+            if ((++added & 262143) == 0) progress?.Invoke(NtfsScanStage.RecordsIndexed, added);
         });
         unreachableRecords?.Invoke(skipped);
     }
