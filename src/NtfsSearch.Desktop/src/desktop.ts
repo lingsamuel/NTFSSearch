@@ -3,6 +3,11 @@ import { listen } from '@tauri-apps/api/event'
 
 export type SortField = 0 | 1 | 2 | 3
 export type FileAction = 'open' | 'openWith' | 'reveal' | 'copy'
+export const fileMenuActions = [
+  { type: 'open', label: '打开', shortcut: 'Enter' },
+  { type: 'reveal', label: '打开所在目录' },
+  { type: 'copy', label: '复制完整路径', shortcut: 'Ctrl+C' },
+] as const
 
 export interface SearchRow {
   key: string
@@ -137,6 +142,7 @@ export type DesktopRequest =
   | { type: 'spaceDetails'; requestId: number; detailId: number; directoryIds: string[]; manualDirectoryIds: string[]; branchIds: string[] }
   | { type: 'spaceExclude'; requestId: number; volumeKey: string; key: string; fileReference: string | null }
   | { type: 'spaceRestore'; requestId: number; volumeKey?: string; key?: string }
+  | { type: 'spaceVisibility'; enabled: boolean }
   | { type: 'closeSpaceAnalysis'; requestId: number }
   | { type: 'rescan' | 'cancel' | 'skipExitSave' }
   | { type: 'setSkipExitIndexSave'; skipExitIndexSave: boolean }

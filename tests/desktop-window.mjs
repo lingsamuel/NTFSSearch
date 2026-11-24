@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
 
 const [executable, artifacts, mode = '--desktop-test'] = process.argv.slice(2)
-if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash]')
+if (!executable || !artifacts) throw new Error('用法：node tests/desktop-window.mjs <exe> <报告目录> [--desktop-benchmark | --cached-fixture | --tray | --search-results | --desktop-interaction | --native-file-drag | --search-service-settings | --without-http | --index-memory-settings | --exit-save-skip | --space-flash | --space-interaction]')
 
 const output = resolve(artifacts)
 await mkdir(output, { recursive: true })
@@ -22,6 +22,7 @@ const withoutHttpTest = mode === '--without-http'
 const indexMemorySettingsTest = mode === '--index-memory-settings'
 const exitSaveSkipTest = mode === '--exit-save-skip'
 const spaceFlashTest = mode === '--space-flash'
+const spaceInteractionTest = mode === '--space-interaction'
 const testData = join(output, trayTest ? 'TrayData' : searchServiceSettingsTest ? 'SearchServiceData'
   : withoutHttpTest ? 'WithoutHttpData' : indexMemorySettingsTest ? 'IndexMemoryData' : exitSaveSkipTest ? 'ExitSaveSkipData' : 'ExitSaveData')
 const settingsPath = join(testData, 'settings.json')
@@ -44,7 +45,7 @@ if (trayTest || searchServiceSettingsTest) {
 }
 await new Promise(resolve => portProbe.close(resolve))
 const applicationArgs = mode === '--cached-fixture' ? []
-  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest ? '--desktop-test' : mode]
+  : [trayTest || searchResultsTest || desktopInteractionTest || nativeFileDragTest || searchServiceSettingsTest || withoutHttpTest || indexMemorySettingsTest || exitSaveSkipTest || spaceFlashTest || spaceInteractionTest ? '--desktop-test' : mode]
 const applicationEnv = {
   ...process.env,
   ...(apiPort ? { NTFS_SEARCH_PORT: String(apiPort) } : {}),
@@ -651,6 +652,81 @@ async function verifySpaceFlash() {
   await expectFlashes([manualPath], [path[0]], '子目录收起时高亮最近的可见上级')
 }
 
+async function verifySpaceInteraction() {
+  const menu = ".file-menu[aria-label='文件操作']"
+  const tileMenu = menu + ':popover-open'
+  const labels = selector => evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector + ' button')}),
+    button => button.firstChild.textContent.trim())`)
+  const openMenu = target => evaluate(`${target}.dispatchEvent(new MouseEvent('contextmenu', {
+    clientX: 150, clientY: 150, bubbles: true, cancelable: true
+  }))`)
+  await openMenu("document.querySelector('tbody tr')")
+  const searchActions = await labels(menu)
+  assert.deepEqual(searchActions, ['打开', '打开所在目录', '复制完整路径'])
+  await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))")
+
+  await click('空间分析')
+  await until(() => visible('.space-total'), '等待首次空间分析')
+  const address = "document.querySelector('.space-address input')"
+  const setAddress = path => evaluate(`(() => {
+    const input = ${address};
+    input.value = ${JSON.stringify(path)};
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`)
+  const go = async path => {
+    await setAddress(path)
+    await evaluate(`${address}.form.requestSubmit()`)
+    await until(() => evaluate(`document.querySelector('.space-breadcrumb [aria-current]')?.textContent.endsWith(${JSON.stringify(path.split('\\').at(-1))})`),
+      '进入 ' + path)
+  }
+  const folder = "document.querySelector('.space-tile.directory:not(.nested)')"
+  await go('C:\\演示\\目录009')
+  await openMenu("document.querySelector('.space-tile:not(.others)')")
+  await until(() => visible(tileMenu), '打开文件菜单')
+  assert.deepEqual(await labels(tileMenu), [...searchActions, '打开方式…', '临时排除'])
+  await click('临时排除')
+  const exclusions = '[popovertarget=space-exclusions]'
+  await until(() => visible(exclusions), '排除一个文件')
+
+  await go('C:\\演示\\目录001')
+  await openMenu(folder)
+  await until(() => visible(tileMenu), '打开目录菜单')
+  assert.deepEqual(await labels(tileMenu), [...searchActions, '临时排除'])
+  const expanded = () => evaluate(`${folder}?.getAttribute('aria-expanded') === 'true'`)
+  await evaluate(`${folder}.click(); const level = document.querySelector('.space-level');
+    level.value = '3'; level.dispatchEvent(new Event('change'))`)
+  await until(expanded, '展开当前分支')
+  const draft = 'C:\\保留未提交的地址'
+  await setAddress(draft)
+  await click('返回搜索')
+  assert.equal(await visible('.space-map'), false)
+  assert.equal(await visible(tileMenu), false)
+  await click('空间分析')
+  await until(() => visible('.space-map'), '再次进入空间分析')
+  assert.match(await evaluate("document.querySelector('.space-breadcrumb [aria-current]')?.textContent ?? ''"), /目录001$/)
+  assert.equal(await evaluate(`${address}.value`), draft)
+  assert.equal(await evaluate("document.querySelector('.space-level').value"), '3')
+  assert.equal(await expanded(), true)
+  assert.equal(await visible(exclusions), true)
+  await click('已排除 1 项')
+  await click('全部恢复')
+  await until(async () => !(await visible(exclusions)), '恢复切换前排除的文件')
+
+  await evaluate(`(async () => {
+    const tauri = window.__TAURI_INTERNALS__;
+    const handler = tauri.transformCallback(() => { window.spaceActivated = true; });
+    await tauri.invoke('plugin:event|listen', { event: 'activate-search', target: { kind: 'Any' }, handler });
+    ${address}.focus();
+  })()`)
+  const hwnd = await windowWithTitle(application.pid, 'NTFS Search')
+  assert.ok(hwnd, '找到空间分析主窗口')
+  assert.equal(await mainWindowAction(hwnd, 'activate'), true)
+  await until(() => evaluate('window.spaceActivated === true'), '收到 Windows 前台激活')
+  assert.equal(await visible('.space-map'), true)
+  assert.equal(await evaluate(`document.activeElement === ${address}`), true)
+  assert.equal(await evaluate(`${address}.value`), draft)
+}
+
 async function verifyIndexMemorySettings(total) {
   const switches = {
     PrecomputeSort: 'precompute-sort', IndexCreationTime: 'index-creation-time',
@@ -851,6 +927,8 @@ try {
     await verifySearchServiceSettings()
   } else if (spaceFlashTest) {
     await verifySpaceFlash()
+  } else if (spaceInteractionTest) {
+    await verifySpaceInteraction()
   } else if (withoutHttpTest) {
     await click('设置')
     const settingsReady = () => evaluate("document.querySelector('.settings-footer button[type=submit]')?.disabled === false")
@@ -1048,7 +1126,7 @@ try {
       assert.equal(await folderShadow(), originalShadow)
       await evaluate(`${topFolder('目录009')}.dispatchEvent(new MouseEvent('contextmenu', { clientX: 150, clientY: 150, bubbles: true, cancelable: true }))`)
       await until(() => evaluate(`Boolean(${tileMenu})`), '目录右键操作')
-      assert.deepEqual(await menuLabels(), ['打开', '临时排除'])
+      assert.deepEqual(await menuLabels(), ['打开', '打开所在目录', '复制完整路径', '临时排除'])
       await excludeTile()
       await until(() => evaluate(`!${topFolder('目录009')} && Boolean(${excluded})`), '隐藏目录并重新排版')
       assert.equal(await evaluate("document.querySelector('.space-total strong').textContent"), '395.07 MB')
@@ -1068,7 +1146,7 @@ try {
       }))`)
       await openFileMenu()
       await until(() => evaluate(`Boolean(${tileMenu})`), '文件键盘菜单')
-      assert.deepEqual(await menuLabels(), ['打开', '打开方式…', '临时排除'])
+      assert.deepEqual(await menuLabels(), ['打开', '打开所在目录', '复制完整路径', '打开方式…', '临时排除'])
       await excludeTile()
       await until(() => evaluate("document.querySelectorAll('.space-tile').length === 99"), '文件排除')
       await evaluate(`${excluded}.click()`)
@@ -1081,8 +1159,8 @@ try {
       await until(() => evaluate(`Boolean(${excluded})`), '再次排除文件')
       await evaluate("document.querySelector('button[aria-label=返回搜索]').click()")
       await evaluate("document.querySelector('button[aria-label=空间分析]').click()")
-      await until(() => evaluate("document.querySelector('.space-total strong')?.textContent === '487.79 MB'"), '开始新会话')
-      assert.equal(await evaluate(`Boolean(${excluded})`), false)
+      await until(() => evaluate("document.querySelectorAll('.space-tile').length === 99"), '恢复原目录及排除项')
+      assert.equal(await evaluate(`Boolean(${excluded})`), true)
       await evaluate("document.querySelector('button[aria-label=返回搜索]').click()")
       assert.equal(await evaluate(`(${resultCount})() === ${JSON.stringify(expected(total))}`), true)
       assert.equal(await evaluate("document.querySelector('.results-scroll').scrollTop"), scrollBeforeAnalysis)
@@ -1223,6 +1301,7 @@ try {
   else if (indexMemorySettingsTest) console.log('Windows 预计算排序即时切换、元数据列重启生效和文件夹大小偏好通过。')
   else if (exitSaveSkipTest) console.log('Windows 退出保存按钮、状态、旧快照保留及再次退出保存通过。')
   else if (spaceFlashTest) console.log('Windows 空间分析自动及手动展开、同批多处闪烁、收起回退通过。')
+  else if (spaceInteractionTest) console.log('Windows 空间分析右键、返回搜索后恢复会话以及前台激活通过。')
   else console.log(benchmark ? 'Windows 桌面性能采样与退出通过。' : 'Windows 桌面搜索、交互和退出通过。')
 } finally {
   if (application.exitCode == null) {

@@ -36,6 +36,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
     private string? activeRoot;
     private CancellationTokenSource? cancellation;
     private Task? task;
+    private bool suspended;
 
     internal void View(long requestId, string root, string directoryId)
         => Navigate(requestId, root, ParseDirectoryId(directoryId), null);
@@ -142,7 +143,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
 
     internal void Refresh()
     {
-        if (selection is null) return;
+        if (selection is null || suspended) return;
         var views = host.CaptureAnalysisVolumes();
         if (activeRoot is not null && !ContainsVolume(views)) ResetVolume();
         work.RequestRefresh();
@@ -150,10 +151,29 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
         TryStart(views);
     }
 
+    // 返回搜索时释放卷统计。保留导航请求和排除项，切回后按最新的索引恢复。
+    internal void SetVisible(bool visible)
+    {
+        if (suspended == !visible) return;
+        suspended = !visible;
+        if (suspended)
+        {
+            Observe(null);
+            work.Cancel();
+            ResetVolume();
+        }
+        else if (selection is not null)
+        {
+            work.RequestUser();
+            TryStart();
+        }
+    }
+
     internal void Close(long requestId)
     {
         if (requestId < latestRequestId) return;
         latestRequestId = requestId;
+        suspended = false;
         selection = null;
         exclusions.Clear();
         Observe(null);
@@ -183,7 +203,7 @@ internal sealed class SpaceAnalysisSession(SearchHost host, Action<object> publi
 
     private void TryStart((NtfsVolume Volume, IReadOnlyList<SearchIndex> Layers)[]? views = null)
     {
-        if (selection is not { } target || !work.TryStart(out var request)) return;
+        if (suspended || selection is not { } target || !work.TryStart(out var request)) return;
         // 活动在索引发布后入队。先取活动，再取得至少包含这些变更的索引视图。
         var changedParents = TakeActivity();
         if (changedParents.Length > 0 || views is null) views = host.CaptureAnalysisVolumes();

@@ -30,6 +30,7 @@ const skipSaveButton = ref<HTMLButtonElement>()
 const skipSavePending = ref(false)
 const preferencePending = ref(false)
 const showingSpace = ref(false)
+const spaceStarted = ref(false)
 const space = shallowRef<SpaceAnalysisResult>()
 const spaceRoot = ref('')
 const spacePending = ref(false)
@@ -116,7 +117,7 @@ function receive(message: DesktopMessage) {
         sort.value = 0
         descending.value = false
       }
-      if (showingSpace.value && !indexFileSize.value) closeSpace()
+      if (spaceStarted.value && !indexFileSize.value) resetSpace()
       break
     case 'settingsStatus':
       settingsStatus.value = message
@@ -124,7 +125,7 @@ function receive(message: DesktopMessage) {
       if (indexStatus.value) indexStatus.value = { ...indexStatus.value, skipExitIndexSave: message.skipExitIndexSave }
       break
     case 'spaceAnalysis':
-      if (!showingSpace.value || message.requestId !== spaceRequestId) return
+      if (!spaceStarted.value || message.requestId !== spaceRequestId) return
       if (message.detailId < spaceDetailId && space.value?.requestId === message.requestId
           && space.value.volumeKey === message.volumeKey && space.value.folder?.path === message.folder?.path
           && space.value.exclusionRevision === message.exclusionRevision)
@@ -136,7 +137,7 @@ function receive(message: DesktopMessage) {
       spacePathPending.value = false
       break
     case 'spacePathError':
-      if (!showingSpace.value || message.requestId !== spaceRequestId) return
+      if (!spaceStarted.value || message.requestId !== spaceRequestId) return
       spacePathError.value = message.message
       spacePathPending.value = false
       break
@@ -185,6 +186,7 @@ function receive(message: DesktopMessage) {
 }
 
 async function connect() {
+  if (spaceStarted.value) resetSpace()
   fatal.value = ''
   pending.value = true
   try {
@@ -278,16 +280,15 @@ function closeSettings() {
 }
 
 async function activateSearch() {
-  if (saving.value) return
+  if (saving.value || showingSpace.value) return
   if (showingSettings.value) {
     // 重新进入前台时保留设置组件，未应用的表单值仍可继续编辑。
     keepSettingsDraft.value = true
     showingSettings.value = false
     focusBeforeSettings = undefined
   }
-  if (showingSpace.value) closeSpace(false)
   await nextTick()
-  if (!saving.value && !showingSettings.value) focusQuery(false)
+  if (!saving.value && !showingSettings.value && !showingSpace.value) focusQuery(false)
 }
 
 function requestSettings(request: SettingsRequest) {
@@ -301,10 +302,20 @@ function requestSettings(request: SettingsRequest) {
   })
 }
 
+function openSpace() {
+  if (!canViewSpace.value) return
+  showingSpace.value = true
+  if (spaceStarted.value) {
+    sendAction({ type: 'spaceVisibility', enabled: true })
+  } else {
+    spaceStarted.value = true
+    viewSpace()
+  }
+}
+
 function viewSpace(root = '', directoryId = '', path?: string) {
   if (!canViewSpace.value) return
   const byPath = path !== undefined
-  showingSpace.value = true
   spaceRoot.value = byPath ? space.value?.root ?? '' : root
   spacePending.value = !byPath
   spaceError.value = ''
@@ -326,15 +337,21 @@ function viewSpace(root = '', directoryId = '', path?: string) {
   })
 }
 
-function closeSpace(restoreQueryFocus = true) {
+function closeSpace() {
   showingSpace.value = false
+  sendAction({ type: 'spaceVisibility', enabled: false })
+  void nextTick(() => focusQuery())
+}
+
+function resetSpace() {
+  if (showingSpace.value) void nextTick(() => focusQuery())
+  showingSpace.value = spaceStarted.value = false
   space.value = undefined
-  if (connected.value) sendAction({ type: 'closeSpaceAnalysis', requestId: ++spaceRequestId })
-  if (restoreQueryFocus) void nextTick(() => focusQuery())
+  sendAction({ type: 'closeSpaceAnalysis', requestId: ++spaceRequestId })
 }
 
 function requestSpaceDetails(id: number, directoryIds: string[], manualDirectoryIds: string[], branchIds: string[]) {
-  if (!showingSpace.value || !connected.value || id !== spaceRequestId) return
+  if (!spaceStarted.value || !connected.value || id !== spaceRequestId) return
   void sendRequest({ type: 'spaceDetails', requestId: id, detailId: ++spaceDetailId, directoryIds, manualDirectoryIds, branchIds })
     .catch(error => { if (id === spaceRequestId) showFeedback(String(error), true) })
 }
@@ -425,7 +442,7 @@ onBeforeUnmount(() => {
         </select>
         <button type="button" class="outlined-button toolbar-button" aria-label="空间分析"
           :disabled="!canViewSpace" :title="indexFileSize ? undefined : spaceUnavailable"
-          :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="viewSpace()">空间分析</button>
+          :aria-description="indexFileSize ? undefined : spaceUnavailable" @click="openSpace">空间分析</button>
         <button type="button" class="outlined-button toolbar-button" @click="openSettings">设置</button>
       </header>
 
@@ -463,7 +480,8 @@ onBeforeUnmount(() => {
         <IndexStatusPanel :status="indexStatus" :connected="connected" :preference-pending="preferencePending || settingsPending"
           @save-preference="updateSavePreference" @action="sendAction({ type: $event })" />
       </footer>
-      <SpaceAnalysis v-if="showingSpace" :result="space" :root="spaceRoot" :pending="spacePending && !fatal"
+      <SpaceAnalysis v-if="spaceStarted" v-show="showingSpace" :visible="showingSpace" :result="space" :root="spaceRoot"
+        :pending="spacePending && !fatal"
         :error="fatal || spaceError" :path-pending="spacePathPending && !fatal" :path-error="spacePathError"
         :index-status="indexStatus" @view="viewSpace" @path="viewSpace(spaceRoot, '', $event)" @close="closeSpace"
         @settings="openSettings"

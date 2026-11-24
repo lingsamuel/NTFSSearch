@@ -255,6 +255,9 @@ internal sealed class DesktopSession
                 case "spaceRestore":
                     spaceAnalysis.Restore(request.RequestId, request.VolumeKey, request.Key);
                     break;
+                case "spaceVisibility":
+                    spaceAnalysis.SetVisible(request.Enabled == true);
+                    break;
                 case "closeSpaceAnalysis":
                     spaceAnalysis.Close(request.RequestId);
                     break;

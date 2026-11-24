@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import type { FileAction, SearchRow, SortField } from './desktop'
+import { fileMenuActions, type FileAction, type SearchRow, type SortField } from './desktop'
 import { fileExtension, fileTypeIcon, setVisibleFileTypes } from './file-type-icons'
 
 const props = defineProps<{
@@ -26,11 +26,6 @@ const columns = [
 ] as const
 const visibleColumns = computed(() => columns.filter(({ field }) =>
   (field !== 2 || props.indexFileSize) && (field !== 3 || props.indexModifiedTime)))
-const actions = [
-  { type: 'open', label: '打开', shortcut: 'Enter' },
-  { type: 'reveal', label: '打开所在目录' },
-  { type: 'copy', label: '复制完整路径', shortcut: 'Ctrl+C' },
-] as const
 const scroller = ref<HTMLElement>()
 const grid = ref<HTMLTableElement>()
 const menuElement = ref<HTMLDivElement>()
@@ -486,7 +481,7 @@ defineExpose({ clearSelection, focusSelection, scrollToStart })
     <div v-if="menu" ref="menuElement" class="file-menu" role="menu" aria-label="文件操作"
       :style="{ left: menu.left + 'px', top: menu.top + 'px' }" @pointerdown.stop @keydown="handleMenuKey"
       @focusout="(event) => { if (!menuElement?.contains(event.relatedTarget as Node)) closeMenu() }">
-      <button v-for="action in actions" :key="action.type" type="button" role="menuitem" @click="runAction(action.type, menu.key)">
+      <button v-for="action in fileMenuActions" :key="action.type" type="button" role="menuitem" @click="runAction(action.type, menu.key)">
         {{ action.label }}
         <kbd v-if="'shortcut' in action">{{ action.shortcut }}</kbd>
       </button>

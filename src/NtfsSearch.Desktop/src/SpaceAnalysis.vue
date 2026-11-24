@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatCount, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion } from './desktop'
+import { fileMenuActions, formatCount, type FileAction, type IndexStatus, type SpaceAnalysisResult, type SpaceEntry, type SpaceExclusion } from './desktop'
 import { layoutSpaceItems } from './space-treemap'
 
 const props = defineProps<{
   result?: SpaceAnalysisResult
+  visible: boolean
   root: string
   pending: boolean
   error: string
@@ -131,6 +132,17 @@ watch(scene, () => {
   clearFlashes()
   tileMenu.value?.hidePopover()
 })
+watch(() => props.visible, visible => {
+  if (visible) {
+    back.value?.focus()
+    return
+  }
+  previousClick = undefined
+  hovered.value = focused.value = undefined
+  tileMenu.value?.hidePopover()
+  exclusionPanel.value?.hidePopover()
+  clearFlashes()
+}, { flush: 'post' })
 watch(() => props.result, result => {
   let entries = result?.folder?.children
   for (const [index, item] of branch.value.entries()) {
@@ -294,6 +306,8 @@ function detailShortcut(event: KeyboardEvent) {
 
 onMounted(() => {
   observer = new ResizeObserver(([entry]) => {
+    // 隐藏时沿用上次的尺寸，保留排版和已请求的子目录。
+    if (!props.visible) return
     width.value = entry.contentRect.width
     height.value = entry.contentRect.height
   })
@@ -384,7 +398,9 @@ onBeforeUnmount(() => {
     </footer>
     <div ref="tileMenu" class="file-menu space-popover" popover role="group" aria-label="文件操作">
       <template v-if="menuItem">
-        <button type="button" @click="chooseTileAction('open')">打开</button>
+        <button v-for="action in fileMenuActions" :key="action.type" type="button" @click="chooseTileAction(action.type)">
+          {{ action.label }}
+        </button>
         <button v-if="!menuItem.directoryId" type="button" @click="chooseTileAction('openWith')">打开方式…</button>
         <button type="button" @click="chooseTileAction('exclude')">临时排除</button>
       </template>
